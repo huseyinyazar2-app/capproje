@@ -1,0 +1,6 @@
+.pnpm-store/
+prototype/node_modules/
+prototype/dist/
+.vercel/
+prototype/qa/
+prototype/design-qa.md
