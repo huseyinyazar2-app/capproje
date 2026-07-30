@@ -13,3 +13,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Keep both existing design themes and the Capproje-specific, project/mahal/work-item-centered information architecture.
 - Use Odoo-inspired interaction patterns where useful: stage/status rails, linked-record counters, approval gates, revision traceability, activity history, multiple record views, live project profitability, BOM/work-order structure, subcontracting traceability, field worksheets, and role-based controls.
 - Do not turn the product into a generic ERP interface. Keep screens simple, mobile-friendly, and tailored to custom woodwork projects.
+- Treat the prototype as the future interface of a reusable vertical product, not a Capproje-only codebase. Keep company-specific terminology, fields, roles, approval rules, and document templates configurable.
+- Prioritize measurable industry value: faster and safer estimating, revision-to-production control, forecast-at-completion profitability, outsourced-process traceability, simple offline shop-floor use, progressive billing, and installation closeout.
+- Do not design full generic accounting, HR, e-commerce, CAD/CAM, 3D modeling, or CNC generation into the initial product. Prefer integrations for official accounting and design-to-manufacturing tools.
+- Keep AI inside real workflows and require a measurable time saving, error reduction, or margin protection outcome; avoid a generic showcase chatbot.
