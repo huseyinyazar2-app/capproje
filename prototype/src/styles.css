@@ -3162,3 +3162,882 @@ button {
     padding-block: 11px;
   }
 }
+
+/* Odoo'dan esinlenen, Capproje'ye özel ilişkili kayıt ve süreç bileşenleri */
+.view-toolbar {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 6px 8px 6px 14px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.d1 .view-toolbar {
+  border-radius: 6px;
+}
+
+.view-toolbar > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.view-toolbar > div {
+  display: flex;
+  gap: 3px;
+}
+
+.view-toolbar button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.view-toolbar button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.view-toolbar .view-filter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: #fff;
+}
+
+.stage-rail {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(105px, 1fr));
+  margin: 4px 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+  overflow-x: auto;
+}
+
+.d1 .stage-rail {
+  border-radius: 7px;
+}
+
+.stage-rail > span {
+  position: relative;
+  min-width: 105px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9aa09b;
+  font-size: 10px;
+}
+
+.stage-rail > span:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 31px;
+  right: 8px;
+  top: 13px;
+  height: 2px;
+  background: #e1e4e1;
+}
+
+.stage-rail i {
+  position: relative;
+  z-index: 1;
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border: 2px solid #dfe3df;
+  border-radius: 50%;
+  background: #fff;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.stage-rail .done,
+.stage-rail .active {
+  color: var(--accent);
+}
+
+.stage-rail .done i,
+.stage-rail .active i {
+  border-color: var(--accent);
+}
+
+.stage-rail .done i {
+  color: #fff;
+  background: var(--accent);
+}
+
+.stage-rail .active i {
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.stage-rail .done::after {
+  background: var(--accent);
+}
+
+.smart-records {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(105px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+
+.smart-records button {
+  min-width: 105px;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--accent);
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.smart-records button:hover {
+  border-color: var(--accent);
+}
+
+.smart-records span {
+  display: flex;
+  flex-direction: column;
+}
+
+.smart-records b {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.smart-records small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.blueprint-intro {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) repeat(3, 105px);
+  gap: 18px;
+  align-items: center;
+  margin: 20px 0 16px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  background: #fff;
+}
+
+.blueprint-intro h2 {
+  max-width: 760px;
+  margin: 2px 0 8px;
+  font: 700 24px/1.25 "Manrope";
+}
+
+.blueprint-intro p {
+  max-width: 800px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.blueprint-intro > span {
+  min-height: 76px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
+.blueprint-intro > span strong {
+  color: var(--accent);
+  font: 700 25px "Manrope";
+}
+
+.blueprint-intro > span small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.blueprint-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.blueprint-flow button {
+  min-height: 118px;
+  display: grid;
+  grid-template-columns: 34px 1fr 20px;
+  gap: 11px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.d1 .blueprint-flow button {
+  border-radius: 6px;
+}
+
+.blueprint-flow button:hover {
+  border-color: var(--accent);
+  box-shadow: 0 9px 24px rgba(20, 35, 27, .07);
+}
+
+.blueprint-flow i {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--accent);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.blueprint-flow span,
+.master-data-grid span,
+.record-tree span {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.blueprint-flow strong {
+  font: 700 13px "Manrope";
+}
+
+.blueprint-flow small,
+.master-data-grid small,
+.record-tree small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.blueprint-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.record-tree {
+  display: grid;
+  gap: 0;
+}
+
+.record-tree span {
+  position: relative;
+  min-height: 50px;
+  justify-content: center;
+  padding-left: 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.record-tree span::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 20px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #fff;
+}
+
+.record-tree span:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 31px;
+  bottom: -19px;
+  width: 1px;
+  background: var(--accent);
+}
+
+.rule-list {
+  display: grid;
+  gap: 0;
+}
+
+.rule-list span {
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: 23px 1fr;
+  align-items: center;
+  column-gap: 7px;
+  border-bottom: 1px solid var(--line);
+  color: var(--accent);
+}
+
+.rule-list b {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.rule-list small {
+  grid-column: 2;
+  margin-top: -13px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.master-data-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.master-data-grid span {
+  min-height: 86px;
+  justify-content: center;
+  padding: 15px;
+  background: #fff;
+}
+
+.master-data-grid strong {
+  color: var(--accent-dark);
+  font-size: 11px;
+}
+
+.sales-pipeline {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  margin-bottom: 18px;
+  overflow-x: auto;
+}
+
+.sales-pipeline span {
+  min-width: 120px;
+  min-height: 84px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-content: center;
+  gap: 5px 10px;
+  padding: 13px 16px;
+  border: 1px solid var(--line);
+  border-right: 0;
+  background: #fff;
+}
+
+.sales-pipeline span:last-child {
+  border-right: 1px solid var(--line);
+}
+
+.sales-pipeline span.active {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.sales-pipeline small {
+  grid-column: 1 / span 2;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.sales-pipeline .active small,
+.sales-pipeline .active em {
+  color: rgba(255, 255, 255, .8);
+}
+
+.sales-pipeline strong {
+  font: 700 22px "Manrope";
+}
+
+.sales-pipeline em {
+  align-self: end;
+  color: var(--accent);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.capacity-strip,
+.field-service-strip,
+.production-kpis,
+.quality-cards,
+.field-checks {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(125px, 1fr));
+  gap: 8px;
+  margin: 14px 0 18px;
+  overflow-x: auto;
+}
+
+.capacity-strip > span,
+.production-kpis > span {
+  min-width: 125px;
+  min-height: 96px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-content: center;
+  gap: 7px 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.capacity-strip small,
+.production-kpis small {
+  grid-column: 1 / span 2;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.capacity-strip strong,
+.production-kpis strong {
+  font: 700 18px "Manrope";
+}
+
+.capacity-strip .progress,
+.production-kpis .progress {
+  width: 100%;
+}
+
+.capacity-strip em,
+.production-kpis em {
+  color: var(--accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.capacity-strip .warning,
+.production-kpis .warning {
+  border-top: 3px solid var(--warning);
+}
+
+.capacity-strip .danger {
+  border-top: 3px solid var(--danger);
+}
+
+.capacity-strip .danger em {
+  color: var(--danger);
+}
+
+.field-service-strip {
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+}
+
+.field-service-strip > span {
+  min-width: 170px;
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-content: center;
+  gap: 3px 8px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--accent);
+}
+
+.field-service-strip b,
+.field-service-strip small {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.field-service-strip small {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.profitability-cards {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(145px, 1fr));
+  gap: 8px;
+  margin: 18px 0;
+  overflow-x: auto;
+}
+
+.profitability-cards.compact {
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  margin: 0;
+}
+
+.profitability-cards > span {
+  min-width: 145px;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.profitability-cards.compact > span {
+  min-width: 120px;
+  min-height: 82px;
+  padding: 11px;
+}
+
+.profitability-cards small,
+.profitability-cards em {
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.profitability-cards strong {
+  font: 700 17px "Manrope";
+}
+
+.profitability-cards .warning {
+  border-top: 3px solid var(--warning);
+}
+
+.profitability-cards .success {
+  color: var(--accent);
+  border-top: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.record-context-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) auto;
+  gap: 1px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  background: var(--line);
+  overflow-x: auto;
+}
+
+.record-context-bar > span {
+  min-width: 130px;
+  min-height: 58px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 10px 13px;
+  background: #fff;
+}
+
+.record-context-bar small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.record-context-bar strong {
+  font-size: 10px;
+}
+
+.record-context-bar button {
+  min-width: 145px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tab-stack {
+  display: grid;
+  gap: 0;
+}
+
+.release-lock {
+  min-height: 70px;
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid #f1c18e;
+  border-left: 4px solid var(--warning);
+  color: #8c5213;
+  background: #fff7ed;
+}
+
+.release-lock span {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.release-lock strong {
+  font-size: 12px;
+}
+
+.release-lock small {
+  color: #916735;
+  font-size: 9px;
+}
+
+.release-lock button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--warning);
+  color: #8c5213;
+  background: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.approval-chain,
+.subcontract-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  overflow-x: auto;
+}
+
+.approval-chain > span,
+.subcontract-flow > span {
+  position: relative;
+  min-width: 120px;
+  min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 15px;
+  border-right: 1px solid var(--line);
+}
+
+.approval-chain > span:last-child,
+.subcontract-flow > span:last-child {
+  border-right: 0;
+}
+
+.approval-chain i,
+.subcontract-flow i {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #aab0ab;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.approval-chain .done i {
+  background: var(--accent);
+}
+
+.approval-chain .waiting i {
+  background: var(--warning);
+}
+
+.approval-chain b,
+.subcontract-flow b {
+  font-size: 10px;
+}
+
+.approval-chain small,
+.approval-chain em,
+.subcontract-flow small,
+.subcontract-flow em {
+  color: var(--muted);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.approval-chain em,
+.subcontract-flow em {
+  margin-top: auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.production-kpis {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+}
+
+.quality-cards {
+  grid-template-columns: repeat(3, minmax(190px, 1fr));
+}
+
+.quality-cards > span {
+  min-width: 190px;
+  min-height: 80px;
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-content: center;
+  gap: 4px 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  color: var(--accent);
+  background: #fff;
+}
+
+.quality-cards .danger {
+  color: var(--danger);
+  border-top: 3px solid var(--danger);
+}
+
+.quality-cards strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.quality-cards small {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.field-checks {
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+}
+
+.field-checks > span {
+  min-width: 170px;
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: 25px 1fr;
+  align-content: center;
+  gap: 4px 7px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  color: var(--accent);
+  background: #fff;
+}
+
+.field-checks .waiting {
+  color: var(--warning);
+}
+
+.field-checks b {
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.field-checks small {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+@media (max-width: 1180px) {
+  .blueprint-intro {
+    grid-template-columns: 1fr repeat(3, 90px);
+  }
+
+  .blueprint-flow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .smart-records {
+    grid-template-columns: repeat(7, 112px);
+  }
+}
+
+@media (max-width: 900px) {
+  .view-toolbar {
+    overflow-x: auto;
+  }
+
+  .view-toolbar > div {
+    min-width: max-content;
+  }
+
+  .stage-rail {
+    grid-template-columns: repeat(8, 112px);
+  }
+
+  .blueprint-intro {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .blueprint-intro > div {
+    grid-column: 1 / span 3;
+  }
+
+  .blueprint-intro > span {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding: 12px 0 0;
+  }
+
+  .blueprint-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .master-data-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .view-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .view-toolbar .view-filter {
+    margin-left: 0;
+  }
+
+  .blueprint-intro {
+    grid-template-columns: 1fr;
+    padding: 18px;
+  }
+
+  .blueprint-intro > div {
+    grid-column: auto;
+  }
+
+  .blueprint-intro > span {
+    min-height: auto;
+  }
+
+  .blueprint-flow,
+  .master-data-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .blueprint-flow button {
+    min-height: 98px;
+  }
+
+  .record-context-bar {
+    grid-template-columns: repeat(4, 150px) 150px;
+  }
+
+  .release-lock {
+    grid-template-columns: 28px 1fr;
+  }
+
+  .release-lock button {
+    grid-column: 2;
+    width: fit-content;
+  }
+}

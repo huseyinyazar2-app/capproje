@@ -174,6 +174,7 @@ const installations = [
 const navigation = {
   d1: [
     ["home", "Ana Sayfa", House],
+    ["blueprint", "Süreç Merkezi", Package],
     ["sales", "Satış", Handshake],
     ["projects", "Projeler", FolderSimple],
     ["operations", "Operasyon", Factory],
@@ -183,6 +184,7 @@ const navigation = {
   ],
   d2: [
     ["home", "Ana Sayfa", House],
+    ["blueprint", "Süreç Merkezi", Package],
     ["sales", "Satış", Handshake],
     ["projects", "Projeler", FolderSimple],
     ["production", "Üretim", Factory],
@@ -721,6 +723,139 @@ function PageHeader({ title, action, onAction }) {
   );
 }
 
+function ViewToolbar({ label = "Görünüm", options = ["Kanban", "Liste", "Takvim", "Zaman Planı"] }) {
+  const [active, setActive] = useState(options[0]);
+  return (
+    <div className="view-toolbar">
+      <span>{label}</span>
+      <div>
+        {options.map((option) => (
+          <button key={option} className={active === option ? "active" : ""} onClick={() => setActive(option)}>{option}</button>
+        ))}
+      </div>
+      <button className="view-filter"><ListChecks size={17} />Filtrele & grupla</button>
+    </div>
+  );
+}
+
+function StageRail({ current = 4 }) {
+  const stages = ["Fırsat", "Teklif", "Sözleşme", "Tasarım", "Satın Alma", "Üretim", "Montaj", "Teslim"];
+  return (
+    <div className="stage-rail" aria-label="Proje aşamaları">
+      {stages.map((stage, index) => (
+        <span key={stage} className={index < current ? "done" : index === current ? "active" : ""}>
+          <i>{index < current ? <CheckCircle size={15} weight="fill" /> : index + 1}</i>
+          <b>{stage}</b>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SmartRecords({ navigate }) {
+  const records = [
+    ["Teklif", "3", Receipt, "sales"],
+    ["İş kalemi", "42", ClipboardText, "project"],
+    ["Satın alma", "8", ShoppingCart, "procurement"],
+    ["Üretim emri", "16", Factory, "operations"],
+    ["Montaj", "4", Truck, "installation"],
+    ["Fotoğraf", "128", Images, "form", "quality-photo"],
+    ["Hakediş", "3", CurrencyCircleDollar, "finance"],
+  ];
+  return (
+    <div className="smart-records">
+      {records.map(([label, count, Icon, route, id]) => (
+        <button key={label} onClick={() => navigate(route, id)}>
+          <Icon size={20} /><span><b>{count}</b><small>{label}</small></span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ProfitabilityCards({ compact = false }) {
+  const items = [
+    ["Sözleşme / Gelir", "₺24,80 Mn", "Beklenen", ""],
+    ["Bütçelenen maliyet", "₺17,36 Mn", "Teklif maliyeti", ""],
+    ["Bağlanan maliyet", "₺14,92 Mn", "Sipariş + üretim", "warning"],
+    ["Gerçekleşen maliyet", "₺12,75 Mn", "Bugüne kadar", ""],
+    ["Tahmini proje kârı", "₺6,21 Mn", "%25,0 marj", "success"],
+  ];
+  return (
+    <div className={`profitability-cards ${compact ? "compact" : ""}`}>
+      {items.map(([label, value, note, tone]) => (
+        <span key={label} className={tone}><small>{label}</small><strong>{value}</strong><em>{note}</em></span>
+      ))}
+    </div>
+  );
+}
+
+function ProcessBlueprintPage({ navigate }) {
+  const layers = [
+    ["1", "Müşteri & Fırsat", "Keşif, karar verici, teklif, revizyon ve kayıp nedeni", "customer-survey"],
+    ["2", "Sözleşme & Proje", "Kapsam paketleri, ödeme planı, kilometre taşları ve roller", "project-contract"],
+    ["3", "Mahal & İş Kalemi", "Ölçü, metraj, reçete, çizim sürümü ve müşteri onayı", "work-item-approval"],
+    ["4", "Tedarik & Dış İmalat", "RFQ karşılaştırma, termin, taşerona malzeme ve giriş kalite", "procurement"],
+    ["5", "Üretim & Kalite", "İş merkezleri, operasyon rotası, süre, fire ve kontrol noktaları", "production-order"],
+    ["6", "Montaj & Teslim", "Ekip, sevkiyat, saha formu, fotoğraf, eksik iş ve imza", "installation"],
+    ["7", "Finans & Kârlılık", "Hakediş, tahsilat, proje maliyeti, bütçe ve gerçekleşen karşılaştırması", "finance-progress"],
+  ];
+  return (
+    <>
+      <PageHeader title="Capproje Süreç Merkezi" action="Yeni proje başlat" onAction={() => navigate("form", "customer-survey")} />
+      <div className="blueprint-intro">
+        <div>
+          <span className="eyebrow">NİHAİ ÜRÜN OMURGASI</span>
+          <h2>Bir kayıt girilir, ilgili tüm ekipler aynı proje zincirinde çalışır.</h2>
+          <p>Bu ekran müşteri görüşmelerinde yazılımın yalnız form toplamından ibaret olmadığını; satıştan teslim ve kârlılığa kadar ilişkili bir sistem olduğunu göstermek için hazırlandı.</p>
+        </div>
+        <span><strong>7</strong><small>ana süreç</small></span>
+        <span><strong>11</strong><small>uzman form</small></span>
+        <span><strong>1</strong><small>ortak proje kaydı</small></span>
+      </div>
+      <StageRail current={4} />
+      <section className="blueprint-flow">
+        {layers.map(([number, title, note, form]) => (
+          <button key={title} onClick={() => navigate("form", form)}>
+            <i>{number}</i><span><strong>{title}</strong><small>{note}</small></span><ArrowRight size={19} />
+          </button>
+        ))}
+      </section>
+      <div className="blueprint-columns">
+        <DataPanel title="Sistemin ortak kayıt yapısı" icon={FolderSimple}>
+          <div className="record-tree">
+            <span><b>Proje</b><small>CP-25018 · Gedikpaşa Otel</small></span>
+            <span><b>Mahal</b><small>Tip A Oda · 2–6. kat</small></span>
+            <span><b>İş kalemi</b><small>Oda giriş kapısı · 48 adet</small></span>
+            <span><b>Revizyon</b><small>R2 · müşteri onayı bekleniyor</small></span>
+            <span><b>Operasyonlar</b><small>Satın alma · üretim · kalite · montaj</small></span>
+          </div>
+        </DataPanel>
+        <DataPanel title="Otomatik kontrol ve onay kuralları" icon={CheckCircle}>
+          <div className="rule-list">
+            <span><CheckCircle weight="fill" /><b>Teklif marjı düşükse</b><small>Genel müdür onayı ister.</small></span>
+            <span><CheckCircle weight="fill" /><b>R2 müşteri onayı yoksa</b><small>Üretime serbest bırakmaz.</small></span>
+            <span><CheckCircle weight="fill" /><b>Malzeme eksikse</b><small>İş emrini riskli gösterir.</small></span>
+            <span><CheckCircle weight="fill" /><b>Kalite kontrolü kapanmadıysa</b><small>Sevkiyata izin vermez.</small></span>
+          </div>
+        </DataPanel>
+      </div>
+      <DataPanel title="Ana veri kütüphaneleri" icon={Package}>
+        <div className="master-data-grid">
+          {[
+            ["Malzeme & aksesuar", "MDF, kaplama, ray, menteşe, boya, cam ve metal kodları"],
+            ["Tedarikçi & taşeron", "Fiyat, termin, kalite puanı ve yetkinlik geçmişi"],
+            ["Reçete & operasyon", "Malzeme listesi, fire, iş merkezi ve standart süre"],
+            ["Mahal & ürün tipleri", "Otel odası, mutfak, kapı, panel ve özel imalat şablonları"],
+            ["Birim fiyatlar", "Son alış, ortalama maliyet, para birimi ve geçerlilik tarihi"],
+            ["Rol & yetki", "Departman, okuma/yazma, maliyet gizleme ve onay limiti"],
+          ].map(([title, note]) => <span key={title}><strong>{title}</strong><small>{note}</small></span>)}
+        </div>
+      </DataPanel>
+    </>
+  );
+}
+
 function HomeD1({ navigate, flash }) {
   return (
     <>
@@ -837,8 +972,26 @@ function SalesPage({ design, navigate }) {
         <Summary label="Bu ay kazanılan" value="5" note="₺34,8 Mn" />
         <Summary label="Kazanma oranı" value="%42" note="+6 puan" />
       </div>
+      <ViewToolbar label="Satış hunisi" options={["Kanban", "Liste", "Aktiviteler", "Analiz"]} />
+      <div className="sales-pipeline">
+        {[
+          ["Yeni Fırsat", "8", "₺46,2 Mn"],
+          ["Keşif", "5", "₺31,8 Mn"],
+          ["Maliyet", "4", "₺28,4 Mn"],
+          ["Teklif Müşteride", "7", "₺52,6 Mn"],
+          ["Kazanıldı", "5", "₺34,8 Mn"],
+        ].map(([stage, count, value], index) => <span key={stage} className={index === 3 ? "active" : ""}><small>{stage}</small><strong>{count}</strong><em>{value}</em></span>)}
+      </div>
       <DataPanel title="Güncel teklifler" icon={Handshake}>
         <DataTable headers={["Teklif No", "Müşteri / Proje", "Revizyon", "Tutar", "Durum", "Son işlem"]} rows={offers} design={design} />
+      </DataPanel>
+      <DataPanel title="Kaybedilen teklif nedenleri" icon={ChartBar}>
+        <DataTable headers={["Neden", "Teklif", "Toplam değer", "Oran", "Son örnek"]} rows={[
+          ["Fiyat yüksek bulundu", "6", "₺18,4 Mn", "%38", "Yalıköy Villa"],
+          ["Termin uygun değil", "3", "₺9,7 Mn", "%19", "Maslak Ofis"],
+          ["Rakip tercih edildi", "4", "₺12,2 Mn", "%25", "Bebek Residence"],
+          ["Proje ertelendi", "3", "₺7,8 Mn", "%18", "Sapanca Otel"],
+        ]} />
       </DataPanel>
     </>
   );
@@ -851,6 +1004,7 @@ function ProjectsPage({ navigate }) {
       <div className="filter-row">
         <button className="active">Tümü <b>18</b></button><button>Riskli <b>4</b></button><button>Onay bekleyen <b>6</b></button><button>Bu ay bitecek <b>3</b></button>
       </div>
+      <ViewToolbar label="Proje görünümü" />
       <DataPanel title="Aktif projeler" icon={FolderSimple}>
         <div className="project-list">
           {projects.map((project) => (
@@ -874,6 +1028,16 @@ function OperationsPage({ design, navigate }) {
   return (
     <>
       <PageHeader title={design === "d2" ? "Üretim Planı" : "Operasyon"} action="İş emri oluştur" onAction={() => navigate("form", "production-order")} />
+      <ViewToolbar label="Planlama görünümü" options={["İş Merkezi", "Kanban", "Gantt", "Takvim"]} />
+      <div className="capacity-strip">
+        {[
+          ["Ebatlama", 72, "Normal"],
+          ["CNC", 108, "Kritik"],
+          ["Kenar bantlama", 84, "Yoğun"],
+          ["Montaj öncesi", 61, "Normal"],
+          ["Cila / dış işlem", 94, "Yoğun"],
+        ].map(([name, value, state]) => <span key={name} className={value > 100 ? "danger" : value > 90 ? "warning" : ""}><small>{name}</small><strong>%{value}</strong><Progress value={Math.min(value, 100)} /><em>{state}</em></span>)}
+      </div>
       <div className="operation-grid">
         {pipeline.map((column) => (
           <DataPanel key={column.title} title={column.title} icon={Factory}>
@@ -899,6 +1063,14 @@ function ProcurementPage({ navigate }) {
         <Summary label="Geciken teslim" value="3" note="2 kritik" />
         <Summary label="Bu hafta sipariş" value="18" note="₺8,7 Mn" />
       </div>
+      <ViewToolbar label="Satın alma görünümü" options={["Talepler", "RFQ Karşılaştırma", "Siparişler", "Termin"]} />
+      <DataPanel title="Tedarikçi teklif karşılaştırması · SAT-26081" icon={ShoppingCart}>
+        <DataTable headers={["Tedarikçi", "Birim fiyat", "Toplam", "Termin", "Ödeme", "Puan", "Karar"]} rows={[
+          ["Ergin Ahşap", "₺1.480 / m²", "₺1.850.000", "7 gün", "30 gün", "4,7 / 5", "Önerilen"],
+          ["Marmara Kaplama", "₺1.425 / m²", "₺1.781.250", "14 gün", "Peşin", "4,1 / 5", "Alternatif"],
+          ["Doğa Panel", "₺1.560 / m²", "₺1.950.000", "5 gün", "45 gün", "4,4 / 5", "Alternatif"],
+        ]} />
+      </DataPanel>
       <DataPanel title="Açık satın alma talepleri" icon={ShoppingCart}>
         <DataTable headers={["Talep No", "Proje", "Malzeme / Hizmet", "Tedarikçi", "Miktar", "Termin", "Durum"]} rows={purchaseRows} />
       </DataPanel>
@@ -910,6 +1082,13 @@ function InstallationPage({ navigate }) {
   return (
     <>
       <PageHeader title="Montaj Planı" action="Montaj planla" onAction={() => navigate("form", "installation")} />
+      <ViewToolbar label="Saha görünümü" options={["Takvim", "Harita", "Gantt", "Ekip"]} />
+      <div className="field-service-strip">
+        <span><Truck size={23} /><b>4 ekip sahada</b><small>7 aktif montaj görevi</small></span>
+        <span><Clock size={23} /><b>186 saat</b><small>Bu hafta planlanan</small></span>
+        <span><Images size={23} /><b>64 fotoğraf</b><small>Bu hafta yüklenen</small></span>
+        <span><CheckCircle size={23} /><b>3 imzalı teslim</b><small>2 form onay bekliyor</small></span>
+      </div>
       <div className="calendar-ribbon">
         {["27 Pzt", "28 Salı", "29 Çar", "30 Per", "31 Cum", "1 Cmt", "2 Paz"].map((day) => <button key={day} className={day.includes("28") ? "active" : ""}>{day}</button>)}
       </div>
@@ -930,6 +1109,7 @@ function FinancePage({ navigate }) {
         <Summary label="Gerçekleşen maliyet" value="₺52,6 Mn" note="Bütçenin %44'ü" />
         <Summary label="Beklenen tahsilat" value="₺8,1 Mn" note="30 gün içinde" />
       </div>
+      <ProfitabilityCards />
       <DataPanel title="Proje bazlı finans özeti" icon={CurrencyCircleDollar}>
         <DataTable headers={["Proje", "Sözleşme", "Gerçekleşen maliyet", "Sıradaki hakediş", "Tahsilat durumu"]} rows={rows} />
       </DataPanel>
@@ -945,6 +1125,9 @@ function ReportsPage({ navigate, flash }) {
     ["Teklif dönüşleri", "Kazanılan, kaybedilen ve bekleyen teklifler", Handshake],
     ["Haftalık toplantı", "Geciken işler ve sorumlu bazlı gündem", ListChecks],
     ["Fotoğraf ve teslim", "Proje aşamalarına göre saha kayıtları", Images],
+    ["Revizyon ve onay süresi", "Çizim sürümleri, bekleme ve üretim serbest bırakma", ClipboardText],
+    ["Dış imalat performansı", "Taşeron kalite, maliyet ve termin karşılaştırması", Factory],
+    ["Kalite maliyeti", "Hata, yeniden üretim ve sorumluluk analizi", Warning],
   ];
   return (
     <>
@@ -1090,6 +1273,13 @@ function EntryFormPage({ id, navigate, flash }) {
         </div>
         <button className="secondary-button" onClick={() => navigate("forms")}>Tüm formlar</button>
       </div>
+      <div className="record-context-bar">
+        <span><small>Bağlı proje</small><strong>CP-25018 · Gedikpaşa Otel</strong></span>
+        <span><small>Kayıt durumu</small><strong>Taslak / İç kontrol</strong></span>
+        <span><small>Sorumlu</small><strong>{form.category === "Satın Alma" ? "Yusuf Kaplan" : "Mert Kaya"}</strong></span>
+        <span><small>Son aktivite</small><strong>Bugün 10:24</strong></span>
+        <button type="button" onClick={() => navigate("project", "gedikpasa")}>Proje kaydını aç <ArrowRight size={16} /></button>
+      </div>
       <div className="entry-form-layout deep-layout">
         <aside className="form-outline">
           <FormStructureSummary id={form.id} />
@@ -1116,13 +1306,15 @@ function EntryFormPage({ id, navigate, flash }) {
 
 function ProjectDetail({ id, navigate, activeTab, setActiveTab }) {
   const project = projects.find((item) => item.id === id) || projects[0];
-  const tabs = ["Özet", "İş Kalemleri", "Plan", "Satın Alma", "Üretim", "Montaj", "Finans", "Dosyalar", "Geçmiş"];
+  const tabs = ["Özet", "İş Kalemleri", "Revizyon & Onay", "Plan", "Satın Alma", "Üretim", "Kalite", "Montaj", "Finans", "Dosyalar", "Geçmiş"];
   const tabForms = {
     "Özet": "project-contract",
     "İş Kalemleri": "work-item-approval",
+    "Revizyon & Onay": "work-item-approval",
     "Plan": "production-order",
     "Satın Alma": "procurement",
     "Üretim": "production-order",
+    "Kalite": "quality-photo",
     "Montaj": "installation",
     "Finans": "finance-progress",
     "Dosyalar": "quality-photo",
@@ -1135,6 +1327,8 @@ function ProjectDetail({ id, navigate, activeTab, setActiveTab }) {
         <div><span className="eyebrow">{project.code}</span><h1>{project.name}</h1><p><MapPin size={18} />{project.location} · {project.description}</p></div>
         <div className="project-health"><span><small>Aşama</small><strong>{project.stage}</strong></span><span><small>İlerleme</small><strong>%{project.progress}</strong></span><RiskBadge risk={project.risk} /></div>
       </div>
+      <StageRail current={4} />
+      <SmartRecords navigate={navigate} />
       <div className="detail-tabs" role="tablist">{tabs.map((tab) => <button role="tab" aria-selected={activeTab === tab} className={activeTab === tab ? "active" : ""} onClick={() => setActiveTab(tab)} key={tab}>{tab}</button>)}</div>
       <div className="detail-form-link">
         <span>Bu bölümde kullanılacak veri giriş alanlarını inceleyin.</span>
@@ -1159,21 +1353,171 @@ function ProjectTab({ tab, project }) {
           <div className="milestone"><CheckCircle size={25} weight="fill" /><span><strong>Sonraki kritik adım</strong><small>{project.next} · {project.nextDate}</small></span><button>Detayı aç</button></div>
         </DataPanel>
         <DataPanel title="Onay kapıları" icon={ClipboardText}>
-          <div className="approval-list"><span><CheckCircle weight="fill" />Sözleşme imzalandı</span><span><CheckCircle weight="fill" />Keşif ve metraj onaylandı</span><span className="waiting"><Clock weight="fill" />Son proje revizyonu bekleniyor</span><span className="muted"><CheckCircle />Üretim başlangıç onayı</span></div>
+          <div className="approval-list"><span><CheckCircle weight="fill" />Sözleşme imzalandı</span><span><CheckCircle weight="fill" />Keşif ve metraj onaylandı</span><span className="waiting"><Clock weight="fill" />R2 müşteri onayı bekleniyor</span><span className="muted"><CheckCircle />Üretime serbest bırakma</span><span className="muted"><CheckCircle />Sevkiyat kalite onayı</span></div>
+        </DataPanel>
+        <DataPanel title="Canlı proje kârlılığı" icon={CurrencyCircleDollar}>
+          <ProfitabilityCards compact />
         </DataPanel>
         <DataPanel title="Son aktiviteler" icon={ListChecks}>
-          <div className="timeline"><span><b>Bugün 10:24</b>R2 çizimleri müşteri onayına gönderildi.</span><span><b>Dün 16:40</b>Kaplama fiyatı tedarikçiden güncellendi.</span><span><b>25 Tem 11:12</b>İmalat öncesi saha kontrolü tamamlandı.</span></div>
+          <div className="timeline"><span><b>Bugün 10:24 · Ece Aydın</b>R2 çizimleri müşteri onayına gönderildi.</span><span><b>Dün 16:40 · Yusuf Kaplan</b>Kaplama fiyatı tedarikçiden güncellendi.</span><span><b>25 Tem 11:12 · Selin Kara</b>İmalat öncesi saha kontrolü tamamlandı.</span></div>
+        </DataPanel>
+      </div>
+    );
+  }
+  if (tab === "İş Kalemleri") {
+    return (
+      <div className="tab-stack">
+        <ViewToolbar label="İş kalemi görünümü" options={["Mahal Ağacı", "Liste", "Kanban", "Metraj"]} />
+        <DataPanel title="Proje → mahal → iş kalemi zinciri" icon={ClipboardText}>
+          <DataTable headers={["Mahal / İş kalemi", "Ölçü & miktar", "Reçete", "Revizyon", "Durum", "İlerleme"]} rows={[
+            ["Tip A Oda / Oda giriş kapısı", "90×210 cm · 48 adet", "RC-KAPI-014", "R2", "Onay bekliyor", "%42"],
+            ["Tip A Oda / Gardırop", "180×240×60 · 48 adet", "RC-DLP-022", "R3", "Üretimde", "%68"],
+            ["Lobi / Duvar paneli", "186 m²", "RC-PNL-008", "R1", "Malzeme bekliyor", "%20"],
+            ["Toplantı / Masa", "360×120 cm · 2 adet", "RC-MSA-031", "R1", "İç onay", "%10"],
+          ]} />
+        </DataPanel>
+        <DataPanel title="Seçili iş kalemi reçetesi · RC-KAPI-014" icon={Package}>
+          <DataTable headers={["Bileşen / operasyon", "Miktar", "Birim maliyet", "Kaynak", "Fire", "Durum"]} rows={[
+            ["MDF 6 mm", "282 m²", "₺420", "Stok", "%8", "Hazır"],
+            ["Yangın dayanımlı kasa", "48 takım", "₺8.750", "Eksen Metal", "%0", "Siparişte"],
+            ["Mat lake RAL 9010", "192 m²", "₺640", "Dış işlem", "%5", "Numune onayı"],
+            ["CNC + kenar bant", "76 saat", "₺890 / saat", "İç üretim", "%2", "Planlandı"],
+          ]} />
+        </DataPanel>
+      </div>
+    );
+  }
+  if (tab === "Revizyon & Onay") {
+    return (
+      <div className="tab-stack">
+        <div className="release-lock"><Warning size={24} weight="fill" /><span><strong>Üretime geçiş kilitli</strong><small>R2 çizimi müşteri tarafından onaylanmadan ilgili 48 kapı için üretim emri başlatılamaz.</small></span><button>Müşteriye hatırlat</button></div>
+        <DataPanel title="Çizim ve reçete sürümleri" icon={FileText}>
+          <DataTable headers={["Sürüm", "Değişiklik", "Hazırlayan", "İç onay", "Müşteri", "Üretim durumu"]} rows={[
+            ["R0", "İlk teknik çizim", "Selin Kara", "Onaylandı", "Revizyon istedi", "Arşiv"],
+            ["R1", "Kasa detayı ve kol aksı", "Selin Kara", "Onaylandı", "Revizyon istedi", "Arşiv"],
+            ["R2", "Kol aksı + kaplama yönü", "Selin Kara", "Onaylandı", "Bekliyor", "Kilitli"],
+          ]} />
+        </DataPanel>
+        <DataPanel title="Onay sırası ve sorumlular" icon={CheckCircle}>
+          <div className="approval-chain">
+            {[
+              ["1", "Teknik kontrol", "Ahmet Şahin", "Tamamlandı", "done"],
+              ["2", "Proje yöneticisi", "Mert Kaya", "Tamamlandı", "done"],
+              ["3", "Müşteri / mimar", "Deniz Arslan", "1 gündür bekliyor", "waiting"],
+              ["4", "Üretime serbest bırak", "Erdem Yılmaz", "Sırada", ""],
+            ].map(([number, title, person, state, tone]) => <span key={title} className={tone}><i>{tone === "done" ? <CheckCircle weight="fill" /> : number}</i><b>{title}</b><small>{person}</small><em>{state}</em></span>)}
+          </div>
+        </DataPanel>
+      </div>
+    );
+  }
+  if (tab === "Satın Alma") {
+    return (
+      <div className="tab-stack">
+        <DataPanel title="Proje satın alma ve dış imalat" icon={ShoppingCart}>
+          <DataTable headers={["Talep", "Malzeme / hizmet", "Tedarikçi", "Termin", "Bütçe", "Durum"]} rows={[
+            ["SAT-26081", "Amerikan ceviz kaplama", "Ergin Ahşap", "30 Tem", "₺1.850.000", "Onay bekliyor"],
+            ["SAT-26074", "Kapı kolu ve kilit", "Yapı Market Pro", "29 Tem", "₺684.000", "Kısmi teslim"],
+            ["DIS-26018", "Mat lake dış işlem", "Renk Cila", "8 Ağu", "₺430.000", "Numune onayı"],
+          ]} />
+        </DataPanel>
+        <DataPanel title="Dış imalat hareketi · DIS-26018" icon={Factory}>
+          <div className="subcontract-flow">
+            {[
+              ["Capproje çıkış", "48 kapı kanadı", "2 Ağu · 09:30"],
+              ["Renk Cila", "Zımpara + mat lake", "3–7 Ağu"],
+              ["Giriş kalite", "Renk, yüzey, desen", "8 Ağu · 10:00"],
+              ["Üretime dönüş", "Paketleme sırası", "8 Ağu · 14:00"],
+            ].map(([title, detail, date], index) => <span key={title}><i>{index + 1}</i><b>{title}</b><small>{detail}</small><em>{date}</em></span>)}
+          </div>
+        </DataPanel>
+      </div>
+    );
+  }
+  if (tab === "Üretim") {
+    return (
+      <div className="tab-stack">
+        <ViewToolbar label="Üretim görünümü" options={["Operasyonlar", "İş Merkezi", "Gantt", "Tablet"]} />
+        <DataPanel title="Üretim emirleri ve operasyon rotası" icon={Factory}>
+          <DataTable headers={["İş emri", "İş kalemi", "Operasyon", "İş merkezi", "Plan / gerçekleşen", "Durum"]} rows={[
+            ["UE-260184", "Oda kapıları", "CNC işleme", "CNC-01", "32 sa / 28 sa", "Devam ediyor"],
+            ["UE-260185", "Oda kapıları", "Kenar bant", "KB-02", "18 sa / —", "Sırada"],
+            ["UE-260186", "Oda kapıları", "Mat lake", "Renk Cila", "5 gün / —", "Dış imalat"],
+            ["UE-260191", "Lobi panelleri", "Ebatlama", "EB-01", "14 sa / 16 sa", "Gecikiyor"],
+          ]} />
+        </DataPanel>
+        <div className="production-kpis">
+          <span><small>Bugünkü tamamlanma</small><strong>%76</strong><Progress value={76} /></span>
+          <span className="warning"><small>CNC kapasitesi</small><strong>%108</strong><Progress value={100} /></span>
+          <span><small>İlk seferde kalite</small><strong>%94</strong><Progress value={94} /></span>
+          <span><small>Toplam fire</small><strong>%3,2</strong><em>Hedefin altında</em></span>
+        </div>
+      </div>
+    );
+  }
+  if (tab === "Kalite") {
+    return (
+      <div className="tab-stack">
+        <DataPanel title="Kalite kontrol noktaları" icon={CheckCircle}>
+          <DataTable headers={["Kontrol", "Bağlı kayıt", "Yöntem", "Sorumlu", "Sonuç", "Kanıt"]} rows={[
+            ["Ölçü doğrulama", "UE-260184", "Kontrol listesi", "Büşra Demir", "Uygun", "6 fotoğraf"],
+            ["Lake renk / yüzey", "DIS-26018", "Numune + görsel", "Büşra Demir", "Bekliyor", "R2 numune"],
+            ["Montaj öncesi", "48 kapı", "AQL kontrol", "Cem Topal", "2 uygunsuz", "12 fotoğraf"],
+          ]} />
+        </DataPanel>
+        <div className="quality-cards">
+          <span className="danger"><Warning size={23} /><strong>2 açık uygunsuzluk</strong><small>1 taşeron · 1 iç üretim</small></span>
+          <span><CheckCircle size={23} /><strong>18 kapanan kayıt</strong><small>Ortalama 1,6 gün</small></span>
+          <span><CurrencyCircleDollar size={23} /><strong>₺86.400 kalite maliyeti</strong><small>Proje bütçesinin %0,35’i</small></span>
+        </div>
+      </div>
+    );
+  }
+  if (tab === "Montaj") {
+    return (
+      <div className="tab-stack">
+        <ViewToolbar label="Saha görünümü" options={["Takvim", "Harita", "Ekip", "Eksik İş"]} />
+        <DataPanel title="Montaj görevleri" icon={Truck}>
+          <DataTable headers={["Görev", "Mahal", "Tarih", "Ekip", "Saha formu", "Durum"]} rows={[
+            ["MNT-26044", "Tip A Oda · 2. kat", "4 Ağu", "Ekip 1", "%100 · imzalı", "Tamamlandı"],
+            ["MNT-26045", "Tip A Oda · 3–4. kat", "5–6 Ağu", "Ekip 1", "%60 · 18 fotoğraf", "Devam ediyor"],
+            ["MNT-26046", "Lobi", "8 Ağu", "Ekip 3", "Hazırlanmadı", "Saha kontrolü"],
+          ]} />
+        </DataPanel>
+        <div className="field-checks">
+          <span><CheckCircle weight="fill" /><b>Sevkiyat kontrolü</b><small>48 / 48 parça okundu</small></span>
+          <span><CheckCircle weight="fill" /><b>Saha hazırlığı</b><small>Elektrik ve aks kontrolü tamam</small></span>
+          <span className="waiting"><Clock weight="fill" /><b>Eksik işler</b><small>3 madde müşteri onayı bekliyor</small></span>
+          <span><Images weight="fill" /><b>Teslim kanıtı</b><small>36 fotoğraf + müşteri imzası</small></span>
+        </div>
+      </div>
+    );
+  }
+  if (tab === "Finans") {
+    return (
+      <div className="tab-stack">
+        <ProfitabilityCards />
+        <DataPanel title="Hakediş ve tahsilat planı" icon={CurrencyCircleDollar}>
+          <DataTable headers={["Dönem", "Hakediş", "Kesinti", "Net", "Fatura / iç kayıt", "Tahsilat"]} rows={[
+            ["Avans", "₺7.440.000", "—", "₺7.440.000", "Resmi", "Tahsil edildi"],
+            ["1. Hakediş · %30", "₺7.440.000", "₺372.000", "₺7.068.000", "Taslak", "15 Ağu"],
+            ["2. Hakediş · %25", "₺6.200.000", "₺310.000", "₺5.890.000", "Plan", "5 Eyl"],
+            ["Teslim · %15", "₺3.720.000", "Teminat çözümü", "₺4.402.000", "Plan", "20 Eyl"],
+          ]} />
+        </DataPanel>
+        <DataPanel title="Maliyet kaynağı kırılımı" icon={ChartBar}>
+          <DataTable headers={["Maliyet grubu", "Bütçe", "Bağlanan", "Gerçekleşen", "Sapma", "Kaynak kayıt"]} rows={[
+            ["Malzeme", "₺7.820.000", "₺7.460.000", "₺6.180.000", "+₺360.000", "8 satın alma"],
+            ["İç işçilik", "₺3.440.000", "₺3.440.000", "₺2.780.000", "Planında", "16 üretim emri"],
+            ["Dış imalat", "₺2.260.000", "₺2.510.000", "₺2.140.000", "−₺250.000", "5 taşeron işi"],
+            ["Nakliye & montaj", "₺1.680.000", "₺1.510.000", "₺1.240.000", "+₺170.000", "4 saha görevi"],
+          ]} />
         </DataPanel>
       </div>
     );
   }
   const content = {
-    "İş Kalemleri": [["Mutfak dolapları", "24 takım", "İmalatta", "%68"], ["Oda kapıları", "48 adet", "CNC bekliyor", "%42"], ["Lobi panelleri", "186 m²", "Onaylı", "%20"]],
     "Plan": [["Tasarım ve onay", "18–31 Temmuz", "Selin Kara", "Devam ediyor"], ["İmalat", "1–28 Ağustos", "Ahmet Şahin", "Planlandı"], ["Montaj", "3–18 Eylül", "Montaj Ekibi 1", "Planlandı"]],
-    "Satın Alma": purchaseRows.slice(0, 3).map((row) => [row[2], row[3], row[4], row[6]]),
-    "Üretim": [["Oda kapıları", "İç üretim", "CNC", "%70"], ["Lobi panelleri", "İç üretim", "Ebatlama", "%35"], ["Metal detaylar", "Eksen Metal", "Dış imalat", "%20"]],
-    "Montaj": installations.slice(0, 3).map((row) => [row[0], row[1], row[3], row[4]]),
-    "Finans": [["Sözleşme", project.contract, "Kesinleşti", "15 Tem 2026"], ["Avans", "₺4.960.000", "Tahsil edildi", "16 Tem 2026"], ["1. Hakediş", "₺7.440.000", "Planlandı", "15 Ağu 2026"]],
     "Dosyalar": [["R2 Mimari Çizimler.pdf", "Proje / Revizyon", "Ece Aydın", "Bugün"], ["Sözleşme.pdf", "Sözleşme", "Mert Kaya", "15 Tem"], ["Keşif Fotoğrafları", "24 fotoğraf", "Selin Kara", "12 Tem"]],
     "Geçmiş": [["Proje oluşturuldu", "Mert Kaya", "10 Tem 2026", "09:14"], ["Teklif Rev. 3 kabul edildi", "Ece Aydın", "14 Tem 2026", "17:42"], ["Sözleşme yüklendi", "Mert Kaya", "15 Tem 2026", "11:08"]],
   };
@@ -1246,6 +1590,7 @@ export function App() {
 
   const content = useMemo(() => {
     if (route === "home") return design === "d1" ? <HomeD1 navigate={navigate} flash={setToast} /> : <HomeD2 navigate={navigate} flash={setToast} />;
+    if (route === "blueprint") return <ProcessBlueprintPage navigate={navigate} />;
     if (route === "sales") return <SalesPage design={design} navigate={navigate} />;
     if (route === "projects") return <ProjectsPage navigate={navigate} />;
     if (route === "project") return <ProjectDetail id={id} navigate={navigate} activeTab={activeTab} setActiveTab={setActiveTab} />;
