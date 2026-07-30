@@ -27,6 +27,7 @@ import {
   Receipt,
   ShoppingCart,
   SidebarSimple,
+  Sparkle,
   TreeEvergreen,
   Truck,
   UserCircle,
@@ -34,6 +35,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { FormStructureSummary, SpecializedForm, formBlueprintMeta } from "./SpecializedForms";
+import { ProductVision } from "./ProductVision";
 
 const projects = [
   {
@@ -174,6 +176,7 @@ const installations = [
 const navigation = {
   d1: [
     ["home", "Ana Sayfa", House],
+    ["vision", "Ürün Vizyonu", Sparkle],
     ["blueprint", "Süreç Merkezi", Package],
     ["sales", "Satış", Handshake],
     ["projects", "Projeler", FolderSimple],
@@ -184,6 +187,7 @@ const navigation = {
   ],
   d2: [
     ["home", "Ana Sayfa", House],
+    ["vision", "Ürün Vizyonu", Sparkle],
     ["blueprint", "Süreç Merkezi", Package],
     ["sales", "Satış", Handshake],
     ["projects", "Projeler", FolderSimple],
@@ -1548,8 +1552,8 @@ function Toast({ message, onClose }) {
 
 function MobileNav({ design, route, navigate }) {
   const mobileIds = design === "d1"
-    ? ["home", "sales", "projects", "forms", "finance"]
-    : ["home", "projects", "forms", "production", "finance"];
+    ? ["home", "vision", "projects", "forms", "finance"]
+    : ["home", "vision", "projects", "production", "finance"];
   const items = mobileIds.map((id) => navigation[design].find((item) => item[0] === id));
   return (
     <nav className="mobile-nav">
@@ -1590,6 +1594,7 @@ export function App() {
 
   const content = useMemo(() => {
     if (route === "home") return design === "d1" ? <HomeD1 navigate={navigate} flash={setToast} /> : <HomeD2 navigate={navigate} flash={setToast} />;
+    if (route === "vision") return <ProductVision notify={setToast} />;
     if (route === "blueprint") return <ProcessBlueprintPage navigate={navigate} />;
     if (route === "sales") return <SalesPage design={design} navigate={navigate} />;
     if (route === "projects") return <ProjectsPage navigate={navigate} />;
