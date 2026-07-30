@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "installCommand": "cd prototype && pnpm install --frozen-lockfile",
-  "buildCommand": "cd prototype && pnpm run build",
+  "installCommand": "cd prototype && npm ci",
+  "buildCommand": "cd prototype && npm run build",
   "outputDirectory": "prototype/dist/client",
   "rewrites": [
     {
