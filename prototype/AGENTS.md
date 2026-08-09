@@ -16,4 +16,5 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Treat the prototype as the future interface of a reusable vertical product, not a Capproje-only codebase. Keep company-specific terminology, fields, roles, approval rules, and document templates configurable.
 - Prioritize measurable industry value: faster and safer estimating, revision-to-production control, forecast-at-completion profitability, outsourced-process traceability, simple offline shop-floor use, progressive billing, and installation closeout.
 - Do not design full generic accounting, HR, e-commerce, CAD/CAM, 3D modeling, or CNC generation into the initial product. Prefer integrations for official accounting and design-to-manufacturing tools.
+- Design 2 is the selected direction. Keep project finance separate from company-wide pre-accounting; include practical pre-accounting and HR screens without attempting to replace official accounting or payroll software.
 - Keep AI inside real workflows and require a measurable time saving, error reduction, or margin protection outcome; avoid a generic showcase chatbot.

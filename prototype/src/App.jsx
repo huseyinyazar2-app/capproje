@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
+  Bank,
   Bell,
   Buildings,
   CalendarBlank,
@@ -17,6 +18,7 @@ import {
   FrameCorners,
   Handshake,
   House,
+  IdentificationCard,
   Images,
   ListChecks,
   MagnifyingGlass,
@@ -31,6 +33,8 @@ import {
   TreeEvergreen,
   Truck,
   UserCircle,
+  UsersThree,
+  Wallet,
   Warning,
   X,
 } from "@phosphor-icons/react";
@@ -195,6 +199,8 @@ const navigation = {
     ["procurement", "Satın Alma", ShoppingCart],
     ["installation", "Montaj", Truck],
     ["finance", "Finans", CurrencyCircleDollar],
+    ["accounting", "Ön Muhasebe", Wallet],
+    ["hr", "İnsan Kaynakları", UsersThree],
     ["reports", "Raporlar", ChartBar],
     ["forms", "Formlar", ClipboardText],
   ],
@@ -208,6 +214,8 @@ const titles = {
   procurement: ["Satın Alma", "Satın alma talebi"],
   installation: ["Montaj Planı", "Montaj planla"],
   finance: ["Proje Finansları", "Hareket ekle"],
+  accounting: ["Ön Muhasebe", "Yeni işlem"],
+  hr: ["İnsan Kaynakları", "Yeni personel"],
   reports: ["Raporlar", "Rapor oluştur"],
 };
 
@@ -546,6 +554,211 @@ const formDefinitions = [
     ],
   },
   {
+    id: "current-account",
+    category: "Ön Muhasebe",
+    title: "Cari Hesap Kartı",
+    description: "Müşteri ve tedarikçi hesapları, risk limiti, vade ve mutabakat bilgileri.",
+    icon: IdentificationCard,
+    sections: [
+      {
+        title: "Cari kimlik ve iletişim",
+        fields: [
+          { label: "Cari tipi", type: "select", value: "Müşteri", options: ["Müşteri", "Tedarikçi", "Taşeron", "Hem müşteri hem tedarikçi"], required: true },
+          { label: "Cari kodu", value: "CR-00184", required: true },
+          { label: "Ticari unvan", value: "Marmara Otelcilik A.Ş.", required: true },
+          { label: "Kısa ad", value: "Marmara Otel" },
+          { label: "Vergi dairesi", value: "Şişli" },
+          { label: "Vergi / T.C. kimlik no", value: "1234567890", required: true },
+          { label: "Yetkili kişi", value: "Deniz Arslan" },
+          { label: "Telefon", value: "+90 532 555 14 20" },
+          { label: "E-posta", type: "email", value: "finans@marmaraotel.com" },
+          { label: "Fatura adresi", type: "textarea", value: "Harbiye Mah. Cumhuriyet Cad. No:48 Şişli / İstanbul", span: "full" },
+        ],
+      },
+      {
+        title: "Ticari koşullar ve hesap kontrolü",
+        fields: [
+          { label: "Varsayılan para birimi", type: "select", value: "TRY", options: ["TRY", "EUR", "USD"] },
+          { label: "Standart vade", value: "30 gün" },
+          { label: "Risk limiti", value: "₺12.000.000" },
+          { label: "Açılış bakiyesi", value: "₺0" },
+          { label: "Fiyat listesi", type: "select", value: "Kurumsal müşteri", options: ["Kurumsal müşteri", "Proje özel", "Tedarikçi alış", "Standart"] },
+          { label: "Tahsilat / ödeme yöntemi", type: "select", value: "Havale / EFT", options: ["Havale / EFT", "Çek", "Kredi kartı", "Nakit"] },
+          { label: "IBAN", value: "TR12 0006 2000 0000 1234 5678 90", span: "full" },
+          { label: "E-fatura durumu", type: "select", value: "E-Fatura mükellefi", options: ["E-Fatura mükellefi", "E-Arşiv", "Kontrol edilmedi"] },
+          { label: "Mutabakat sıklığı", type: "select", value: "Aylık", options: ["Aylık", "Üç aylık", "Yıllık", "Talep üzerine"] },
+          { label: "Datasoft cari kodu", value: "DS-120.01.0184" },
+          { label: "Cari notu", type: "textarea", value: "Hakediş onayından sonra 30 gün vade uygulanır. Mutabakat finans yetkilisine gönderilir.", span: "full" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "invoice-transaction",
+    category: "Ön Muhasebe",
+    title: "Fatura & Tahsilat / Ödeme",
+    description: "Alış-satış faturası, proje dağılımı, vade ve kapatma hareketinin tek kaydı.",
+    icon: Receipt,
+    sections: [
+      {
+        title: "Belge bilgileri",
+        fields: [
+          { label: "İşlem türü", type: "select", value: "Satış faturası", options: ["Satış faturası", "Alış faturası", "Masraf fişi", "Tahsilat", "Ödeme", "İade"], required: true },
+          { label: "Cari hesap", type: "select", value: "Marmara Otelcilik A.Ş.", options: ["Marmara Otelcilik A.Ş.", "Ergin Ahşap", "Renk Cila", "Hafele"], required: true },
+          { label: "Belge / fatura no", value: "GIB20260000184", required: true },
+          { label: "Belge tarihi", type: "date", value: "2026-08-07", required: true },
+          { label: "Vade tarihi", type: "date", value: "2026-09-06", required: true },
+          { label: "Para birimi", type: "select", value: "TRY", options: ["TRY", "EUR", "USD"] },
+          { label: "Kur", value: "1,00" },
+          { label: "Resmi / dahili kayıt", type: "select", value: "Resmi", options: ["Resmi", "Dahili yönetim kaydı"], required: true },
+          { label: "Belge eki", type: "file", accept: ".pdf,.xml,image/*", span: "full" },
+        ],
+      },
+      {
+        title: "Tutar, proje ve kapatma",
+        note: "Gerçek uygulamada bir belge birden fazla proje ve maliyet merkezine dağıtılabilir.",
+        fields: [
+          { label: "Bağlı proje", type: "select", value: "CP-25018 · Gedikpaşa Otel", options: ["CP-25018 · Gedikpaşa Otel", "CP-25032 · Kurtköy Konutları", "Genel gider"] },
+          { label: "Maliyet merkezi", type: "select", value: "Montaj", options: ["Malzeme", "Üretim", "Dış imalat", "Montaj", "Genel gider"] },
+          { label: "Ara toplam", value: "₺620.000", required: true },
+          { label: "İskonto", value: "₺0" },
+          { label: "KDV oranı", type: "select", value: "%20", options: ["%0", "%1", "%10", "%20"] },
+          { label: "Genel toplam", value: "₺744.000", required: true },
+          { label: "Ödeme hesabı", type: "select", value: "Garanti TL", options: ["Garanti TL", "Ziraat TL", "Merkez Kasa", "Çek portföyü"] },
+          { label: "Kapanan tutar", value: "₺300.000" },
+          { label: "Kalan bakiye", value: "₺444.000" },
+          { label: "Datasoft aktarım durumu", type: "select", value: "Aktarım bekliyor", options: ["Aktarım bekliyor", "Aktarıldı", "Hata kontrolü", "Aktarılmayacak"] },
+          { label: "Açıklama", type: "textarea", value: "1. hakediş kapsamında düzenlenen satış faturası; kısmi tahsilat alındı.", span: "full" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "employee-card",
+    category: "İnsan Kaynakları",
+    title: "Personel Özlük Kartı",
+    description: "Kimlik, iletişim, çalışma, ücret, belge ve acil durum bilgilerinin kontrollü kaydı.",
+    icon: UsersThree,
+    sections: [
+      {
+        title: "Kimlik ve iletişim",
+        fields: [
+          { label: "Sicil no", value: "CP-PRS-084", required: true },
+          { label: "Ad soyad", value: "Kerem Yıldız", required: true },
+          { label: "T.C. kimlik no", value: "12345678901", required: true },
+          { label: "Doğum tarihi", type: "date", value: "1992-04-18" },
+          { label: "Telefon", value: "+90 533 555 08 42", required: true },
+          { label: "E-posta", type: "email", value: "kerem.yildiz@capproje.com" },
+          { label: "Adres", type: "textarea", value: "Pendik / İstanbul", span: "full" },
+          { label: "Acil durumda aranacak kişi", value: "Ayşe Yıldız / Eşi" },
+          { label: "Acil durum telefonu", value: "+90 532 555 18 10" },
+        ],
+      },
+      {
+        title: "Çalışma ve organizasyon",
+        fields: [
+          { label: "Şirket / işyeri", type: "select", value: "Capproje Merkez", options: ["Capproje Merkez", "Üretim Tesisi", "Saha / Montaj"] },
+          { label: "Departman", type: "select", value: "Üretim", options: ["Yönetim", "Satış", "Proje", "Satın Alma", "Üretim", "Montaj", "Finans", "İnsan Kaynakları"] },
+          { label: "Görev / unvan", value: "CNC Operatörü", required: true },
+          { label: "Yönetici", type: "select", value: "Ahmet Şahin", options: ["Ahmet Şahin", "Erdem Yılmaz", "Mert Kaya"] },
+          { label: "İşe giriş tarihi", type: "date", value: "2023-05-08", required: true },
+          { label: "Çalışma tipi", type: "select", value: "Tam zamanlı", options: ["Tam zamanlı", "Yarı zamanlı", "Dönemsel", "Stajyer", "Taşeron personeli"] },
+          { label: "Vardiya", type: "select", value: "Gündüz · 08:00–18:00", options: ["Gündüz · 08:00–18:00", "Akşam · 18:00–02:00", "Esnek", "Saha planına göre"] },
+          { label: "Çalışma durumu", type: "select", value: "Aktif", options: ["Aktif", "İzinli", "Pasif", "İşten ayrıldı"] },
+        ],
+      },
+      {
+        title: "Ücret, erişim ve belgeler",
+        fields: [
+          { label: "Ücret tipi", type: "select", value: "Aylık", options: ["Aylık", "Günlük", "Saatlik"] },
+          { label: "Brüt ücret", value: "₺48.500", required: true },
+          { label: "Banka / IBAN", value: "TR44 0006 2000 0000 0084 0001", span: "full" },
+          { label: "Fazla mesaiye uygun", type: "select", value: "Evet", options: ["Evet", "Hayır"] },
+          { label: "Yıllık izin bakiyesi", value: "11 gün" },
+          { label: "Uygulama rolü", type: "select", value: "Üretim kullanıcısı", options: ["Yönetici", "Proje yöneticisi", "Üretim kullanıcısı", "Saha kullanıcısı", "Sadece görüntüleme", "Erişim yok"] },
+          { label: "Özlük belgeleri", type: "file", accept: ".pdf,image/*", span: "full" },
+          { label: "Sağlık / iş güvenliği notu", type: "textarea", value: "Periyodik muayene 15.04.2027 tarihine kadar geçerli. CNC kullanım yetkisi mevcut.", span: "full" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "leave-attendance",
+    category: "İnsan Kaynakları",
+    title: "İzin & Puantaj Kaydı",
+    description: "İzin talebi, vardiya, fazla mesai, eksik gün ve yönetici onay süreci.",
+    icon: CalendarBlank,
+    sections: [
+      {
+        title: "Çalışan ve dönem",
+        fields: [
+          { label: "Personel", type: "select", value: "Kerem Yıldız · CP-PRS-084", options: ["Kerem Yıldız · CP-PRS-084", "Mehmet Yalçın · CP-PRS-042", "Büşra Demir · CP-PRS-031"], required: true },
+          { label: "Kayıt türü", type: "select", value: "Yıllık izin", options: ["Yıllık izin", "Mazeret izni", "Rapor", "Ücretsiz izin", "Fazla mesai", "Eksik gün", "Vardiya değişikliği"], required: true },
+          { label: "Başlangıç", type: "date", value: "2026-08-17", required: true },
+          { label: "Bitiş", type: "date", value: "2026-08-19", required: true },
+          { label: "Süre", value: "3 gün" },
+          { label: "Dönüş tarihi", type: "date", value: "2026-08-20" },
+          { label: "Bağlı proje / görev", type: "select", value: "Üretim genel", options: ["Üretim genel", "CP-25018 · Gedikpaşa Otel", "CP-25032 · Kurtköy Konutları", "Bağlantısız"] },
+          { label: "Vekâlet edecek kişi", value: "Emre Koç" },
+          { label: "Talep açıklaması", type: "textarea", value: "Aile ziyareti nedeniyle yıllık izin talebi.", span: "full", required: true },
+          { label: "Rapor / belge", type: "file", accept: ".pdf,image/*", span: "full" },
+        ],
+      },
+      {
+        title: "Puantaj ve onay",
+        fields: [
+          { label: "Normal çalışma", value: "198 saat" },
+          { label: "Fazla mesai", value: "14 saat" },
+          { label: "Hafta tatili", value: "4 gün" },
+          { label: "Eksik gün", value: "0 gün" },
+          { label: "İzin öncesi bakiye", value: "14 gün" },
+          { label: "İzin sonrası bakiye", value: "11 gün" },
+          { label: "İlk onaycı", type: "select", value: "Ahmet Şahin", options: ["Ahmet Şahin", "Erdem Yılmaz", "Mert Kaya"] },
+          { label: "İK kontrolü", type: "select", value: "Bekliyor", options: ["Bekliyor", "Uygun", "Eksik belge", "Reddedildi"] },
+          { label: "Onay durumu", type: "select", value: "Yönetici onayı bekliyor", options: ["Taslak", "Yönetici onayı bekliyor", "İK kontrolünde", "Onaylandı", "Reddedildi"] },
+          { label: "Onay notu", type: "textarea", value: "Vardiya planında Emre Koç ile değişiklik yapıldı.", span: "full" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "payroll-preparation",
+    category: "İnsan Kaynakları",
+    title: "Bordro Hazırlık Kaydı",
+    description: "Puantaj, fazla mesai, prim, avans ve kesintilerin bordro programına aktarım öncesi kontrolü.",
+    icon: Bank,
+    sections: [
+      {
+        title: "Dönem ve kazançlar",
+        fields: [
+          { label: "Bordro dönemi", type: "select", value: "Ağustos 2026", options: ["Temmuz 2026", "Ağustos 2026", "Eylül 2026"], required: true },
+          { label: "Personel", type: "select", value: "Kerem Yıldız · CP-PRS-084", options: ["Kerem Yıldız · CP-PRS-084", "Mehmet Yalçın · CP-PRS-042", "Büşra Demir · CP-PRS-031"], required: true },
+          { label: "Brüt ücret", value: "₺48.500", required: true },
+          { label: "Normal çalışma", value: "22 gün / 198 saat" },
+          { label: "Fazla mesai", value: "14 saat" },
+          { label: "Fazla mesai tutarı", value: "₺4.630" },
+          { label: "Prim / proje bonusu", value: "₺2.500" },
+          { label: "Yol / yemek", value: "₺4.400" },
+        ],
+      },
+      {
+        title: "Kesintiler ve kontrol",
+        fields: [
+          { label: "Personel avansı", value: "₺5.000" },
+          { label: "İcra / diğer kesinti", value: "₺0" },
+          { label: "Eksik gün", value: "0 gün" },
+          { label: "Ücretsiz izin", value: "0 gün" },
+          { label: "Masraf iadesi", value: "₺1.280" },
+          { label: "Tahmini net ödeme", value: "₺42.810" },
+          { label: "Puantaj kontrolü", type: "select", value: "Onaylandı", options: ["Bekliyor", "Eksik", "Onaylandı"] },
+          { label: "Bordro aktarım durumu", type: "select", value: "Aktarım bekliyor", options: ["Aktarım bekliyor", "Aktarıldı", "Muhasebe kontrolünde", "Kapatıldı"] },
+          { label: "Kontrol notu", type: "textarea", value: "14 saat fazla mesai üretim sorumlusu tarafından onaylandı; avans kesintisi uygulanacak.", span: "full" },
+          { label: "Puantaj / destekleyici belge", type: "file", accept: ".xlsx,.pdf,image/*", span: "full" },
+        ],
+      },
+    ],
+  },
+  {
     id: "weekly-meeting",
     category: "Yönetim",
     title: "Haftalık Toplantı Notu",
@@ -623,7 +836,7 @@ function initials(name) {
 function parseHash() {
   const parts = window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   return {
-    design: parts[0] === "d2" ? "d2" : "d1",
+    design: parts[0] === "d1" ? "d1" : "d2",
     route: parts[1] || "home",
     id: parts[2] || null,
   };
@@ -1121,6 +1334,242 @@ function FinancePage({ navigate }) {
   );
 }
 
+function ModuleTabs({ items, active, onChange }) {
+  return (
+    <div className="module-tabs" role="tablist" aria-label="Bölüm görünümü">
+      {items.map((item) => (
+        <button key={item} role="tab" aria-selected={active === item} className={active === item ? "active" : ""} onClick={() => onChange(item)}>{item}</button>
+      ))}
+    </div>
+  );
+}
+
+function AccountingPage({ navigate }) {
+  const [active, setActive] = useState("Genel Bakış");
+  const tabs = ["Genel Bakış", "Cari Hesaplar", "Faturalar", "Kasa & Banka", "Çek / Senet"];
+  const actions = {
+    "Genel Bakış": ["Yeni işlem", "invoice-transaction"],
+    "Cari Hesaplar": ["Yeni cari", "current-account"],
+    "Faturalar": ["Fatura ekle", "invoice-transaction"],
+    "Kasa & Banka": ["Hareket ekle", "invoice-transaction"],
+    "Çek / Senet": ["Evrak ekle", "invoice-transaction"],
+  };
+  const [action, formId] = actions[active];
+
+  const content = {
+    "Cari Hesaplar": {
+      title: "Cari hesaplar ve yaşlandırma",
+      icon: IdentificationCard,
+      headers: ["Cari", "Tür", "Borç", "Alacak", "Bakiye", "En eski vade", "Risk"],
+      rows: [
+        ["Marmara Otelcilik A.Ş.", "Müşteri", "₺8.184.000", "₺3.720.000", "₺4.464.000 A", "6 Eyl 2026", "Limit içinde"],
+        ["Kurtköy Yapı A.Ş.", "Müşteri", "₺12.600.000", "₺9.450.000", "₺3.150.000 A", "18 Ağu 2026", "Yaklaşıyor"],
+        ["Ergin Ahşap", "Tedarikçi", "₺1.850.000", "₺2.480.000", "₺630.000 B", "12 Ağu 2026", "Normal"],
+        ["Renk Cila", "Taşeron", "₺430.000", "₺780.000", "₺350.000 B", "9 Ağu 2026", "Vadesi geçti"],
+      ],
+    },
+    "Faturalar": {
+      title: "Faturalar ve ödeme durumu",
+      icon: Receipt,
+      headers: ["Belge no", "Cari", "Tür", "Proje", "Tutar", "Vade", "Durum"],
+      rows: [
+        ["GIB20260000184", "Marmara Otelcilik", "Satış", "Gedikpaşa Otel", "₺744.000", "6 Eyl", "Kısmi tahsilat"],
+        ["EA-2026-00812", "Ergin Ahşap", "Alış", "Kurtköy Konutları", "₺2.220.000", "21 Ağu", "Onay bekliyor"],
+        ["RC-2026-00448", "Renk Cila", "Alış", "Tuzla Villa", "₺516.000", "9 Ağu", "Vadesi geçti"],
+        ["GIB20260000179", "Kavacık Ofis", "Satış", "Kavacık Ofis", "₺1.860.000", "15 Ağu", "Açık"],
+      ],
+    },
+    "Kasa & Banka": {
+      title: "Kasa ve banka hesapları",
+      icon: Bank,
+      headers: ["Hesap", "Para birimi", "Güncel bakiye", "Bloke", "Kullanılabilir", "Son hareket", "Mutabakat"],
+      rows: [
+        ["Garanti TL", "TRY", "₺4.860.420", "₺310.000", "₺4.550.420", "Bugün 11:42", "Tam"],
+        ["Ziraat TL", "TRY", "₺1.284.600", "—", "₺1.284.600", "Dün 16:18", "Tam"],
+        ["Garanti EUR", "EUR", "€86.240", "—", "€86.240", "7 Ağu 14:06", "Kontrol bekliyor"],
+        ["Merkez Kasa", "TRY", "₺184.750", "—", "₺184.750", "Bugün 09:20", "₺2.400 fark"],
+      ],
+    },
+    "Çek / Senet": {
+      title: "Çek ve senet portföyü",
+      icon: FileText,
+      headers: ["Portföy no", "Cari", "Tür", "Tutar", "Vade", "Konum", "Durum"],
+      rows: [
+        ["CEK-26048", "Kurtköy Yapı", "Müşteri çeki", "₺1.250.000", "20 Ağu", "Portföy", "Tahsil bekliyor"],
+        ["CEK-26044", "Marmara Otelcilik", "Müşteri çeki", "₺2.480.000", "5 Eyl", "Garanti teminat", "Bankada"],
+        ["SNT-26012", "Renk Cila", "Firma senedi", "₺350.000", "18 Ağu", "Tedarikçide", "Ödeme planlandı"],
+      ],
+    },
+  };
+
+  return (
+    <>
+      <PageHeader title="Ön Muhasebe" action={action} onAction={() => navigate("form", formId)} />
+      <div className="module-note"><Wallet size={24} /><span><strong>Şirket geneli nakit ve cari görünümü</strong><small>Proje maliyetleri Finans bölümünde izlenir; resmi kayıtlar kontrol sonrası Datasoft’a aktarılır.</small></span><button onClick={() => navigate("finance")}>Proje finansına git <ArrowRight size={16} /></button></div>
+      <div className="summary-line accounting-summary">
+        <Summary label="Nakit & banka" value="₺9,84 Mn" note="4 hesap" />
+        <Summary label="Alacaklar" value="₺14,62 Mn" note="₺1,28 Mn gecikmiş" />
+        <Summary label="Borçlar" value="₺8,47 Mn" note="7 gün içinde ₺2,14 Mn" />
+        <Summary label="30 günlük net akış" value="+₺3,18 Mn" note="Tahmini" />
+      </div>
+      <ModuleTabs items={tabs} active={active} onChange={setActive} />
+      {active === "Genel Bakış" ? (
+        <div className="module-dashboard-grid">
+          <DataPanel title="Yaklaşan tahsilat ve ödemeler" icon={CalendarBlank}>
+            <DataTable headers={["Tarih", "Cari", "İşlem", "Proje", "Tutar", "Durum"]} rows={[
+              ["9 Ağu", "Renk Cila", "Tedarikçi ödemesi", "Tuzla Villa", "−₺516.000", "Onay bekliyor"],
+              ["12 Ağu", "Marmara Otelcilik", "Hakediş tahsilatı", "Gedikpaşa Otel", "+₺2.480.000", "Teyit edildi"],
+              ["15 Ağu", "Kavacık Ofis", "Fatura tahsilatı", "Kavacık Ofis", "+₺1.860.000", "Bekleniyor"],
+              ["18 Ağu", "Hafele", "Malzeme ödemesi", "Tuzla Villa", "−₺684.000", "Planlandı"],
+            ]} />
+          </DataPanel>
+          <DataPanel title="Kontrol gerektirenler" icon={Warning}>
+            <div className="attention-list">
+              <button onClick={() => setActive("Faturalar")}><span className="attention-tone danger"><Warning weight="fill" /></span><span><strong>3 gecikmiş alacak</strong><small>Toplam ₺1,28 Mn · en eski 11 gün</small></span><ArrowRight /></button>
+              <button onClick={() => setActive("Kasa & Banka")}><span className="attention-tone warning"><Bank weight="fill" /></span><span><strong>Kasa mutabakat farkı</strong><small>Merkez Kasa · ₺2.400 kontrol edilecek</small></span><ArrowRight /></button>
+              <button onClick={() => setActive("Faturalar")}><span className="attention-tone"><Receipt weight="fill" /></span><span><strong>6 belge aktarım bekliyor</strong><small>Datasoft kontrol kuyruğu</small></span><ArrowRight /></button>
+            </div>
+          </DataPanel>
+          <DataPanel title="Haftalık nakit akışı" icon={ChartLineUp}>
+            <div className="cashflow-bars">
+              {[["10–16 Ağu", 72, "₺4,34 Mn", "₺1,62 Mn"], ["17–23 Ağu", 48, "₺2,10 Mn", "₺2,44 Mn"], ["24–30 Ağu", 88, "₺6,82 Mn", "₺2,18 Mn"], ["31 Ağu–6 Eyl", 64, "₺3,75 Mn", "₺2,06 Mn"]].map(([week, value, incoming, outgoing]) => <span key={week}><small>{week}</small><i><b style={{ width: `${value}%` }} /></i><strong>{incoming} giriş</strong><em>{outgoing} çıkış</em></span>)}
+            </div>
+          </DataPanel>
+          <DataPanel title="Cari yaşlandırma" icon={ChartBar}>
+            <div className="aging-grid">
+              {[["Vadesi gelmemiş", "₺9,84 Mn", 67], ["1–30 gün", "₺3,50 Mn", 24], ["31–60 gün", "₺920 Bin", 6], ["60+ gün", "₺360 Bin", 3]].map(([label, value, rate]) => <span key={label}><small>{label}</small><strong>{value}</strong><Progress value={rate} /><em>%{rate}</em></span>)}
+            </div>
+          </DataPanel>
+        </div>
+      ) : (
+        <DataPanel title={content[active].title} icon={content[active].icon}>
+          <DataTable headers={content[active].headers} rows={content[active].rows} />
+        </DataPanel>
+      )}
+    </>
+  );
+}
+
+function HumanResourcesPage({ navigate }) {
+  const [active, setActive] = useState("Genel Bakış");
+  const tabs = ["Genel Bakış", "Personel", "Puantaj", "İzinler", "Bordro Hazırlık", "Belgeler & Zimmet"];
+  const actions = {
+    "Genel Bakış": ["Yeni personel", "employee-card"],
+    "Personel": ["Yeni personel", "employee-card"],
+    "Puantaj": ["Puantaj kaydı", "leave-attendance"],
+    "İzinler": ["İzin talebi", "leave-attendance"],
+    "Bordro Hazırlık": ["Bordro kaydı", "payroll-preparation"],
+    "Belgeler & Zimmet": ["Belge / zimmet ekle", "employee-card"],
+  };
+  const [action, formId] = actions[active];
+
+  const tables = {
+    "Personel": {
+      title: "Personel listesi",
+      icon: UsersThree,
+      headers: ["Sicil", "Personel", "Departman / görev", "Çalışma yeri", "İşe giriş", "Durum", "Belge"],
+      rows: [
+        ["CP-PRS-084", "Kerem Yıldız", "Üretim · CNC Operatörü", "Üretim Tesisi", "8 May 2023", "Aktif", "Tam"],
+        ["CP-PRS-042", "Mehmet Yalçın", "Montaj · Ekip Lideri", "Saha", "14 Şub 2021", "Aktif", "1 eksik"],
+        ["CP-PRS-031", "Büşra Demir", "Kalite · Sorumlu", "Üretim Tesisi", "3 Kas 2020", "İzinli", "Tam"],
+        ["CP-PRS-096", "Eren Uslu", "Satın Alma · Uzman", "Merkez", "1 Tem 2026", "Deneme süresi", "2 eksik"],
+      ],
+    },
+    "Puantaj": {
+      title: "Ağustos 2026 puantaj kontrolü",
+      icon: Clock,
+      headers: ["Personel", "Normal", "Fazla mesai", "İzin", "Eksik gün", "Saha / proje", "Kontrol"],
+      rows: [
+        ["Kerem Yıldız", "198 sa", "14 sa", "0 gün", "0", "Üretim genel", "Onaylandı"],
+        ["Mehmet Yalçın", "176 sa", "22 sa", "1 gün", "0", "3 proje", "Yönetici kontrolü"],
+        ["Büşra Demir", "162 sa", "8 sa", "2 gün", "0", "Tuzla Villa", "Onaylandı"],
+        ["Eren Uslu", "198 sa", "0 sa", "0 gün", "0", "Merkez", "Eksik giriş"],
+      ],
+    },
+    "İzinler": {
+      title: "İzin talepleri ve bakiyeler",
+      icon: CalendarBlank,
+      headers: ["Personel", "İzin türü", "Tarih", "Süre", "Bakiye", "Vekâlet", "Durum"],
+      rows: [
+        ["Kerem Yıldız", "Yıllık izin", "17–19 Ağu", "3 gün", "11 gün", "Emre Koç", "Onay bekliyor"],
+        ["Büşra Demir", "Yıllık izin", "10–11 Ağu", "2 gün", "8 gün", "Cem Topal", "Onaylandı"],
+        ["Murat Demir", "Mazeret", "14 Ağu", "1 gün", "—", "Ece Aydın", "İK kontrolünde"],
+      ],
+    },
+    "Bordro Hazırlık": {
+      title: "Bordro ön kontrol listesi · Ağustos 2026",
+      icon: Bank,
+      headers: ["Personel", "Brüt ücret", "Fazla mesai", "Prim", "Avans / kesinti", "Tahmini net", "Durum"],
+      rows: [
+        ["Kerem Yıldız", "₺48.500", "₺4.630", "₺2.500", "−₺5.000", "₺42.810", "Aktarım bekliyor"],
+        ["Mehmet Yalçın", "₺56.000", "₺8.120", "₺4.000", "—", "₺51.460", "Puantaj kontrolü"],
+        ["Büşra Demir", "₺61.500", "₺2.860", "₺3.000", "−₺2.500", "₺48.920", "Hazır"],
+      ],
+    },
+    "Belgeler & Zimmet": {
+      title: "Süresi yaklaşan belgeler ve zimmetler",
+      icon: FileText,
+      headers: ["Personel", "Kayıt", "Tür", "Veriliş", "Geçerlilik / iade", "Sorumlu", "Durum"],
+      rows: [
+        ["Mehmet Yalçın", "Yüksekte çalışma", "Sertifika", "12 Eyl 2025", "12 Eyl 2026", "İK", "34 gün kaldı"],
+        ["Kerem Yıldız", "CNC kullanım yetkisi", "Yetkinlik", "15 Nis 2026", "15 Nis 2027", "Üretim", "Geçerli"],
+        ["Eren Uslu", "Lenovo ThinkPad E14", "Zimmet", "1 Tem 2026", "İşten ayrılış", "Bilgi İşlem", "Teslim edildi"],
+        ["Büşra Demir", "Periyodik muayene", "Sağlık", "20 Eki 2025", "20 Eki 2026", "İSG", "72 gün kaldı"],
+      ],
+    },
+  };
+
+  return (
+    <>
+      <PageHeader title="İnsan Kaynakları" action={action} onAction={() => navigate("form", formId)} />
+      <div className="module-note hr-note"><UsersThree size={24} /><span><strong>Personel yaşam döngüsü ve saha uygunluğu</strong><small>Özlük ve ücret bilgileri yalnızca yetkili rollere açık; proje ekranlarında yalnızca görev için gerekli bilgiler görünür.</small></span><button onClick={() => navigate("forms")}>İK formlarını aç <ArrowRight size={16} /></button></div>
+      <div className="summary-line accounting-summary">
+        <Summary label="Aktif personel" value="86" note="72 kadrolu · 14 saha" />
+        <Summary label="Bugün sahada" value="31" note="6 projede" />
+        <Summary label="İzinli / raporlu" value="7" note="2 onay bekliyor" />
+        <Summary label="Açık pozisyon" value="4" note="2 üretim · 2 montaj" />
+      </div>
+      <ModuleTabs items={tabs} active={active} onChange={setActive} />
+      {active === "Genel Bakış" ? (
+        <div className="module-dashboard-grid">
+          <DataPanel title="Bugünün ekip durumu" icon={UsersThree}>
+            <DataTable headers={["Birim", "Planlı", "Mevcut", "İzin / rapor", "Fazla mesai", "Durum"]} rows={[
+              ["Üretim", "38", "35", "3", "64 saat", "Planında"],
+              ["Montaj", "18", "16", "2", "42 saat", "1 ekip desteği gerekli"],
+              ["Proje & Tasarım", "14", "13", "1", "8 saat", "Planında"],
+              ["Ofis birimleri", "16", "15", "1", "4 saat", "Planında"],
+            ]} />
+          </DataPanel>
+          <DataPanel title="İK aksiyonları" icon={ListChecks}>
+            <div className="attention-list">
+              <button onClick={() => setActive("İzinler")}><span className="attention-tone warning"><CalendarBlank weight="fill" /></span><span><strong>2 izin onayı bekliyor</strong><small>En yakın başlangıç 17 Ağustos</small></span><ArrowRight /></button>
+              <button onClick={() => setActive("Belgeler & Zimmet")}><span className="attention-tone danger"><Warning weight="fill" /></span><span><strong>4 belgenin süresi yaklaşıyor</strong><small>İSG ve sağlık belgeleri · 45 gün içinde</small></span><ArrowRight /></button>
+              <button onClick={() => setActive("Bordro Hazırlık")}><span className="attention-tone"><Bank weight="fill" /></span><span><strong>Ağustos bordro kontrolü</strong><small>8 puantaj kaydı eksik</small></span><ArrowRight /></button>
+            </div>
+          </DataPanel>
+          <DataPanel title="Departman dağılımı" icon={ChartBar}>
+            <div className="department-list">
+              {[["Üretim", 38, 44], ["Montaj", 18, 21], ["Proje & Tasarım", 14, 16], ["Satın Alma & Finans", 9, 10], ["Yönetim & Destek", 7, 9]].map(([label, count, rate]) => <span key={label}><small>{label}</small><i><b style={{ width: `${rate}%` }} /></i><strong>{count}</strong></span>)}
+            </div>
+          </DataPanel>
+          <DataPanel title="Yaklaşan tarihler" icon={CalendarBlank}>
+            <div className="people-events">
+              <span><i>12</i><b>Ağu</b><small>2 yeni personel oryantasyonu</small></span>
+              <span><i>15</i><b>Ağu</b><small>Puantaj kapanış kontrolü</small></span>
+              <span><i>20</i><b>Ağu</b><small>İSG tazeleme eğitimi · 12 kişi</small></span>
+              <span><i>31</i><b>Ağu</b><small>Bordro banka listesi onayı</small></span>
+            </div>
+          </DataPanel>
+        </div>
+      ) : (
+        <DataPanel title={tables[active].title} icon={tables[active].icon}>
+          <DataTable headers={tables[active].headers} rows={tables[active].rows} />
+        </DataPanel>
+      )}
+    </>
+  );
+}
+
 function ReportsPage({ navigate, flash }) {
   const reportItems = [
     ["Proje kârlılığı", "Teklif, bütçe ve gerçekleşen maliyet karşılaştırması", ChartLineUp],
@@ -1255,6 +1704,11 @@ function EntryFormPage({ id, navigate, flash }) {
   const form = formDefinitions.find((item) => item.id === id) || formDefinitions[0];
   const Icon = form.icon;
   const blueprint = formBlueprintMeta[form.id];
+  const isHr = form.category === "İnsan Kaynakları";
+  const isAccounting = form.category === "Ön Muhasebe";
+  const contextLabel = isHr ? "Bağlı personel" : isAccounting ? "Bağlı cari" : "Bağlı proje";
+  const contextValue = isHr ? "CP-PRS-084 · Kerem Yıldız" : isAccounting ? "CR-00184 · Marmara Otelcilik" : "CP-25018 · Gedikpaşa Otel";
+  const contextRoute = isHr ? "hr" : isAccounting ? "accounting" : "project";
 
   const submitDemo = (event, message) => {
     event.preventDefault();
@@ -1278,11 +1732,11 @@ function EntryFormPage({ id, navigate, flash }) {
         <button className="secondary-button" onClick={() => navigate("forms")}>Tüm formlar</button>
       </div>
       <div className="record-context-bar">
-        <span><small>Bağlı proje</small><strong>CP-25018 · Gedikpaşa Otel</strong></span>
+        <span><small>{contextLabel}</small><strong>{contextValue}</strong></span>
         <span><small>Kayıt durumu</small><strong>Taslak / İç kontrol</strong></span>
-        <span><small>Sorumlu</small><strong>{form.category === "Satın Alma" ? "Yusuf Kaplan" : "Mert Kaya"}</strong></span>
+        <span><small>Sorumlu</small><strong>{isHr ? "Derya Akın" : form.category === "Satın Alma" ? "Yusuf Kaplan" : isAccounting ? "Seda Yılmaz" : "Mert Kaya"}</strong></span>
         <span><small>Son aktivite</small><strong>Bugün 10:24</strong></span>
-        <button type="button" onClick={() => navigate("project", "gedikpasa")}>Proje kaydını aç <ArrowRight size={16} /></button>
+        <button type="button" onClick={() => navigate(contextRoute, contextRoute === "project" ? "gedikpasa" : null)}>İlgili kaydı aç <ArrowRight size={16} /></button>
       </div>
       <div className="entry-form-layout deep-layout">
         <aside className="form-outline">
@@ -1302,6 +1756,13 @@ function EntryFormPage({ id, navigate, flash }) {
               </div>
             </fieldset>
           ))}
+          {!blueprint && (
+            <div className="entry-form-actions">
+              <span>Bu prototip veri kaydetmez; alan kapsamını değerlendirmek içindir.</span>
+              <button type="button" className="secondary-button">Taslak görünümü</button>
+              <button type="submit" className="primary-button"><CheckCircle size={19} />Formu tamamla</button>
+            </div>
+          )}
         </form>
       </div>
     </>
@@ -1553,10 +2014,10 @@ function Toast({ message, onClose }) {
 function MobileNav({ design, route, navigate }) {
   const mobileIds = design === "d1"
     ? ["home", "vision", "projects", "forms", "finance"]
-    : ["home", "vision", "projects", "production", "finance"];
+    : ["home", "projects", "production", "accounting", "hr", "forms"];
   const items = mobileIds.map((id) => navigation[design].find((item) => item[0] === id));
   return (
-    <nav className="mobile-nav">
+    <nav className="mobile-nav" style={{ "--mobile-items": items.length }}>
       {items.map(([id, label, Icon]) => {
         const active = route === id || (route === "form" && id === "forms");
         return <button key={id} className={active ? "active" : ""} onClick={() => navigate(id)}><Icon size={21} /><span>{label}</span></button>;
@@ -1572,7 +2033,7 @@ export function App() {
   const [activeTab, setActiveTab] = useState("Özet");
 
   useEffect(() => {
-    if (!window.location.hash) window.location.hash = "#/d1/home";
+    if (!window.location.hash) window.location.hash = "#/d2/home";
     const onChange = () => { setLocation(parseHash()); setActiveTab("Özet"); window.scrollTo(0, 0); };
     window.addEventListener("hashchange", onChange);
     return () => window.removeEventListener("hashchange", onChange);
@@ -1603,6 +2064,8 @@ export function App() {
     if (route === "procurement") return <ProcurementPage navigate={navigate} />;
     if (route === "installation") return <InstallationPage navigate={navigate} />;
     if (route === "finance") return <FinancePage navigate={navigate} />;
+    if (route === "accounting") return <AccountingPage navigate={navigate} />;
+    if (route === "hr") return <HumanResourcesPage navigate={navigate} />;
     if (route === "forms") return <FormCatalog navigate={navigate} />;
     if (route === "form") return <EntryFormPage id={id} navigate={navigate} flash={setToast} />;
     return <ReportsPage navigate={navigate} flash={setToast} />;
