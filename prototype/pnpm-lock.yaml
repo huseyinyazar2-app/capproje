@@ -11,6 +11,9 @@ importers:
       '@phosphor-icons/react':
         specifier: 2.1.10
         version: 2.1.10(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      '@tursodatabase/serverless':
+        specifier: ^1.4.0
+        version: 1.4.0
       '@vitejs/plugin-react':
         specifier: 5.0.4
         version: 5.0.4(vite@6.4.2)
@@ -428,6 +431,9 @@ packages:
     resolution: {integrity: sha512-MOG/3gTOn4Fwf574RVOaY61I5o6P90legkFADiTyn1hyjNydT+cerU2rLUwPdZkKKyJ+iT+K9p7WXK4LM1Ka6g==}
     cpu: [x64]
     os: [win32]
+
+  '@tursodatabase/serverless@1.4.0':
+    resolution: {integrity: sha512-ZU3T76NG/E0NTKULqJ9TggJfbdPgRaChOS4HDOu3Srds7w7fSPie7jbPHzz+CLGrxs2TtMYtYB1lH5Bh6q1w7A==}
 
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -918,6 +924,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.62.3':
     optional: true
+
+  '@tursodatabase/serverless@1.4.0': {}
 
   '@types/babel__core@7.20.5':
     dependencies:

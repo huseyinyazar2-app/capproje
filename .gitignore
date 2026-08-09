@@ -4,3 +4,7 @@ prototype/dist/
 .vercel/
 prototype/qa/
 prototype/design-qa.md
+prototype/.env
+prototype/.env.*
+!prototype/.env.example
+prototype/.dev.vars

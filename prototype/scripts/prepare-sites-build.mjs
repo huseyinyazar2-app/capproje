@@ -2,6 +2,7 @@
 import { copyFileSync, cpSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "vite";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dist = path.join(root, "dist");
@@ -16,11 +17,22 @@ for (const file of [index, worker, hosting]) {
 
 mkdirSync(path.join(dist, "server"), { recursive: true });
 mkdirSync(path.join(dist, ".openai"), { recursive: true });
-copyFileSync(worker, path.join(dist, "server", "index.js"));
 copyFileSync(hosting, path.join(dist, ".openai", "hosting.json"));
+
+await build({
+  configFile: false,
+  logLevel: "warn",
+  build: {
+    ssr: worker,
+    outDir: path.join(dist, "server"),
+    emptyOutDir: false,
+    rollupOptions: { output: { entryFileNames: "index.js" } },
+  },
+  ssr: { noExternal: ["@tursodatabase/serverless"] },
+});
 
 if (existsSync(migrations)) {
   cpSync(migrations, path.join(dist, ".openai", "drizzle"), { recursive: true });
 }
 
-console.log("Prepared Sites build: worker, hosting bindings and database migrations");
+console.log("Prepared Sites build: bundled worker, hosting bindings and database migrations");

@@ -1,3 +1,5 @@
+import { databaseFromEnv } from "./database.js";
+
 const JSON_COLUMNS = new Set(["settings_json", "metadata_json", "dependency_ids_json", "team_json", "payment_schedule_json", "attendees_json", "checklist_json"]);
 
 const resources = {
@@ -1331,6 +1333,7 @@ async function withIdempotency(request, env, principal, handler) {
 }
 
 async function handleApi(request, env, context) {
+  env = { ...env, DB: databaseFromEnv(env) };
   if (!env.DB) return problem(503, "database_unavailable", "DB binding yapılandırılmamış.");
   const url = new URL(request.url);
   const segments = url.pathname.split("/").filter(Boolean);
@@ -1382,6 +1385,7 @@ async function fetchHandler(request, env, context) {
 
 async function scheduledHandler(_controller, env, context) {
   const task = (async () => {
+    env = { ...env, DB: databaseFromEnv(env) };
     if (!env.DB) return;
     const tenants = await all(env.DB.prepare("SELECT id FROM tenants WHERE status='active' ORDER BY id"));
     for (const tenant of tenants) await writeBackup(env, tenant.id, "scheduler");
