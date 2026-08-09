@@ -6,10 +6,7 @@ export const API_CONFIG = Object.freeze({
   baseUrl: String(import.meta.env.VITE_API_URL || "/api/v1").replace(/\/$/, ""),
   timeoutMs: 15000,
   endpoints: Object.freeze({
-    login: "/auth/login",
-    logout: "/auth/logout",
     session: "/session",
-    tenants: "/tenants",
     dashboard: "/dashboard",
     projects: "/projects",
     offers: "/offers",
@@ -29,6 +26,23 @@ export const API_CONFIG = Object.freeze({
     memberships: "/memberships",
     roles: "/roles",
     auditLogs: "/audit-logs",
+    offerItems: "/offer-items",
+    projectTasks: "/project-tasks",
+    purchaseOrders: "/purchase-orders",
+    accounts: "/accounts",
+    tokens: "/tokens",
+    siteSurveys: "/site-surveys",
+    surveyMeasurements: "/survey-measurements",
+    contracts: "/contracts",
+    designRevisions: "/design-revisions",
+    progressPayments: "/progress-payments",
+    inventoryItems: "/inventory-items",
+    stockMovements: "/stock-movements",
+    projectMeetings: "/project-meetings",
+    meetingActions: "/meeting-actions",
+    qualityInspections: "/quality-inspections",
+    handovers: "/handovers",
+    handoverPunchItems: "/handover-punch-items",
   }),
 });
 
@@ -58,13 +72,30 @@ export const RESOURCE_SLUGS = Object.freeze({
   roles: "roles",
   auditLogs: "audit-logs",
   backups: "backups",
+  offerItems: "offer-items",
+  projectTasks: "project-tasks",
+  purchaseOrders: "purchase-orders",
+  accounts: "accounts",
+  tokens: "tokens",
+  siteSurveys: "site-surveys",
+  surveyMeasurements: "survey-measurements",
+  contracts: "contracts",
+  designRevisions: "design-revisions",
+  progressPayments: "progress-payments",
+  inventoryItems: "inventory-items",
+  stockMovements: "stock-movements",
+  projectMeetings: "project-meetings",
+  meetingActions: "meeting-actions",
+  qualityInspections: "quality-inspections",
+  handovers: "handovers",
+  handoverPunchItems: "handover-punch-items",
 });
 
 const FIELD_MAPS = Object.freeze({
-  projects: { customerName: "customer_id", projectManager: "manager_user_id", progress: "progress_percent", startDate: "planned_start_date", targetDate: "planned_end_date", contractAmount: "contract_amount_minor", address: "site_address" },
+  projects: { customerName: "customer_id", projectManager: "manager_user_id", progress: "progress_percent", startDate: "planned_start_date", targetDate: "planned_end_date", contractAmount: "contract_amount_minor", photoConsent: "photo_consent", address: "site_address" },
   offers: { referenceNo: "offer_number", projectName: "project_id", customerName: "customer_id", totalAmount: "grand_total_minor", validUntil: "valid_until", lossReason: "rejection_reason" },
   purchases: { number: "request_number", projectId: "project_id", itemName: "description", supplierName: "preferred_supplier_id", requiredAt: "needed_by", estimatedAmount: "estimated_amount_minor", specification: "notes" },
-  production: { code: "order_number", projectId: "project_id", itemName: "work_item_id", workCenter: "workshop", assignee: "assigned_team", plannedStart: "planned_start", plannedEnd: "planned_end", outsourced: "production_type", notes: "instructions" },
+  production: { code: "order_number", projectId: "project_id", itemName: "work_item_id", workCenter: "workshop", assignee: "assigned_team", plannedStart: "planned_start", plannedEnd: "planned_end", outsourced: "production_type", tradeType: "trade_type", notes: "instructions" },
   installations: { code: "installation_number", projectId: "project_id", teamName: "team_json", scheduledAt: "planned_start", contactName: "acceptance_contact", notes: "issue_notes", siteReadiness: "metadata_json" },
   finance: { projectId: "project_id", transactionNo: "transaction_number", transactionDate: "transaction_date", dueDate: "due_date", amount: "amount_minor" },
   accounting: { documentNo: "invoice_number", customerId: "customer_id", supplierId: "supplier_id", transactionDate: "issue_date", dueDate: "due_date", amount: "grand_total_minor", datasoftStatus: "datasoft_status", description: "notes" },
@@ -79,6 +110,23 @@ const FIELD_MAPS = Object.freeze({
   memberships: { userId: "user_id", roleId: "role_id", fullName: "full_name" },
   auditLogs: { userId: "user_id", entityType: "entity_type", entityId: "entity_id", requestId: "request_id", ipAddress: "ip_address", changes: "changes_json", createdAt: "created_at" },
   backups: { tenantId: "tenant_id", triggeredBy: "triggered_by", objectKey: "object_key", rowCount: "row_count", errorMessage: "error_message", createdAt: "created_at", completedAt: "completed_at" },
+  offerItems: { offerId: "offer_id", parentId: "parent_id", itemCode: "item_code", unitPrice: "unit_price_minor", costPrice: "cost_price_minor", discountRate: "discount_rate", taxRate: "tax_rate", total: "total_minor", sortOrder: "sort_order" },
+  projectTasks: { projectId: "project_id", parentId: "parent_id", assigneeUserId: "assignee_user_id", plannedStart: "planned_start", plannedEnd: "planned_end", completedAt: "completed_at", progress: "progress_percent", dependencyIds: "dependency_ids_json" },
+  purchaseOrders: { orderNumber: "order_number", requestId: "request_id", projectId: "project_id", supplierId: "supplier_id", orderDate: "order_date", expectedDate: "expected_date", subtotal: "subtotal_minor", taxTotal: "tax_total_minor", grandTotal: "grand_total_minor", deliveryAddress: "delivery_address" },
+  accounts: { bankName: "bank_name", openingBalance: "opening_balance_minor", currentBalance: "current_balance_minor" },
+  tokens: { expiresAt: "expires_at", lastUsedAt: "last_used_at", revokedAt: "revoked_at", createdAt: "created_at" },
+  siteSurveys: { projectId: "project_id", customerId: "customer_id", surveyNumber: "survey_number", surveyDate: "survey_date", surveyorUserId: "surveyor_user_id", customerContact: "customer_contact" },
+  surveyMeasurements: { siteSurveyId: "site_survey_id", spaceName: "space_name", elementType: "element_type", itemCode: "item_code", sortOrder: "sort_order" },
+  contracts: { contractNumber: "contract_number", projectId: "project_id", customerId: "customer_id", offerId: "offer_id", paymentModel: "payment_model", contractAmount: "contract_amount_minor", advanceRate: "advance_rate", advanceAmount: "advance_amount_minor", retentionRate: "retention_rate", retentionAmount: "retention_amount_minor", warrantyMonths: "warranty_months", warrantyAmount: "warranty_amount_minor", paymentSchedule: "payment_schedule_json", effectiveDate: "effective_date", plannedStartDate: "planned_start_date", plannedEndDate: "planned_end_date", signedByCustomer: "signed_by_customer", signedByCompany: "signed_by_company", photoConsent: "photo_consent", terminationReason: "termination_reason" },
+  designRevisions: { projectId: "project_id", workItemId: "work_item_id", revisionNumber: "revision_number", drawingType: "drawing_type", fileId: "file_id", rejectionReason: "rejection_reason", supersedesId: "supersedes_id" },
+  progressPayments: { progressNumber: "progress_number", projectId: "project_id", contractId: "contract_id", periodStart: "period_start", periodEnd: "period_end", previousWork: "previous_work_minor", currentWork: "current_work_minor", cumulativeWork: "cumulative_work_minor", deduction: "deduction_minor", retention: "retention_minor", tax: "tax_minor", netPayable: "net_payable_minor", rejectionReason: "rejection_reason", invoiceId: "invoice_id", paymentTransactionId: "payment_transaction_id" },
+  inventoryItems: { onHandQuantity: "on_hand_quantity", reservedQuantity: "reserved_quantity", minimumQuantity: "minimum_quantity", averageCost: "average_cost_minor", warehouseLocation: "warehouse_location", preferredSupplierId: "preferred_supplier_id" },
+  stockMovements: { movementNumber: "movement_number", inventoryItemId: "inventory_item_id", projectId: "project_id", movementType: "movement_type", movementDate: "movement_date", unitCost: "unit_cost_minor", totalCost: "total_cost_minor", sourceType: "source_type", sourceId: "source_id" },
+  projectMeetings: { projectId: "project_id", meetingType: "meeting_type", meetingDate: "meeting_date", facilitatorUserId: "facilitator_user_id", attendees: "attendees_json" },
+  meetingActions: { meetingId: "meeting_id", projectId: "project_id", ownerUserId: "owner_user_id", dueDate: "due_date", completedAt: "completed_at" },
+  qualityInspections: { inspectionNumber: "inspection_number", projectId: "project_id", workItemId: "work_item_id", productionOrderId: "production_order_id", installationId: "installation_id", inspectionType: "inspection_type", inspectionDate: "inspection_date", inspectorUserId: "inspector_user_id", checklist: "checklist_json", defectNotes: "defect_notes", correctiveAction: "corrective_action", correctiveDueDate: "corrective_due_date" },
+  handovers: { handoverNumber: "handover_number", projectId: "project_id", installationId: "installation_id", handoverDate: "handover_date", customerContact: "customer_contact", satisfactionScore: "satisfaction_score", customerSignatureFileId: "customer_signature_file_id", acceptanceNotes: "acceptance_notes" },
+  handoverPunchItems: { handoverId: "handover_id", responsibleUserId: "responsible_user_id", dueDate: "due_date", resolvedAt: "resolved_at", acceptedAt: "accepted_at" },
 });
 
 const STATUS_VALUES = Object.freeze({
@@ -129,6 +177,11 @@ function mapOutgoing(resource, value) {
     if (apiKey === "type" && resource === "finance") mapped = raw === "Gelir" ? "income" : raw === "Gider" ? "expense" : raw === "Hakediş" ? "progress_payment" : raw === "Avans" ? "advance" : raw === "Maliyet tahmini" ? "cost_forecast" : raw;
     if (apiKey === "direction" && resource === "accounting") mapped = raw === "Satış" ? "sales" : raw === "Alış" ? "purchase" : raw;
     if (apiKey === "team_json") mapped = Array.isArray(raw) ? raw : String(raw).split(",").map((item) => item.trim()).filter(Boolean);
+    if (apiKey === "dependency_ids_json") mapped = Array.isArray(raw) ? raw : String(raw).split(",").map((item) => item.trim()).filter(Boolean);
+    if (["attendees_json", "checklist_json", "payment_schedule_json"].includes(apiKey) && !Array.isArray(raw)) {
+      try { mapped = JSON.parse(String(raw)); }
+      catch { mapped = String(raw).split(",").map((item) => item.trim()).filter(Boolean); }
+    }
     if (apiKey === "metadata_json" && typeof raw !== "object") mapped = { note: raw };
     result[apiKey] = mapped;
   }
@@ -275,9 +328,6 @@ export const api = {
   async session() {
     return (await request(API_CONFIG.endpoints.session)).data;
   },
-  async listTenants() {
-    return (await request(API_CONFIG.endpoints.tenants)).data;
-  },
   async dashboard() {
     return mapIncoming("dashboard", (await request(API_CONFIG.endpoints.dashboard)).data);
   },
@@ -291,6 +341,11 @@ export const api = {
     }
     const result = await request(withQuery(endpoint, normalizedQuery));
     return { ...result, data: mapIncoming(resource, result.data) };
+  },
+  async get(resource, id) {
+    const endpoint = API_CONFIG.endpoints[resource];
+    if (!endpoint) throw new ApiError(`Bilinmeyen kaynak: ${resource}`, { code: "UNKNOWN_RESOURCE" });
+    return mapIncoming(resource, (await request(`${endpoint}/${encodeURIComponent(id)}`)).data);
   },
   async create(resource, values) {
     const endpoint = API_CONFIG.endpoints[resource];
@@ -306,7 +361,10 @@ export const api = {
   async remove(resource, id) {
     const endpoint = API_CONFIG.endpoints[resource];
     if (!endpoint) throw new ApiError(`Bilinmeyen kaynak: ${resource}`, { code: "UNKNOWN_RESOURCE" });
-    return (await request(`${endpoint}/${encodeURIComponent(id)}`, { method: "DELETE" })).data;
+    return (await request(`${endpoint}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "Idempotency-Key": idempotencyKey(resource, "delete") },
+    })).data;
   },
   async uploadFile({ file, ...fields }) {
     const body = new FormData();
@@ -326,6 +384,15 @@ export const api = {
   },
   async createBackup() {
     return mapIncoming("backups", (await request("/api/admin/backups", { method: "POST" })).data);
+  },
+  async listTokens() {
+    return mapIncoming("tokens", (await request("/tokens")).data);
+  },
+  async createToken(values) {
+    return mapIncoming("tokens", (await request("/tokens", { method: "POST", body: { name: values.name, expires_in_days: Number(values.expiresInDays || 90) } })).data);
+  },
+  async tokenAction(tokenId, action, values = {}) {
+    return mapIncoming("tokens", (await request(`/tokens/${encodeURIComponent(tokenId)}/${action}`, { method: "POST", body: values })).data);
   },
   async workflow(resource, resourceId, action, body = {}) {
     const endpoint = API_CONFIG.endpoints[resource];
@@ -351,9 +418,9 @@ export function permissionAllows(session, action, resource) {
   const slug = RESOURCE_SLUGS[resource] || resource;
   let backendAction = action === "create" || action === "update" ? "write" : action === "view_cost" || action === "view_salary" ? "view" : action;
   let permissionSlug = slug;
-  if (["create", "update"].includes(action) && resource === "files") backendAction = "manage";
-  if (["create", "update"].includes(action) && resource === "memberships") { permissionSlug = "users"; backendAction = "manage"; }
-  if (["create", "update", "manage"].includes(action) && resource === "roles") backendAction = "manage";
+  if (action !== "read" && resource === "files") backendAction = "manage";
+  if (action !== "read" && resource === "memberships") { permissionSlug = "users"; backendAction = "manage"; }
+  if (action !== "read" && resource === "roles") backendAction = "manage";
   return normalized.some((permission) =>
     permission === "*" ||
     permission === `${resource}.${action}` ||
