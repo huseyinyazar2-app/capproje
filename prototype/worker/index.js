@@ -839,10 +839,15 @@ async function postStockMovement(request, env, principal, movementId) {
   if (outbound && Number(record.on_hand_quantity) < Number(record.quantity)) return problem(409, "insufficient_stock", "Stok miktarı bu çıkış için yetersiz.");
   const timestamp = now();
   const totalCost = Number(record.total_cost_minor || 0) || Math.round(Number(record.quantity) * Number(record.unit_cost_minor || 0));
+  const delta = outbound ? -Number(record.quantity) : Number(record.quantity);
+  const postMovement = env.DB.prepare("UPDATE stock_movements SET status=CASE WHEN EXISTS (SELECT 1 FROM inventory_items ii WHERE ii.id=stock_movements.inventory_item_id AND ii.tenant_id=stock_movements.tenant_id AND (? >= 0 OR ii.on_hand_quantity >= ?)) THEN 'posted' ELSE '__insufficient_stock__' END,total_cost_minor=?,posted_at=?,posted_by=?,updated_at=? WHERE id=? AND tenant_id=? AND status='draft'")
+    .bind(delta, Number(record.quantity), totalCost, timestamp, principal.user.id, timestamp, movementId, principal.tenantId);
+  const updateBalance = env.DB.prepare("UPDATE inventory_items SET on_hand_quantity=on_hand_quantity+?,updated_at=? WHERE id=? AND tenant_id=? AND EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.id=? AND sm.tenant_id=? AND sm.status='posted' AND sm.posted_at=?)")
+    .bind(delta, timestamp, record.inventory_item_id, principal.tenantId, movementId, principal.tenantId, timestamp);
   try {
-    await commitWorkflow(env, principal, request, [env.DB.prepare("UPDATE stock_movements SET status='posted',total_cost_minor=?,posted_at=?,posted_by=?,updated_at=? WHERE id=? AND tenant_id=? AND status='draft'").bind(totalCost, timestamp, principal.user.id, timestamp, movementId, principal.tenantId)], "post", "stock-movements", movementId, { inventory_item_id: record.inventory_item_id, movement_type: record.movement_type, quantity: record.quantity });
+    await commitWorkflow(env, principal, request, [postMovement, updateBalance], "post", "stock-movements", movementId, { inventory_item_id: record.inventory_item_id, movement_type: record.movement_type, quantity: record.quantity });
   } catch (error) {
-    if (String(error?.message || error).includes("insufficient_stock_or_cross_tenant_item")) return problem(409, "insufficient_stock", "Stok miktarı değişti veya ürün bu tenant'a ait değil; hareket uygulanmadı.");
+    if (String(error?.message || error).toLowerCase().includes("constraint")) return problem(409, "insufficient_stock", "Stok miktarı değişti veya ürün bu tenant'a ait değil; hareket uygulanmadı.");
     return workflowCommitProblem(env, error);
   }
   return json({ data: serializeRow(await workflowRow(env, principal, "stock_movements", movementId), "stock-movements", principal) });

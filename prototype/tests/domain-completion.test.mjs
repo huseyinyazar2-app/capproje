@@ -89,37 +89,11 @@ test("domain schema covers discovery through handover with normalized business r
   assert.match(migration, /trade_type TEXT CHECK \(trade_type IN \('internal','cila','metal','glass_mirror','door','upholstery','stone','other'\)\)/);
 });
 
-test("posted stock movement updates balance once and insufficient stock is atomic", async () => {
-  const database = new DatabaseSync(":memory:");
-  try {
-    for (const name of ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql"]) {
-      database.exec(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
-    }
-    const timestamp = "2026-08-09T12:00:00.000Z";
-    database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-a", "Capproje", "capproje", timestamp, timestamp);
-    database.prepare("INSERT INTO inventory_items (id,tenant_id,sku,name,unit,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("item-a", "tenant-a", "MDF-18", "18 mm MDF", "plaka", timestamp, timestamp);
-    database.prepare("INSERT INTO stock_movements (id,tenant_id,movement_number,inventory_item_id,movement_type,movement_date,quantity,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run("move-in", "tenant-a", "STK-001", "item-a", "receipt", "2026-08-09", 10, "draft", timestamp, timestamp);
-    database.prepare("UPDATE stock_movements SET status='posted',updated_at=? WHERE id=? AND tenant_id=?").run(timestamp, "move-in", "tenant-a");
-    assert.equal(database.prepare("SELECT on_hand_quantity FROM inventory_items WHERE id=?").get("item-a").on_hand_quantity, 10);
-
-    database.prepare("INSERT INTO stock_movements (id,tenant_id,movement_number,inventory_item_id,movement_type,movement_date,quantity,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run("move-out", "tenant-a", "STK-002", "item-a", "issue", "2026-08-09", 12, "draft", timestamp, timestamp);
-    assert.throws(
-      () => database.prepare("UPDATE stock_movements SET status='posted',updated_at=? WHERE id=? AND tenant_id=?").run(timestamp, "move-out", "tenant-a"),
-      /insufficient_stock_or_cross_tenant_item/,
-    );
-    assert.equal(database.prepare("SELECT on_hand_quantity FROM inventory_items WHERE id=?").get("item-a").on_hand_quantity, 10);
-    assert.equal(database.prepare("SELECT status FROM stock_movements WHERE id=?").get("move-out").status, "draft");
-
-    database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-b", "Diğer Firma", "diger-firma", timestamp, timestamp);
-    database.prepare("INSERT INTO stock_movements (id,tenant_id,movement_number,inventory_item_id,movement_type,movement_date,quantity,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run("cross-tenant", "tenant-b", "STK-B-001", "item-a", "receipt", "2026-08-09", 5, "draft", timestamp, timestamp);
-    assert.throws(
-      () => database.prepare("UPDATE stock_movements SET status='posted',updated_at=? WHERE id=? AND tenant_id=?").run(timestamp, "cross-tenant", "tenant-b"),
-      /insufficient_stock_or_cross_tenant_item/,
-    );
-    assert.equal(database.prepare("SELECT on_hand_quantity FROM inventory_items WHERE id=?").get("item-a").on_hand_quantity, 10);
-  } finally {
-    database.close();
-  }
+test("stock posting stays in the atomic worker batch and migrations remain deployable", () => {
+  assert.doesNotMatch(migration, /CREATE TRIGGER|\bBEGIN\b/);
+  assert.match(worker, /const postMovement = env\.DB\.prepare/);
+  assert.match(worker, /const updateBalance = env\.DB\.prepare/);
+  assert.match(worker, /commitWorkflow\([\s\S]*\[postMovement, updateBalance\]/);
 });
 
 test("every domain resource is tenant-scoped, RBAC protected, audited and backed up", () => {

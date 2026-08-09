@@ -180,25 +180,6 @@ CREATE INDEX IF NOT EXISTS idx_progress_payments_tenant_contract ON progress_pay
 CREATE INDEX IF NOT EXISTS idx_inventory_items_tenant_status ON inventory_items(tenant_id, status, name);
 CREATE INDEX IF NOT EXISTS idx_stock_movements_tenant_item ON stock_movements(tenant_id, inventory_item_id, movement_date);
 
-CREATE TRIGGER IF NOT EXISTS trg_stock_movement_post
-BEFORE UPDATE OF status ON stock_movements
-WHEN NEW.status = 'posted' AND OLD.status = 'draft'
-BEGIN
-  UPDATE inventory_items
-  SET on_hand_quantity = on_hand_quantity + CASE
-      WHEN NEW.movement_type IN ('receipt','adjustment_in','project_return') THEN NEW.quantity
-      ELSE -NEW.quantity
-    END,
-    updated_at = NEW.updated_at
-  WHERE id = NEW.inventory_item_id
-    AND tenant_id = NEW.tenant_id
-    AND (
-      NEW.movement_type IN ('receipt','adjustment_in','project_return')
-      OR on_hand_quantity >= NEW.quantity
-    );
-  SELECT CASE WHEN changes() = 0 THEN RAISE(ABORT, 'insufficient_stock_or_cross_tenant_item') END;
-END;
-
 ALTER TABLE projects ADD COLUMN photo_consent TEXT NOT NULL DEFAULT 'not_requested' CHECK (photo_consent IN ('not_requested','denied','internal_only','marketing_allowed'));
 ALTER TABLE contracts ADD COLUMN photo_consent TEXT NOT NULL DEFAULT 'not_requested' CHECK (photo_consent IN ('not_requested','denied','internal_only','marketing_allowed'));
 ALTER TABLE production_orders ADD COLUMN trade_type TEXT CHECK (trade_type IN ('internal','cila','metal','glass_mirror','door','upholstery','stone','other'));
