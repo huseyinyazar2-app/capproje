@@ -9,6 +9,7 @@
     "build": "vite build && node scripts/prepare-sites-build.mjs",
     "db:turso:migrate": "node --env-file=.env.local scripts/migrate-turso.mjs",
     "db:turso:bootstrap": "node --env-file=.env.local scripts/bootstrap-turso.mjs",
+    "db:turso:set-password": "node --env-file=.env.local scripts/set-turso-password.mjs",
     "preview": "vite preview",
     "test": "node --test tests/*.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"

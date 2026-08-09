@@ -51,7 +51,8 @@ const dailyBackupSeen = new Map();
 const ownerRoles = new Set(["owner", "admin"]);
 const PHONE_SESSION_COOKIE = "__Host-capproje_session";
 const PHONE_SESSION_SECONDS = 12 * 60 * 60;
-const PASSWORD_ITERATIONS = 600_000;
+// Cloudflare Workers WebCrypto rejects PBKDF2 iteration counts above 100,000.
+const PASSWORD_ITERATIONS = 100_000;
 const staticSecurityHeaders = {
   "content-security-policy": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'",
   "x-frame-options": "DENY",
@@ -1496,5 +1497,5 @@ async function scheduledHandler(_controller, env, context) {
   else await task;
 }
 
-export const __testing = { authenticate, handleApi, writeBackup, resources };
+export const __testing = { authenticate, handleApi, writeBackup, resources, normalizeTurkishMobile, passwordRecord };
 export default { fetch: fetchHandler, scheduled: scheduledHandler };
