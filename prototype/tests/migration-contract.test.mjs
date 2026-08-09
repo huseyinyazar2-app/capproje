@@ -4,6 +4,7 @@ import test from "node:test";
 
 const migrationUrl = new URL("../migrations/0001_tenant_core.sql", import.meta.url);
 const phoneMigrationUrl = new URL("../migrations/0006_phone_auth.sql", import.meta.url);
+const passwordMigrationUrl = new URL("../migrations/0007_password_auth.sql", import.meta.url);
 
 test("tenant-owned business tables require tenant_id", async () => {
   const sql = await readFile(migrationUrl, "utf8");
@@ -50,4 +51,13 @@ test("phone sessions store only hashed tokens and expire", async () => {
   assert.match(sql, /CREATE TABLE IF NOT EXISTS phone_auth_requests/);
   assert.match(sql, /phone_hash TEXT NOT NULL/);
   assert.match(sql, /ip_hash TEXT NOT NULL/);
+});
+
+test("password authentication stores only salted adaptive hashes and rate-limit metadata", async () => {
+  const sql = await readFile(passwordMigrationUrl, "utf8");
+  assert.match(sql, /password_hash TEXT/);
+  assert.match(sql, /password_salt TEXT/);
+  assert.match(sql, /password_iterations INTEGER/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS password_auth_attempts/);
+  assert.doesNotMatch(sql, /password\s+TEXT/i);
 });

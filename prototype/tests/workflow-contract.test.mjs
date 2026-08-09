@@ -42,6 +42,7 @@ async function setup() {
   database.exec(await readFile(new URL("../migrations/0004_production_readiness.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0005_capproje_domain.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0006_phone_auth.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
   database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-a", "Firma A", "firma-a", timestamp, timestamp);
   database.prepare("INSERT INTO users (id,email,full_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("owner-a", "owner@a.test", "Firma Sahibi", "active", timestamp, timestamp);
   database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-owner", "tenant-a", "owner", "Firma Sahibi", 1, timestamp, timestamp);
@@ -65,11 +66,12 @@ test("bootstrap owner can open a session without knowing the tenant id", async (
   database.exec(await readFile(new URL("../migrations/0004_production_readiness.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0005_capproje_domain.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0006_phone_auth.sql", import.meta.url), "utf8"));
-  const env = { DB: new D1Database(database), ALLOW_DEV_AUTH: "true", BOOTSTRAP_SECRET: "secret-for-test" };
+  database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
+  const env = { DB: new D1Database(database), ALLOW_DEV_AUTH: "true", BOOTSTRAP_SECRET: "secret-for-test", PASSWORD_AUTH_ENABLED: "true", PASSWORD_AUTH_PEPPER: "test-password-pepper-1234567890" };
   const bootstrapResponse = await worker.fetch(new Request("https://example.test/api/v1/bootstrap", {
     method: "POST",
     headers: { "content-type": "application/json", "x-bootstrap-secret": "secret-for-test" },
-    body: JSON.stringify({ tenant_name: "Yeni Firma", tenant_slug: "yeni-firma", owner_email: "owner@a.test", owner_name: "Firma Sahibi" }),
+    body: JSON.stringify({ tenant_name: "Yeni Firma", tenant_slug: "yeni-firma", owner_email: "owner@a.test", owner_name: "Firma Sahibi", owner_phone: "0555 111 22 33", owner_password: "Test-password-123" }),
   }), env);
   assert.equal(bootstrapResponse.status, 201);
   const sessionResponse = await worker.fetch(request("/api/v1/session", { method: "GET", includeTenant: false }), env);
@@ -82,6 +84,18 @@ test("bootstrap owner can open a session without knowing the tenant id", async (
   const readOnlyPermissions = database.prepare("SELECT permission_code FROM role_permissions WHERE role_id=?").all(readOnlyId).map((row) => row.permission_code);
   assert.ok(readOnlyPermissions.includes("projects.read"));
   assert.equal(readOnlyPermissions.includes("hr.sensitive.read"), false);
+  assert.notEqual(database.prepare("SELECT password_hash FROM users WHERE email=?").get("owner@a.test").password_hash, "Test-password-123");
+
+  const loginResponse = await worker.fetch(new Request("https://example.test/api/v1/auth/password/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://example.test" },
+    body: JSON.stringify({ phone: "0555 111 22 33", password: "Test-password-123" }),
+  }), env);
+  const cookie = loginResponse.headers.get("set-cookie");
+  assert.equal(loginResponse.status, 200);
+  assert.match(cookie, /HttpOnly/);
+  const passwordSession = await worker.fetch(new Request("https://example.test/api/v1/session", { headers: { cookie: cookie.split(";")[0] } }), env);
+  assert.equal(passwordSession.status, 200);
 });
 
 test("session auto-selects the only active tenant and requires selection for multiple memberships", async () => {
@@ -249,8 +263,8 @@ test("scheduled backups include the latest schema manifest and never mix tenants
   for (const [key, content] of objects) {
     const lines = content.split("\n").map((line) => JSON.parse(line));
     const manifest = lines[0];
-    assert.equal(manifest.schema_version, 6);
-    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql"]);
+    assert.equal(manifest.schema_version, 7);
+    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql"]);
     assert.match(key, new RegExp(`^backups/${manifest.tenant_id}/`));
     for (const entry of lines.slice(1)) {
       if (entry.table === "users") continue;
@@ -280,7 +294,7 @@ test("request fallback creates at most one daily tenant backup and scheduled reu
   assert.equal(objects.size, 1);
   const manifest = JSON.parse([...objects.values()][0].split("\n")[0]);
   assert.equal(manifest.tenant_id, "tenant-a");
-  assert.equal(manifest.schema_version, 6);
+  assert.equal(manifest.schema_version, 7);
 });
 
 test("owner can create, rotate and revoke hashed expiring API tokens", async () => {

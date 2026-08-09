@@ -7,6 +7,7 @@ export const API_CONFIG = Object.freeze({
   timeoutMs: 15000,
   endpoints: Object.freeze({
     session: "/session",
+    passwordLogin: "/auth/password/login",
     phoneAuthStart: "/auth/phone/start",
     phoneAuthVerify: "/auth/phone/verify",
     logout: "/auth/logout",
@@ -110,7 +111,7 @@ const FIELD_MAPS = Object.freeze({
   leaves: { employeeId: "employee_id", leaveType: "leave_type", startDate: "start_date", endDate: "end_date", dayCount: "day_count", approvedBy: "approved_by", approvedAt: "approved_at" },
   payroll: { employeeId: "employee_id", baseSalary: "base_salary_minor", overtimeAmount: "overtime_amount_minor", bonusAmount: "bonus_amount_minor", allowanceAmount: "allowance_amount_minor", deductionAmount: "deduction_amount_minor", advanceAmount: "advance_amount_minor", netPreview: "net_preview_minor" },
   files: { entityType: "entity_type", entityId: "entity_id", fileName: "file_name", objectKey: "object_key", contentType: "content_type", sizeBytes: "size_bytes", uploadedBy: "uploaded_by" },
-  memberships: { userId: "user_id", roleId: "role_id", fullName: "full_name" },
+  memberships: { userId: "user_id", roleId: "role_id", fullName: "full_name", temporaryPassword: "temporary_password" },
   auditLogs: { userId: "user_id", entityType: "entity_type", entityId: "entity_id", requestId: "request_id", ipAddress: "ip_address", changes: "changes_json", createdAt: "created_at" },
   backups: { tenantId: "tenant_id", triggeredBy: "triggered_by", objectKey: "object_key", rowCount: "row_count", errorMessage: "error_message", createdAt: "created_at", completedAt: "completed_at" },
   offerItems: { offerId: "offer_id", parentId: "parent_id", itemCode: "item_code", unitPrice: "unit_price_minor", costPrice: "cost_price_minor", discountRate: "discount_rate", taxRate: "tax_rate", total: "total_minor", sortOrder: "sort_order" },
@@ -326,6 +327,9 @@ export const api = {
   },
   async startPhoneAuth(phone) {
     return (await request(API_CONFIG.endpoints.phoneAuthStart, { method: "POST", body: { phone } })).data;
+  },
+  async loginWithPassword({ phone, password }) {
+    return unwrap(await request(API_CONFIG.endpoints.passwordLogin, { method: "POST", body: { phone, password } }));
   },
   async verifyPhoneAuth({ phone, code, challengeId }) {
     return (await request(API_CONFIG.endpoints.phoneAuthVerify, { method: "POST", body: { phone, code, challenge_id: challengeId } })).data;

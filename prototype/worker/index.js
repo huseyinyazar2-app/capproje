@@ -46,11 +46,12 @@ const aliases = {
 };
 
 const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql"];
 const dailyBackupSeen = new Map();
 const ownerRoles = new Set(["owner", "admin"]);
 const PHONE_SESSION_COOKIE = "__Host-capproje_session";
 const PHONE_SESSION_SECONDS = 12 * 60 * 60;
+const PASSWORD_ITERATIONS = 600_000;
 const staticSecurityHeaders = {
   "content-security-policy": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'",
   "x-frame-options": "DENY",
@@ -131,7 +132,51 @@ function sameOrigin(request) {
 }
 
 async function authHash(env, value) {
-  return sha256(`${env.PHONE_AUTH_PEPPER || "capproje-phone-auth"}:${value}`);
+  return sha256(`${env.PHONE_AUTH_PEPPER || env.PASSWORD_AUTH_PEPPER || "capproje-auth"}:${value}`);
+}
+
+function base64Bytes(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function bytesFromBase64(value) {
+  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+}
+
+async function derivePasswordHash(env, password, salt, iterations = PASSWORD_ITERATIONS) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(`${password}:${env.PASSWORD_AUTH_PEPPER || ""}`),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: bytesFromBase64(salt), iterations },
+    key,
+    256,
+  );
+  return base64Bytes(new Uint8Array(bits));
+}
+
+async function passwordRecord(env, password) {
+  const salt = base64Bytes(crypto.getRandomValues(new Uint8Array(16)));
+  return { hash: await derivePasswordHash(env, password, salt), salt, iterations: PASSWORD_ITERATIONS };
+}
+
+function safeHashEqual(left, right) {
+  if (!left || !right) return false;
+  const a = bytesFromBase64(left);
+  const b = bytesFromBase64(right);
+  let difference = a.length ^ b.length;
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) difference |= (a[index] || 0) ^ (b[index] || 0);
+  return difference === 0;
+}
+
+function validPassword(value) {
+  return typeof value === "string" && value.length >= 8 && value.length <= 128;
 }
 
 function twilioCredentials(env) {
@@ -513,7 +558,7 @@ async function inviteMember(request, env, principal) {
   if (!allowed(principal, "users.manage")) return problem(403, "forbidden", "Kullanıcı yönetme yetkiniz yok.");
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
-  if (!body?.email || !body?.phone || !body?.full_name || !body?.role_id) return problem(422, "validation_error", "email, phone, full_name ve role_id zorunludur.");
+  if (!body?.email || !body?.phone || !body?.full_name || !body?.role_id || !validPassword(body?.temporary_password)) return problem(422, "validation_error", "email, phone, full_name, role_id ve en az 8 karakter geçici şifre zorunludur.");
   const role = await one(env.DB.prepare("SELECT id FROM roles WHERE id=? AND tenant_id=?").bind(body.role_id, principal.tenantId));
   if (!role) return problem(422, "cross_tenant_reference", "Rol bu firmaya ait değil.");
   const email = String(body.email).trim().toLowerCase();
@@ -524,12 +569,13 @@ async function inviteMember(request, env, principal) {
   if (byEmail && byPhone && byEmail.id !== byPhone.id) return problem(409, "identity_conflict", "E-posta ve telefon farklı kullanıcılarla eşleşiyor.");
   let user = byEmail || byPhone;
   const timestamp = now();
+  const credential = await passwordRecord(env, body.temporary_password);
   try {
     if (!user) {
       user = { id: id("usr_"), email, full_name: body.full_name, phone, status: "invited" };
-      await run(env.DB.prepare("INSERT INTO users (id,email,full_name,phone,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").bind(user.id, email, body.full_name, phone, "invited", timestamp, timestamp));
+      await run(env.DB.prepare("INSERT INTO users (id,email,full_name,phone,status,password_hash,password_salt,password_iterations,password_changed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(user.id, email, body.full_name, phone, "invited", credential.hash, credential.salt, credential.iterations, timestamp, timestamp, timestamp));
     } else {
-      await run(env.DB.prepare("UPDATE users SET email=?,full_name=?,phone=?,updated_at=? WHERE id=?").bind(email, body.full_name, phone, timestamp, user.id));
+      await run(env.DB.prepare("UPDATE users SET email=?,full_name=?,phone=?,password_hash=?,password_salt=?,password_iterations=?,password_changed_at=?,updated_at=? WHERE id=?").bind(email, body.full_name, phone, credential.hash, credential.salt, credential.iterations, timestamp, timestamp, user.id));
       user = { ...user, email, full_name: body.full_name, phone };
     }
   } catch { return problem(409, "identity_conflict", "E-posta veya telefon başka bir kullanıcı tarafından kullanılıyor."); }
@@ -714,6 +760,59 @@ async function verifyPhoneAuth(request, env) {
     env.DB.prepare("INSERT INTO phone_sessions (id,user_id,token_hash,ip_hash,user_agent_hash,created_at,last_seen_at,expires_at) VALUES (?,?,?,?,?,?,?,?)")
       .bind(id("phs_"), user.id, tokenHash, await authHash(env, clientIp(request) || "unknown"), await authHash(env, request.headers.get("user-agent") || "unknown"), timestamp, timestamp, expiresAt),
     env.DB.prepare("UPDATE phone_auth_requests SET status='approved',verified_at=? WHERE id=? AND status='pending'").bind(timestamp, challengeId),
+  ];
+  if (typeof env.DB.batch === "function") await env.DB.batch(statements);
+  else for (const statement of statements) await run(statement);
+  return json({ data: { authenticated: true, expires_at: expiresAt } }, 200, { "set-cookie": phoneSessionCookie(rawToken) });
+}
+
+function passwordAuthReady(env) {
+  return env.PASSWORD_AUTH_ENABLED === "true" && String(env.PASSWORD_AUTH_PEPPER || "").length >= 16;
+}
+
+async function loginWithPassword(request, env) {
+  if (!passwordAuthReady(env)) return problem(503, "password_auth_unavailable", "Şifreyle giriş henüz yapılandırılmamış.");
+  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
+  let body;
+  try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
+  const phone = normalizeTurkishMobile(body?.phone);
+  const password = body?.password;
+  if (!phone || !validPassword(password)) return problem(422, "invalid_credentials", "Telefon numarası veya şifre geçersiz.");
+
+  const timestamp = now();
+  const retentionCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const windowStart = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const phoneHash = await authHash(env, phone);
+  const ipHash = await authHash(env, clientIp(request) || "unknown");
+  await run(env.DB.prepare("DELETE FROM password_auth_attempts WHERE created_at<?").bind(retentionCutoff));
+  await run(env.DB.prepare("DELETE FROM phone_sessions WHERE expires_at<? OR (revoked_at IS NOT NULL AND revoked_at<?)").bind(timestamp, retentionCutoff));
+  const [phoneRate, ipRate] = await Promise.all([
+    one(env.DB.prepare("SELECT COUNT(*) AS count FROM password_auth_attempts WHERE phone_hash=? AND created_at>?").bind(phoneHash, windowStart)),
+    one(env.DB.prepare("SELECT COUNT(*) AS count FROM password_auth_attempts WHERE ip_hash=? AND created_at>?").bind(ipHash, windowStart)),
+  ]);
+  if (Number(phoneRate?.count || 0) >= 5 || Number(ipRate?.count || 0) >= 20) {
+    return problem(429, "rate_limited", "Çok fazla giriş denemesi yapıldı. Lütfen 10 dakika sonra tekrar deneyin.", { retry_after_seconds: 600 });
+  }
+
+  const user = await one(env.DB.prepare("SELECT DISTINCT u.id,u.email,u.full_name,u.phone,u.status,u.password_hash,u.password_salt,u.password_iterations FROM users u JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.phone=? AND u.status IN ('active','invited') AND m.status IN ('active','invited') AND t.status='active' LIMIT 1").bind(phone));
+  const dummySalt = base64Bytes(new TextEncoder().encode("capproje-dummy!"));
+  const calculated = await derivePasswordHash(env, password, user?.password_salt || dummySalt, Number(user?.password_iterations || PASSWORD_ITERATIONS));
+  const authenticated = Boolean(user?.password_hash) && safeHashEqual(calculated, user.password_hash);
+  if (!authenticated) {
+    await run(env.DB.prepare("INSERT INTO password_auth_attempts (id,phone_hash,ip_hash,success,created_at) VALUES (?,?,?,?,?)").bind(id("paa_"), phoneHash, ipHash, 0, timestamp));
+    return problem(401, "invalid_credentials", "Telefon numarası veya şifre hatalı.");
+  }
+
+  const rawToken = `cps_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+  const tokenHash = await sha256(rawToken);
+  const expiresAt = new Date(Date.now() + PHONE_SESSION_SECONDS * 1000).toISOString();
+  const statements = [
+    env.DB.prepare("UPDATE users SET status='active',password_last_login_at=?,updated_at=? WHERE id=?").bind(timestamp, timestamp, user.id),
+    env.DB.prepare("UPDATE memberships SET status='active',updated_at=? WHERE user_id=? AND status='invited'").bind(timestamp, user.id),
+    env.DB.prepare("UPDATE phone_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").bind(timestamp, user.id),
+    env.DB.prepare("INSERT INTO phone_sessions (id,user_id,token_hash,ip_hash,user_agent_hash,created_at,last_seen_at,expires_at,auth_method) VALUES (?,?,?,?,?,?,?,?,?)")
+      .bind(id("phs_"), user.id, tokenHash, ipHash, await authHash(env, request.headers.get("user-agent") || "unknown"), timestamp, timestamp, expiresAt, "password"),
+    env.DB.prepare("INSERT INTO password_auth_attempts (id,phone_hash,ip_hash,success,created_at) VALUES (?,?,?,?,?)").bind(id("paa_"), phoneHash, ipHash, 1, timestamp),
   ];
   if (typeof env.DB.batch === "function") await env.DB.batch(statements);
   else for (const statement of statements) await run(statement);
@@ -1172,7 +1271,7 @@ async function writeBackup(env, tenantId, triggeredBy = "scheduler") {
     return { id: backupId, tenant_id: tenantId, status: "failed", error_message: message };
   }
   try {
-    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 6, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
+    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 7, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
     const tenant = await one(env.DB.prepare("SELECT * FROM tenants WHERE id=?").bind(tenantId));
     lines.push(JSON.stringify({ table: "tenants", row: tenant }));
     const users = await all(env.DB.prepare("SELECT u.* FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=?").bind(tenantId));
@@ -1235,7 +1334,9 @@ async function bootstrap(request, env) {
   for (const key of ["tenant_name", "tenant_slug", "owner_email", "owner_name"]) if (!body?.[key]) return problem(422, "validation_error", `${key} zorunludur.`);
   const ownerPhone = body.owner_phone ? normalizeTurkishMobile(body.owner_phone) : null;
   if (body.owner_phone && !ownerPhone) return problem(422, "invalid_phone", "owner_phone geçerli bir Türkiye cep telefonu olmalıdır.");
+  if (body.owner_password && (!ownerPhone || !validPassword(body.owner_password))) return problem(422, "invalid_password", "Şifreli giriş için geçerli telefon ve en az 8 karakter owner_password zorunludur.");
   const timestamp = now();
+  const ownerCredential = body.owner_password ? await passwordRecord(env, body.owner_password) : null;
   const tenantId = id("ten_");
   const userId = id("usr_");
   const roleId = id("rol_");
@@ -1247,7 +1348,7 @@ async function bootstrap(request, env) {
   try {
     const statements = [
       env.DB.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").bind(tenantId, body.tenant_name, body.tenant_slug, timestamp, timestamp),
-      env.DB.prepare("INSERT INTO users (id,email,full_name,phone,created_at,updated_at) VALUES (?,?,?,?,?,?)").bind(userId, String(body.owner_email).toLowerCase(), body.owner_name, ownerPhone, timestamp, timestamp),
+      env.DB.prepare("INSERT INTO users (id,email,full_name,phone,password_hash,password_salt,password_iterations,password_changed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(userId, String(body.owner_email).toLowerCase(), body.owner_name, ownerPhone, ownerCredential?.hash || null, ownerCredential?.salt || null, ownerCredential?.iterations || null, ownerCredential ? timestamp : null, timestamp, timestamp),
       env.DB.prepare("INSERT INTO roles (id,tenant_id,code,name,description,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").bind(roleId, tenantId, "owner", "Firma Sahibi", "Tüm tenant yetkilerine sahiptir.", 1, timestamp, timestamp),
       env.DB.prepare("INSERT INTO memberships (id,tenant_id,user_id,role_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'active',?,?)").bind(membershipId, tenantId, userId, roleId, body.owner_title || "Firma Sahibi", timestamp, timestamp),
       env.DB.prepare("INSERT INTO api_tokens (id,user_id,name,token_hash,expires_at,created_at) VALUES (?,?,?,?,?,?)").bind(id("tok_"), userId, "İlk kurulum", tokenHash, tokenExpiresAt, timestamp),
@@ -1341,6 +1442,7 @@ async function handleApi(request, env, context) {
   if (url.pathname === "/api/v1/bootstrap" && request.method === "POST") return bootstrap(request, env);
   if (url.pathname === "/api/v1/auth/phone/start" && request.method === "POST") return startPhoneAuth(request, env);
   if (url.pathname === "/api/v1/auth/phone/verify" && request.method === "POST") return verifyPhoneAuth(request, env);
+  if (url.pathname === "/api/v1/auth/password/login" && request.method === "POST") return loginWithPassword(request, env);
   if (url.pathname === "/api/v1/auth/logout" && request.method === "POST") return logoutPhoneAuth(request, env);
   const principal = await authenticate(request, env);
   if (!principal) return problem(401, "unauthorized", "Oturum bulunamadı.", { accepted: ["phone session", "platform identity", "Bearer token"] });

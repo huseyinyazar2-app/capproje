@@ -97,13 +97,12 @@ test("cost and salary fields are rendered only behind dedicated permissions", ()
   assert.match(apiSource, /permission\s*===\s*`\$\{slug\}\.\$\{backendAction\}`/);
 });
 
-test("production login uses phone OTP instead of Google or browser-stored tokens", () => {
-  assert.match(apiSource, /phoneAuthStart:\s*["']\/auth\/phone\/start["']/);
-  assert.match(apiSource, /async startPhoneAuth\(phone\)/);
-  assert.match(apiSource, /async verifyPhoneAuth/);
-  assert.match(liveSource, /TELEFONLA GÜVENLİ GİRİŞ/);
-  assert.match(liveSource, /autoComplete="one-time-code"/);
-  assert.match(liveSource, /SMS kodu gönder/);
+test("production login temporarily uses phone and password without Google or browser-stored tokens", () => {
+  assert.match(apiSource, /passwordLogin:\s*["']\/auth\/password\/login["']/);
+  assert.match(apiSource, /async loginWithPassword/);
+  assert.match(liveSource, /TELEFON VE ŞİFREYLE GİRİŞ/);
+  assert.match(liveSource, /autoComplete="current-password"/);
+  assert.doesNotMatch(liveSource, /SMS kodu gönder/);
   assert.doesNotMatch(liveSource, /signin-with-chatgpt/);
   assert.doesNotMatch(apiSource, /localStorage\.setItem\([^\n]*(?:token|session)/i);
 });
