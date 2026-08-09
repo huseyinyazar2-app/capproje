@@ -10,6 +10,7 @@ Capproje Orman Ürünleri için hazırlanmış, mobil uyumlu ve PWA kurulabilir 
 - Müşteri, tedarikçi, dosya, kullanıcı, rol, audit ve yedek yönetimi
 - R2 dosya saklama, günlük tenant yedeği ve idempotent iş akışları
 - Mobil/masaüstü uyumlu PWA; offline durumda kritik işlemleri güvenli biçimde engelleme
+- Türkiye cep telefonu numarası ve SMS tek kullanımlık koduyla güvenli oturum
 
 Canlı çalışma alanı Sites ortamında otomatik açılır. Yerelde `?live=1`, sunum prototipinde `?prototype=1` kullanılabilir.
 

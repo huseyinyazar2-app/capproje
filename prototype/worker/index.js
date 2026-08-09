@@ -44,9 +44,11 @@ const aliases = {
 };
 
 const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql"];
 const dailyBackupSeen = new Map();
 const ownerRoles = new Set(["owner", "admin"]);
+const PHONE_SESSION_COOKIE = "__Host-capproje_session";
+const PHONE_SESSION_SECONDS = 12 * 60 * 60;
 const staticSecurityHeaders = {
   "content-security-policy": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'",
   "x-frame-options": "DENY",
@@ -96,6 +98,62 @@ async function sha256(value) {
   const input = typeof value === "string" ? new TextEncoder().encode(value) : value;
   const bytes = await crypto.subtle.digest("SHA-256", input);
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function normalizeTurkishMobile(value) {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.startsWith("0090")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("05")) digits = `90${digits.slice(1)}`;
+  else if (digits.length === 10 && digits.startsWith("5")) digits = `90${digits}`;
+  if (!/^905\d{9}$/.test(digits)) return null;
+  return `+${digits}`;
+}
+
+function cookieValue(request, name) {
+  const cookies = request.headers.get("cookie") || "";
+  for (const part of cookies.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return decodeURIComponent(rest.join("="));
+  }
+  return null;
+}
+
+function phoneSessionCookie(token, maxAge = PHONE_SESSION_SECONDS) {
+  const value = token ? encodeURIComponent(token) : "";
+  return `${PHONE_SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+function sameOrigin(request) {
+  const origin = request.headers.get("origin");
+  return !origin || origin === new URL(request.url).origin;
+}
+
+async function authHash(env, value) {
+  return sha256(`${env.PHONE_AUTH_PEPPER || "capproje-phone-auth"}:${value}`);
+}
+
+function twilioCredentials(env) {
+  const username = env.TWILIO_API_KEY || env.TWILIO_ACCOUNT_SID;
+  const password = env.TWILIO_API_KEY_SECRET || env.TWILIO_AUTH_TOKEN;
+  if (!username || !password || !env.TWILIO_VERIFY_SERVICE_SID) return null;
+  return { username, password, serviceSid: env.TWILIO_VERIFY_SERVICE_SID };
+}
+
+async function twilioVerify(env, endpoint, values) {
+  const credentials = twilioCredentials(env);
+  if (!credentials) throw new Error("phone_auth_not_configured");
+  const response = await fetch(`https://verify.twilio.com/v2/Services/${encodeURIComponent(credentials.serviceSid)}/${endpoint}`, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${btoa(`${credentials.username}:${credentials.password}`)}`,
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+    },
+    body: new URLSearchParams(values),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`twilio_verify_${response.status}`);
+  return payload;
 }
 
 async function one(statement) {
@@ -149,13 +207,23 @@ async function authenticate(request, env) {
   let user;
   if (authorization.startsWith("Bearer ")) {
     const tokenHash = await sha256(authorization.slice(7).trim());
-    user = await one(env.DB.prepare("SELECT u.id, u.email, u.full_name, u.status FROM api_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>?) AND u.status='active'").bind(tokenHash, now()));
+    user = await one(env.DB.prepare("SELECT u.id, u.email, u.full_name, u.phone, u.status FROM api_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>?) AND u.status='active'").bind(tokenHash, now()));
     if (user) await run(env.DB.prepare("UPDATE api_tokens SET last_used_at=? WHERE token_hash=?").bind(now(), tokenHash));
   } else {
-    const platformEmail = request.headers.get("oai-authenticated-user-email");
-    const devEmail = env.ALLOW_DEV_AUTH === "true" ? request.headers.get("x-user-email") : null;
-    const email = platformEmail || devEmail;
-    if (email) user = await one(env.DB.prepare("SELECT id,email,full_name,status FROM users WHERE email=? COLLATE NOCASE AND status='active'").bind(email.trim()));
+    const sessionToken = cookieValue(request, PHONE_SESSION_COOKIE);
+    if (sessionToken) {
+      const tokenHash = await sha256(sessionToken);
+      user = await one(env.DB.prepare("SELECT u.id,u.email,u.full_name,u.phone,u.status FROM phone_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND u.status='active'").bind(tokenHash, now()));
+      if (user) await run(env.DB.prepare("UPDATE phone_sessions SET last_seen_at=? WHERE token_hash=?").bind(now(), tokenHash));
+    }
+    if (!user) {
+      const platformEmail = env.ALLOW_PLATFORM_AUTH === "true"
+        ? request.headers.get("oai-authenticated-user-email")
+        : null;
+      const devEmail = env.ALLOW_DEV_AUTH === "true" ? request.headers.get("x-user-email") : null;
+      const email = platformEmail || devEmail;
+      if (email) user = await one(env.DB.prepare("SELECT id,email,full_name,phone,status FROM users WHERE email=? COLLATE NOCASE AND status='active'").bind(email.trim()));
+    }
   }
   if (!user) return null;
 
@@ -443,16 +511,26 @@ async function inviteMember(request, env, principal) {
   if (!allowed(principal, "users.manage")) return problem(403, "forbidden", "Kullanıcı yönetme yetkiniz yok.");
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
-  if (!body?.email || !body?.full_name || !body?.role_id) return problem(422, "validation_error", "email, full_name ve role_id zorunludur.");
+  if (!body?.email || !body?.phone || !body?.full_name || !body?.role_id) return problem(422, "validation_error", "email, phone, full_name ve role_id zorunludur.");
   const role = await one(env.DB.prepare("SELECT id FROM roles WHERE id=? AND tenant_id=?").bind(body.role_id, principal.tenantId));
   if (!role) return problem(422, "cross_tenant_reference", "Rol bu firmaya ait değil.");
   const email = String(body.email).trim().toLowerCase();
-  let user = await one(env.DB.prepare("SELECT id,email,full_name,status FROM users WHERE email=? COLLATE NOCASE").bind(email));
+  const phone = normalizeTurkishMobile(body.phone);
+  if (!phone) return problem(422, "invalid_phone", "Türkiye cep telefonu numarasını kontrol edin.");
+  const byEmail = await one(env.DB.prepare("SELECT id,email,full_name,phone,status FROM users WHERE email=? COLLATE NOCASE").bind(email));
+  const byPhone = await one(env.DB.prepare("SELECT id,email,full_name,phone,status FROM users WHERE phone=?").bind(phone));
+  if (byEmail && byPhone && byEmail.id !== byPhone.id) return problem(409, "identity_conflict", "E-posta ve telefon farklı kullanıcılarla eşleşiyor.");
+  let user = byEmail || byPhone;
   const timestamp = now();
-  if (!user) {
-    user = { id: id("usr_"), email, full_name: body.full_name, status: "invited" };
-    await run(env.DB.prepare("INSERT INTO users (id,email,full_name,phone,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").bind(user.id, email, body.full_name, body.phone || null, "invited", timestamp, timestamp));
-  }
+  try {
+    if (!user) {
+      user = { id: id("usr_"), email, full_name: body.full_name, phone, status: "invited" };
+      await run(env.DB.prepare("INSERT INTO users (id,email,full_name,phone,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").bind(user.id, email, body.full_name, phone, "invited", timestamp, timestamp));
+    } else {
+      await run(env.DB.prepare("UPDATE users SET email=?,full_name=?,phone=?,updated_at=? WHERE id=?").bind(email, body.full_name, phone, timestamp, user.id));
+      user = { ...user, email, full_name: body.full_name, phone };
+    }
+  } catch { return problem(409, "identity_conflict", "E-posta veya telefon başka bir kullanıcı tarafından kullanılıyor."); }
   const membershipId = id("mem_");
   try {
     await run(env.DB.prepare("INSERT INTO memberships (id,tenant_id,user_id,role_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'invited',?,?)").bind(membershipId, principal.tenantId, user.id, body.role_id, body.title || null, timestamp, timestamp));
@@ -547,6 +625,104 @@ async function tokenManagement(request, env, principal, segments) {
 async function optionalJson(request) {
   if (!request.headers.get("content-type")) return {};
   return parseBody(request);
+}
+
+function phoneAuthReady(env) {
+  return env.PHONE_AUTH_ENABLED === "true" && Boolean(twilioCredentials(env)) && String(env.PHONE_AUTH_PEPPER || "").length >= 16;
+}
+
+async function startPhoneAuth(request, env) {
+  if (!phoneAuthReady(env)) return problem(503, "phone_auth_unavailable", "Telefonla giriş henüz yapılandırılmamış.");
+  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
+  let body;
+  try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
+  const phone = normalizeTurkishMobile(body?.phone);
+  if (!phone) return problem(422, "invalid_phone", "Türkiye cep telefonu numarasını kontrol edin.");
+
+  const timestamp = now();
+  const retentionCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  await run(env.DB.prepare("DELETE FROM phone_auth_requests WHERE created_at<?").bind(retentionCutoff));
+  await run(env.DB.prepare("DELETE FROM phone_sessions WHERE expires_at<? OR (revoked_at IS NOT NULL AND revoked_at<?)").bind(timestamp, retentionCutoff));
+  const windowStart = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const phoneHash = await authHash(env, phone);
+  const ipHash = await authHash(env, clientIp(request) || "unknown");
+  const [phoneRate, ipRate] = await Promise.all([
+    one(env.DB.prepare("SELECT COUNT(*) AS count FROM phone_auth_requests WHERE phone_hash=? AND created_at>?").bind(phoneHash, windowStart)),
+    one(env.DB.prepare("SELECT COUNT(*) AS count FROM phone_auth_requests WHERE ip_hash=? AND created_at>?").bind(ipHash, windowStart)),
+  ]);
+  if (Number(phoneRate?.count || 0) >= 5 || Number(ipRate?.count || 0) >= 20) {
+    return problem(429, "rate_limited", "Çok fazla kod isteği yapıldı. Lütfen 10 dakika sonra tekrar deneyin.", { retry_after_seconds: 600 });
+  }
+
+  const challengeId = id("pha_");
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const user = await one(env.DB.prepare("SELECT DISTINCT u.id FROM users u JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.phone=? AND u.status IN ('active','invited') AND m.status IN ('active','invited') AND t.status='active' LIMIT 1").bind(phone));
+  if (!user) {
+    await run(env.DB.prepare("INSERT INTO phone_auth_requests (id,phone_hash,ip_hash,status,created_at,expires_at) VALUES (?,?,?,?,?,?)").bind(challengeId, phoneHash, ipHash, "suppressed", timestamp, expiresAt));
+    return json({ data: { challenge_id: challengeId, expires_in_seconds: 600 } }, 202);
+  }
+
+  try {
+    await twilioVerify(env, "Verifications", { To: phone, Channel: "sms", Locale: "tr", RiskCheck: "enable" });
+    await run(env.DB.prepare("INSERT INTO phone_auth_requests (id,phone_hash,ip_hash,status,created_at,expires_at) VALUES (?,?,?,?,?,?)").bind(challengeId, phoneHash, ipHash, "pending", timestamp, expiresAt));
+  } catch (error) {
+    await run(env.DB.prepare("INSERT INTO phone_auth_requests (id,phone_hash,ip_hash,status,created_at,expires_at) VALUES (?,?,?,?,?,?)").bind(challengeId, phoneHash, ipHash, "failed", timestamp, expiresAt));
+    console.error("Phone verification start failed", error);
+    return problem(502, "sms_delivery_failed", "Doğrulama kodu gönderilemedi. Lütfen daha sonra tekrar deneyin.");
+  }
+  return json({ data: { challenge_id: challengeId, expires_in_seconds: 600 } }, 202);
+}
+
+async function verifyPhoneAuth(request, env) {
+  if (!phoneAuthReady(env)) return problem(503, "phone_auth_unavailable", "Telefonla giriş henüz yapılandırılmamış.");
+  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
+  let body;
+  try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
+  const phone = normalizeTurkishMobile(body?.phone);
+  const code = String(body?.code || "").replace(/\D/g, "");
+  const challengeId = String(body?.challenge_id || "");
+  if (!phone || !/^\d{4,10}$/.test(code) || !validId(challengeId)) return problem(422, "invalid_verification", "Telefon, doğrulama kodu veya oturum bilgisi geçersiz.");
+
+  const phoneHash = await authHash(env, phone);
+  const challenge = await one(env.DB.prepare("SELECT id,status,expires_at FROM phone_auth_requests WHERE id=? AND phone_hash=?").bind(challengeId, phoneHash));
+  if (!challenge || challenge.status !== "pending" || challenge.expires_at <= now()) return problem(401, "verification_expired", "Doğrulama isteği geçersiz veya süresi dolmuş.");
+
+  let verification;
+  try { verification = await twilioVerify(env, "VerificationCheck", { To: phone, Code: code }); }
+  catch (error) {
+    console.error("Phone verification check failed", error);
+    return problem(401, "verification_failed", "Doğrulama kodu geçersiz veya süresi dolmuş.");
+  }
+  if (verification.status !== "approved") {
+    await run(env.DB.prepare("UPDATE phone_auth_requests SET status='rejected',verified_at=? WHERE id=? AND status='pending'").bind(now(), challengeId));
+    return problem(401, "verification_failed", "Doğrulama kodu geçersiz veya süresi dolmuş.");
+  }
+
+  const user = await one(env.DB.prepare("SELECT DISTINCT u.id,u.email,u.full_name,u.phone,u.status FROM users u JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.phone=? AND u.status IN ('active','invited') AND m.status IN ('active','invited') AND t.status='active' LIMIT 1").bind(phone));
+  if (!user) return problem(403, "account_unavailable", "Bu telefon için aktif bir çalışma alanı üyeliği bulunamadı.");
+
+  const timestamp = now();
+  const rawToken = `cps_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+  const tokenHash = await sha256(rawToken);
+  const expiresAt = new Date(Date.now() + PHONE_SESSION_SECONDS * 1000).toISOString();
+  const statements = [
+    env.DB.prepare("UPDATE users SET status='active',updated_at=? WHERE id=? AND status='invited'").bind(timestamp, user.id),
+    env.DB.prepare("UPDATE memberships SET status='active',updated_at=? WHERE user_id=? AND status='invited'").bind(timestamp, user.id),
+    env.DB.prepare("UPDATE phone_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").bind(timestamp, user.id),
+    env.DB.prepare("INSERT INTO phone_sessions (id,user_id,token_hash,ip_hash,user_agent_hash,created_at,last_seen_at,expires_at) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(id("phs_"), user.id, tokenHash, await authHash(env, clientIp(request) || "unknown"), await authHash(env, request.headers.get("user-agent") || "unknown"), timestamp, timestamp, expiresAt),
+    env.DB.prepare("UPDATE phone_auth_requests SET status='approved',verified_at=? WHERE id=? AND status='pending'").bind(timestamp, challengeId),
+  ];
+  if (typeof env.DB.batch === "function") await env.DB.batch(statements);
+  else for (const statement of statements) await run(statement);
+  return json({ data: { authenticated: true, expires_at: expiresAt } }, 200, { "set-cookie": phoneSessionCookie(rawToken) });
+}
+
+async function logoutPhoneAuth(request, env) {
+  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "Çıkış isteğinin kaynağı geçersiz.");
+  const token = cookieValue(request, PHONE_SESSION_COOKIE);
+  if (token) await run(env.DB.prepare("UPDATE phone_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL").bind(now(), await sha256(token)));
+  return json({ data: { authenticated: false } }, 200, { "set-cookie": phoneSessionCookie(null, 0) });
 }
 
 async function workflowRow(env, principal, table, resourceId) {
@@ -994,7 +1170,7 @@ async function writeBackup(env, tenantId, triggeredBy = "scheduler") {
     return { id: backupId, tenant_id: tenantId, status: "failed", error_message: message };
   }
   try {
-    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 5, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
+    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 6, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
     const tenant = await one(env.DB.prepare("SELECT * FROM tenants WHERE id=?").bind(tenantId));
     lines.push(JSON.stringify({ table: "tenants", row: tenant }));
     const users = await all(env.DB.prepare("SELECT u.* FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=?").bind(tenantId));
@@ -1055,6 +1231,8 @@ async function bootstrap(request, env) {
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
   for (const key of ["tenant_name", "tenant_slug", "owner_email", "owner_name"]) if (!body?.[key]) return problem(422, "validation_error", `${key} zorunludur.`);
+  const ownerPhone = body.owner_phone ? normalizeTurkishMobile(body.owner_phone) : null;
+  if (body.owner_phone && !ownerPhone) return problem(422, "invalid_phone", "owner_phone geçerli bir Türkiye cep telefonu olmalıdır.");
   const timestamp = now();
   const tenantId = id("ten_");
   const userId = id("usr_");
@@ -1067,7 +1245,7 @@ async function bootstrap(request, env) {
   try {
     const statements = [
       env.DB.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").bind(tenantId, body.tenant_name, body.tenant_slug, timestamp, timestamp),
-      env.DB.prepare("INSERT INTO users (id,email,full_name,created_at,updated_at) VALUES (?,?,?,?,?)").bind(userId, String(body.owner_email).toLowerCase(), body.owner_name, timestamp, timestamp),
+      env.DB.prepare("INSERT INTO users (id,email,full_name,phone,created_at,updated_at) VALUES (?,?,?,?,?,?)").bind(userId, String(body.owner_email).toLowerCase(), body.owner_name, ownerPhone, timestamp, timestamp),
       env.DB.prepare("INSERT INTO roles (id,tenant_id,code,name,description,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").bind(roleId, tenantId, "owner", "Firma Sahibi", "Tüm tenant yetkilerine sahiptir.", 1, timestamp, timestamp),
       env.DB.prepare("INSERT INTO memberships (id,tenant_id,user_id,role_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'active',?,?)").bind(membershipId, tenantId, userId, roleId, body.owner_title || "Firma Sahibi", timestamp, timestamp),
       env.DB.prepare("INSERT INTO api_tokens (id,user_id,name,token_hash,expires_at,created_at) VALUES (?,?,?,?,?,?)").bind(id("tok_"), userId, "İlk kurulum", tokenHash, tokenExpiresAt, timestamp),
@@ -1158,8 +1336,11 @@ async function handleApi(request, env, context) {
   const segments = url.pathname.split("/").filter(Boolean);
   if (url.pathname === "/api/v1/health" && request.method === "GET") return json({ data: { status: "ok", time: now() } });
   if (url.pathname === "/api/v1/bootstrap" && request.method === "POST") return bootstrap(request, env);
+  if (url.pathname === "/api/v1/auth/phone/start" && request.method === "POST") return startPhoneAuth(request, env);
+  if (url.pathname === "/api/v1/auth/phone/verify" && request.method === "POST") return verifyPhoneAuth(request, env);
+  if (url.pathname === "/api/v1/auth/logout" && request.method === "POST") return logoutPhoneAuth(request, env);
   const principal = await authenticate(request, env);
-  if (!principal) return problem(401, "unauthorized", "Oturum bulunamadı.", { accepted: ["platform identity", "Bearer token"] });
+  if (!principal) return problem(401, "unauthorized", "Oturum bulunamadı.", { accepted: ["phone session", "platform identity", "Bearer token"] });
   if (principal.tenantSelectionRequired) {
     if ((url.pathname === "/api/v1/session" || url.pathname === "/api/v1/me") && request.method === "GET") return getSession(principal);
     return problem(400, "tenant_required", "Birden fazla firma üyeliğiniz var; x-tenant-id seçilmelidir.", { tenants: principal.tenants });

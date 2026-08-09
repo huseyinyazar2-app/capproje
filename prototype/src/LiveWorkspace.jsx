@@ -227,7 +227,7 @@ const configs = {
   memberships: {
     description: "Firma kullanıcılarını davet edin ve rollerini belirleyin",
     columns: [["userId", "Kullanıcı ID"], ["title", "Görev"], ["roleId", "Rol ID"], ["status", "Durum", "status"]],
-    fields: [field("email", "E-posta", "email", { required: true }), field("fullName", "Ad soyad", "text", { required: true }), field("phone", "Telefon", "tel"), field("roleId", "Rol ID", "text", { required: true }), field("title", "Firma içi görev")],
+    fields: [field("email", "E-posta", "email", { required: true }), field("fullName", "Ad soyad", "text", { required: true }), field("phone", "Giriş telefonu", "tel", { required: true, placeholder: "05xx xxx xx xx" }), field("roleId", "Rol ID", "text", { required: true }), field("title", "Firma içi görev")],
   },
   roles: {
     description: "Görev rollerini ve her rolün okuyabileceği/değiştirebileceği alanları yönetin",
@@ -801,9 +801,33 @@ function ResourceView({ module, session, online, onDataChanged }) {
   return <><section className="live-panel"><header className="live-toolbar"><div><small>CANLI KAYITLAR</small><h2>{module.title}</h2><p>{config.description}</p></div>{canCreate && <button className="live-button primary" onClick={() => setModal({})}><Plus /> Yeni {module.singular}</button>}</header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button>Ara</button></form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><Table rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>Tenant kapsamındaki güncel veriler</small></footer></> : <EmptyState title={module.title} canCreate={canCreate} onCreate={() => setModal({})} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && <RecordDetailModal module={module} record={detailRecord} session={session} onClose={() => setDetailRecord(null)} />}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
 }
 
-function Login({ error, loading, onSubmit }) {
+function Login({ error, loading, onSubmit, onPhoneStart, onPhoneVerify }) {
   const [values, setValues] = useState({ email: import.meta.env.VITE_DEMO_USER_EMAIL || "", tenantId: "" });
-  return <main className="live-login"><section><div className="live-login-brand"><span><Buildings /></span><div><b>Capproje</b><small>Orman Ürünleri Yönetimi</small></div></div><div><small>GÜVENLİ ÇALIŞMA ALANI</small><h1>Projelerinizi tek yerden yönetin.</h1><p>Teklif, üretim, satın alma, montaj ve proje finansı aynı operasyon zincirinde.</p></div></section>{demoAuthEnabled ? <form onSubmit={(event) => { event.preventDefault(); onSubmit(values); }}><header><small>GELİŞTİRİCİ OTURUMU</small><h2>Demo kullanıcıyla devam et</h2></header><label><span>E-posta</span><input required type="email" autoComplete="username" value={values.email} onChange={(event) => setValues({ ...values, email: event.target.value })} /></label><label><span>Firma / tenant ID</span><input required value={values.tenantId} onChange={(event) => setValues({ ...values, tenantId: event.target.value })} /></label>{error && <div className="live-form-alert"><WarningCircle />{error.message}</div>}<button className="live-button primary" disabled={loading}>{loading ? <><span className="live-spinner small" /> Bağlanıyor</> : "Demo oturumu aç"}</button></form> : <form><header><small>KURUMSAL OTURUM</small><h2>Kimliğinizi doğrulayın</h2><p>Çalışma alanına erişmek için güvenli oturum sağlayıcısını kullanın.</p></header>{error && <div className="live-form-alert"><WarningCircle />{error.message}</div>}<a className="live-button primary" href="/signin-with-chatgpt?return_to=/">Güvenli giriş yap</a></form>}</main>;
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
+  const [challengeId, setChallengeId] = useState(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState(null);
+
+  async function startPhone(event) {
+    event.preventDefault();
+    setAuthLoading(true); setAuthError(null);
+    try {
+      const result = await onPhoneStart(phone);
+      setChallengeId(result.challenge_id);
+    } catch (nextError) { setAuthError(nextError); }
+    finally { setAuthLoading(false); }
+  }
+
+  async function verifyPhone(event) {
+    event.preventDefault();
+    setAuthLoading(true); setAuthError(null);
+    try { await onPhoneVerify({ phone, code, challengeId }); }
+    catch (nextError) { setAuthError(nextError); setAuthLoading(false); }
+  }
+
+  const visibleError = authError || error;
+  return <main className="live-login"><section><div className="live-login-brand"><span><Buildings /></span><div><b>Capproje</b><small>Orman Ürünleri Yönetimi</small></div></div><div><small>GÜVENLİ ÇALIŞMA ALANI</small><h1>Projelerinizi tek yerden yönetin.</h1><p>Teklif, üretim, satın alma, montaj ve proje finansı aynı operasyon zincirinde.</p></div></section>{demoAuthEnabled ? <form onSubmit={(event) => { event.preventDefault(); onSubmit(values); }}><header><small>GELİŞTİRİCİ OTURUMU</small><h2>Demo kullanıcıyla devam et</h2></header><label><span>E-posta</span><input required type="email" autoComplete="username" value={values.email} onChange={(event) => setValues({ ...values, email: event.target.value })} /></label><label><span>Firma / tenant ID</span><input required value={values.tenantId} onChange={(event) => setValues({ ...values, tenantId: event.target.value })} /></label>{visibleError && <div className="live-form-alert"><WarningCircle />{visibleError.message}</div>}<button className="live-button primary" disabled={loading}>{loading ? <><span className="live-spinner small" /> Bağlanıyor</> : "Demo oturumu aç"}</button></form> : <form onSubmit={challengeId ? verifyPhone : startPhone}><header><small>TELEFONLA GÜVENLİ GİRİŞ</small><h2>{challengeId ? "SMS kodunu girin" : "Telefon numaranızla devam edin"}</h2><p>{challengeId ? `${phone} numarasına gönderilen tek kullanımlık kodu yazın.` : "Yalnızca firma tarafından yetkilendirilmiş telefon numaraları giriş yapabilir."}</p></header><label><span>Cep telefonu</span><input required type="tel" inputMode="tel" autoComplete="tel" placeholder="05xx xxx xx xx" disabled={Boolean(challengeId)} value={phone} onChange={(event) => setPhone(event.target.value)} /></label>{challengeId && <label><span>Doğrulama kodu</span><input required type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={10} placeholder="SMS kodu" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} /></label>}{visibleError && <div className="live-form-alert"><WarningCircle />{visibleError.message}</div>}<button className="live-button primary" disabled={authLoading}>{authLoading ? <><span className="live-spinner small" /> İşleniyor</> : challengeId ? "Giriş yap" : "SMS kodu gönder"}</button>{challengeId && <button type="button" className="live-button secondary" onClick={() => { setChallengeId(null); setCode(""); setAuthError(null); }}>Numarayı değiştir</button>}</form>}</main>;
 }
 
 function TenantSelector({ session, onChange }) {
@@ -826,7 +850,8 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
       if (session?.tenant?.id) api.setTenant(session.tenant.id);
       setSessionState({ loading: false, session, error: null, needsLogin: false });
     } catch (error) {
-      setSessionState({ loading: false, session: null, error, needsLogin: error instanceof ApiError && [401, 403].includes(error.status) });
+      const needsLogin = error instanceof ApiError && [401, 403].includes(error.status);
+      setSessionState({ loading: false, session: null, error: needsLogin ? null : error, needsLogin });
     }
   }
 
@@ -850,12 +875,17 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
   }
 
   async function logout() {
-    if (!demoAuthEnabled) {
-      window.location.assign("/signout-with-chatgpt?return_to=/");
-      return;
-    }
     await api.logout();
     setSessionState({ loading: false, session: null, error: null, needsLogin: true });
+  }
+
+  async function startPhoneAuth(phone) {
+    return api.startPhoneAuth(phone);
+  }
+
+  async function verifyPhoneAuth(values) {
+    await api.verifyPhoneAuth(values);
+    await bootstrap();
   }
 
   async function changeTenant(tenantId) {
@@ -864,7 +894,7 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
   }
 
   if (sessionState.loading && !sessionState.session) return <><LiveStyles /><div className="live-full-state"><LoadingState /></div></>;
-  if (sessionState.needsLogin) return <><LiveStyles /><Login error={sessionState.error} loading={sessionState.loading} onSubmit={login} /></>;
+  if (sessionState.needsLogin) return <><LiveStyles /><Login error={sessionState.error} loading={sessionState.loading} onSubmit={login} onPhoneStart={startPhoneAuth} onPhoneVerify={verifyPhoneAuth} /></>;
   if (sessionState.error) return <><LiveStyles /><div className="live-full-state"><ErrorState error={sessionState.error} retry={bootstrap} /></div></>;
 
   const session = sessionState.session;

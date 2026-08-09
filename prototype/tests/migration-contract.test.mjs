@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const migrationUrl = new URL("../migrations/0001_tenant_core.sql", import.meta.url);
+const phoneMigrationUrl = new URL("../migrations/0006_phone_auth.sql", import.meta.url);
 
 test("tenant-owned business tables require tenant_id", async () => {
   const sql = await readFile(migrationUrl, "utf8");
@@ -36,4 +37,17 @@ test("common tenant queries have scoped indexes", async () => {
     assert.match(sql, new RegExp(`CREATE INDEX IF NOT EXISTS idx_${table}_[^\\n]+[\\s\\S]*?ON ${table}\\s*\\(tenant_id`, "i"), `${table} tenant indexi olmalı`);
   }
   assert.match(sql, /PRAGMA optimize/i);
+});
+
+test("phone sessions store only hashed tokens and expire", async () => {
+  const sql = await readFile(phoneMigrationUrl, "utf8");
+  assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS phone_sessions/);
+  assert.match(sql, /token_hash TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /expires_at TEXT NOT NULL/);
+  assert.match(sql, /revoked_at TEXT/);
+  assert.doesNotMatch(sql, /\btoken\s+TEXT/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS phone_auth_requests/);
+  assert.match(sql, /phone_hash TEXT NOT NULL/);
+  assert.match(sql, /ip_hash TEXT NOT NULL/);
 });

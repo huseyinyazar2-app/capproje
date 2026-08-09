@@ -7,6 +7,9 @@ export const API_CONFIG = Object.freeze({
   timeoutMs: 15000,
   endpoints: Object.freeze({
     session: "/session",
+    phoneAuthStart: "/auth/phone/start",
+    phoneAuthVerify: "/auth/phone/verify",
+    logout: "/auth/logout",
     dashboard: "/dashboard",
     projects: "/projects",
     offers: "/offers",
@@ -321,7 +324,17 @@ export const api = {
     if (credentials.tenantId) this.setTenant(credentials.tenantId);
     return this.session();
   },
+  async startPhoneAuth(phone) {
+    return (await request(API_CONFIG.endpoints.phoneAuthStart, { method: "POST", body: { phone } })).data;
+  },
+  async verifyPhoneAuth({ phone, code, challengeId }) {
+    return (await request(API_CONFIG.endpoints.phoneAuthVerify, { method: "POST", body: { phone, code, challenge_id: challengeId } })).data;
+  },
   async logout() {
+    if (!DEMO_AUTH_ENABLED) {
+      await request(API_CONFIG.endpoints.logout, { method: "POST" });
+      storageSet(TENANT_KEY, null);
+    }
     accessToken = null;
     if (DEMO_AUTH_ENABLED) storageSet(DEMO_USER_KEY, null);
   },
