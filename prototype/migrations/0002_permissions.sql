@@ -1,0 +1,47 @@
+INSERT OR IGNORE INTO permissions (code, description) VALUES
+('dashboard.read','Özet ve göstergeleri görüntüleme'),
+('customers.read','Müşterileri görüntüleme'), ('customers.write','Müşteri ekleme ve düzenleme'), ('customers.delete','Müşteri silme'),
+('suppliers.read','Tedarikçileri görüntüleme'), ('suppliers.write','Tedarikçi ekleme ve düzenleme'), ('suppliers.delete','Tedarikçi silme'),
+('projects.read','Projeleri görüntüleme'), ('projects.write','Proje ekleme ve düzenleme'), ('projects.delete','Proje silme'),
+('offers.read','Teklifleri görüntüleme'), ('offers.write','Teklif ekleme ve düzenleme'), ('offers.delete','Teklif silme'),
+('offer-items.read','Teklif kalemlerini görüntüleme'), ('offer-items.write','Teklif kalemi ekleme ve düzenleme'), ('offer-items.delete','Teklif kalemi silme'),
+('project-tasks.read','Proje görevlerini görüntüleme'), ('project-tasks.write','Proje görevi ekleme ve düzenleme'), ('project-tasks.delete','Proje görevi silme'),
+('work-items.read','İş kalemlerini görüntüleme'), ('work-items.write','İş kalemi ekleme ve düzenleme'), ('work-items.delete','İş kalemi silme'),
+('purchase-requests.read','Satın alma taleplerini görüntüleme'), ('purchase-requests.write','Satın alma talebi ekleme ve düzenleme'), ('purchase-requests.delete','Satın alma talebi silme'),
+('purchase-orders.read','Satın alma siparişlerini görüntüleme'), ('purchase-orders.write','Satın alma siparişi ekleme ve düzenleme'), ('purchase-orders.delete','Satın alma siparişi silme'),
+('production-orders.read','Üretim emirlerini görüntüleme'), ('production-orders.write','Üretim emri ekleme ve düzenleme'), ('production-orders.delete','Üretim emri silme'),
+('installations.read','Montajları görüntüleme'), ('installations.write','Montaj ekleme ve düzenleme'), ('installations.delete','Montaj silme'),
+('accounts.read','Hesapları görüntüleme'), ('accounts.write','Hesap ekleme ve düzenleme'), ('accounts.delete','Hesap silme'),
+('financial-transactions.read','Finans hareketlerini görüntüleme'), ('financial-transactions.write','Finans hareketi ekleme ve düzenleme'), ('financial-transactions.delete','Finans hareketi silme'),
+('invoices.read','Faturaları görüntüleme'), ('invoices.write','Fatura ekleme ve düzenleme'), ('invoices.delete','Fatura silme'),
+('employees.read','Personeli görüntüleme'), ('employees.write','Personel ekleme ve düzenleme'), ('employees.delete','Personel silme'),
+('attendance.read','Puantajı görüntüleme'), ('attendance.write','Puantaj ekleme ve düzenleme'), ('attendance.delete','Puantaj silme'),
+('leaves.read','İzinleri görüntüleme'), ('leaves.write','İzin ekleme ve düzenleme'), ('leaves.delete','İzin silme'),
+('payroll-inputs.read','Bordro girdilerini görüntüleme'), ('payroll-inputs.write','Bordro girdisi ekleme ve düzenleme'), ('payroll-inputs.delete','Bordro girdisi silme'),
+('files.read','Dosyaları görüntüleme'), ('files.write','Dosya yükleme ve düzenleme'), ('files.delete','Dosya silme'),
+('audit-logs.read','Denetim kayıtlarını görüntüleme'),
+('memberships.read','Ekip üyelerini görüntüleme'), ('memberships.write','Ekip üyelerini yönetme'), ('memberships.delete','Ekip üyeliği kaldırma'),
+('roles.read','Rolleri görüntüleme'), ('roles.write','Rolleri ve yetkileri yönetme'), ('roles.delete','Rol silme'),
+('backups.read','Yedekleri görüntüleme'), ('backups.write','Yedek oluşturma');
+INSERT OR IGNORE INTO permissions (code, description) VALUES
+('cost.view','Maliyet ve kârlılık alanlarını görüntüleme'),
+('salary.view','Maaş ve bordro tutarlarını görüntüleme'),
+('export','Verileri dışa aktarma'),
+('approve','Onay bekleyen iş akışlarını onaylama'),
+('users.manage','Kullanıcı ve üyelik yönetimi'),
+('roles.manage','Rol ve yetki yönetimi'),
+('backups.manage','Yedek oluşturma ve geri yükleme yönetimi'),
+('files.manage','Dosya yükleme ve silme yönetimi');
+INSERT OR IGNORE INTO permissions (code, description) VALUES
+('hr.sensitive.read','Kimlik, iletişim ve diğer hassas personel alanlarını görüntüleme'),
+('finance.sensitive.read','IBAN ve finansal hesap ayrıntılarını görüntüleme');
+INSERT OR IGNORE INTO permissions (code, description) VALUES
+('offers.approve','Teklif kabul ve ret kararı verme'),
+('offers.convert','Kabul edilmiş teklifi projeye dönüştürme'),
+('projects.transition','Proje aşamasını değiştirme'),
+('work-items.revision.approve','İş kalemi revizyonunu onaylama'),
+('production-orders.release','Onaylı iş kalemini üretime salma'),
+('purchase-requests.approve','Satın alma talebini onaylama'),
+('leaves.approve','İzin talebini onaylama veya reddetme'),
+('financial-transactions.approve','Finans hareketini onaylama'),
+('financial-transactions.reverse','Onaylı finans hareketini ters kayıtla düzeltme');
