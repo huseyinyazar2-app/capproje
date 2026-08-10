@@ -129,3 +129,16 @@ test("file center captures operational context and previews project evidence", (
   assert.match(liveSource, /api\.fileContentUrl\(data\.id\)/);
   assert.match(liveSource, /live-file-preview/);
 });
+
+test("operational records share accessible list, kanban and calendar views", () => {
+  for (const resource of ["projects", "projectTasks", "purchases", "production", "installations", "resourceAssignments"]) {
+    assert.match(liveSource, new RegExp(`Object\\.assign\\(configs\\.${resource}, \\{[\\s\\S]*?views: operationalViews`), `${resource} needs operational views`);
+  }
+  assert.match(liveSource, /function ViewSwitcher\s*\(/);
+  assert.match(liveSource, /aria-label="Kayıt görünümü"/);
+  assert.match(liveSource, /aria-pressed=\{value === key\}/);
+  assert.match(liveSource, /function KanbanView\s*\(/);
+  assert.match(liveSource, /function CalendarView\s*\(/);
+  assert.match(liveSource, /rangeEndField:\s*"plannedEnd"/);
+  assert.match(liveSource, /day >= start && day <= end/);
+});

@@ -3,7 +3,10 @@ import {
   ArrowClockwise,
   Bell,
   Buildings,
+  CalendarBlank,
   CaretDown,
+  CaretLeft,
+  CaretRight,
   ChartLineUp,
   ChatCircleText,
   Check,
@@ -13,6 +16,8 @@ import {
   FolderSimple,
   Handshake,
   House,
+  Kanban,
+  ListBullets,
   MagnifyingGlass,
   PencilSimple,
   Plus,
@@ -362,6 +367,57 @@ protectFields(configs.purchaseOrders, ["subtotal", "taxTotal", "grandTotal"], "c
 configs.finance.createDefaults = {};
 configs.accounting.createDefaults = { official: true };
 
+const operationalViews = ["list", "kanban", "calendar"];
+Object.assign(configs.projects, {
+  views: operationalViews,
+  titleField: "name",
+  subtitleField: "code",
+  dateField: "targetDate",
+  boardField: "status",
+  boardColumns: ["Potansiyel", "Keşif", "Maliyetlendirme", "Teklif", "Sözleşme", "Tasarım", "Satın Alma", "Üretim", "Montaj", "Kabul", "Beklemede", "Tamamlandı", "Kaybedildi", "İptal"],
+});
+Object.assign(configs.projectTasks, {
+  views: operationalViews,
+  titleField: "title",
+  subtitleField: "department",
+  dateField: "plannedEnd",
+  boardField: "status",
+  boardColumns: ["todo", "in_progress", "blocked", "completed"],
+});
+Object.assign(configs.purchases, {
+  views: operationalViews,
+  titleField: "itemName",
+  subtitleField: "number",
+  dateField: "requiredAt",
+  boardField: "status",
+  boardColumns: ["Taslak", "Onay bekliyor", "Onaylandı", "Sipariş verildi", "Kısmi teslim", "Teslim edildi", "İptal"],
+});
+Object.assign(configs.production, {
+  views: operationalViews,
+  titleField: "code",
+  subtitleField: "workCenter",
+  dateField: "plannedEnd",
+  boardField: "status",
+  boardColumns: ["Planlandı", "Malzeme bekliyor", "Üretimde", "Kalite kontrolde", "Tamamlandı", "Durduruldu"],
+});
+Object.assign(configs.installations, {
+  views: operationalViews,
+  titleField: "location",
+  subtitleField: "code",
+  dateField: "scheduledAt",
+  boardField: "status",
+  boardColumns: ["Keşif gerekli", "Saha bekleniyor", "Planlandı", "Yolda", "Montajda", "Eksikli", "Teslim edildi"],
+});
+Object.assign(configs.resourceAssignments, {
+  views: operationalViews,
+  titleField: "resourceName",
+  subtitleField: "role",
+  dateField: "plannedStart",
+  rangeEndField: "plannedEnd",
+  boardField: "status",
+  boardColumns: ["planned", "confirmed", "active", "completed", "cancelled"],
+});
+
 function recordValue(record, key) {
   if (key === "fullName") return record.fullName || [record.firstName, record.lastName].filter(Boolean).join(" ");
   if (key === "projectName") return record.projectName || record.project?.name || "—";
@@ -397,13 +453,16 @@ const enumLabels = {
   active: "Aktif", passive: "Pasif", inactive: "Pasif", invited: "Davet edildi", disabled: "Devre dışı",
   draft: "Taslak", planned: "Planlandı", pending: "Onay bekliyor", approved: "Onaylandı", rejected: "Reddedildi", cancelled: "İptal",
   completed: "Tamamlandı", released: "Üretime salındı", in_progress: "Devam ediyor", on_hold: "Beklemede", reversed: "Ters kayıt oluşturuldu",
+  todo: "Yapılacak", blocked: "Engelli", confirmed: "Kesinleşti", ordered: "Sipariş verildi", partial: "Kısmi teslim", received: "Teslim edildi",
+  waiting_material: "Malzeme bekliyor", quality_control: "Kalite kontrolde", paused: "Durduruldu", survey_needed: "Keşif gerekli", site_waiting: "Saha bekleniyor",
+  in_transit: "Yolda", incomplete: "Eksikli", lost: "Kaybedildi",
   present: "Çalıştı", absent: "Devamsız", leave: "İzinli", remote: "Uzaktan", exported: "Aktarıldı",
   internal: "İç üretim", external: "Dış imalat", review: "İncelemede", changes_requested: "Revizyon istendi",
   income: "Gelir", expense: "Gider", payable: "Borç", receivable: "Alacak", sales: "Satış", purchase: "Alış",
 };
 
 function localizedEnum(value) {
-  return enumLabels[String(value)] || value;
+  return enumLabels[String(value)] || projectStatusLabels?.[String(value)] || value;
 }
 
 function hasCapability(session, capability) {
@@ -533,6 +592,79 @@ function Table({ rows, config, canEdit, onEdit, onDetail, canDelete, onDelete, o
     const actions = getWorkflowActions?.(row) || [];
     return <tr key={row.id || index}>{config.columns.map(([key, , type]) => <td key={key}>{type === "status" ? <Status>{recordValue(row, key)}</Status> : formatValue(recordValue(row, key), type, row)}</td>)}{hasActions && <td><div className="live-row-actions">{onDetail && <button className="live-icon-button" onClick={() => onDetail(row)} title="Detayı aç"><ClipboardText /></button>}{actions.map((action) => <button className={`live-workflow-button ${action.tone || ""}`} key={action.key} onClick={() => onWorkflow(row, action)}>{action.label}</button>)}{onPermissions && <button className="live-icon-button" onClick={() => onPermissions(row)} title="Rol yetkileri"><Buildings /></button>}{canEdit && <button className="live-icon-button" onClick={() => onEdit(row)} title="Düzenle"><PencilSimple /></button>}{onDelete && canDelete?.(row) && <button className="live-icon-button danger" onClick={() => onDelete(row)} title="Sil"><X /></button>}</div></td>}</tr>;
   })}</tbody></table></div>;
+}
+
+const viewOptions = {
+  list: { label: "Liste", icon: ListBullets },
+  kanban: { label: "Kanban", icon: Kanban },
+  calendar: { label: "Takvim", icon: CalendarBlank },
+};
+
+function ViewSwitcher({ available, value, onChange }) {
+  return <div className="live-view-switcher" role="group" aria-label="Kayıt görünümü">{available.map((key) => {
+    const option = viewOptions[key];
+    const Icon = option.icon;
+    return <button type="button" key={key} className={value === key ? "active" : ""} aria-pressed={value === key} onClick={() => onChange(key)}><Icon /> <span>{option.label}</span></button>;
+  })}</div>;
+}
+
+function ViewCard({ row, config, canEdit, onEdit, onDetail, getWorkflowActions, onWorkflow }) {
+  const actions = getWorkflowActions?.(row) || [];
+  const title = recordValue(row, config.titleField) || "Adsız kayıt";
+  const subtitle = recordValue(row, config.subtitleField);
+  return <article className="live-kanban-card"><button type="button" className="live-kanban-card-main" onClick={() => onDetail(row)}><b>{title}</b>{subtitle && subtitle !== "—" && <small>{subtitle}</small>}<span><Status>{recordValue(row, config.boardField)}</Status>{config.dateField && <time>{formatValue(recordValue(row, config.dateField), "date", row)}</time>}</span></button>{(actions.length > 0 || canEdit) && <footer>{actions.map((action) => <button type="button" className={`live-workflow-button ${action.tone || ""}`} key={action.key} onClick={() => onWorkflow(row, action)}>{action.label}</button>)}{canEdit && <button type="button" className="live-icon-button" onClick={() => onEdit(row)} title="Düzenle"><PencilSimple /></button>}</footer>}</article>;
+}
+
+function KanbanView({ rows, config, canEdit, onEdit, onDetail, getWorkflowActions, onWorkflow }) {
+  const fieldName = config.boardField;
+  const matchesColumn = (value, column) => value === column || localizedEnum(value) === localizedEnum(column);
+  const unconfigured = rows.map((row) => String(recordValue(row, fieldName) || "Durumsuz")).filter((value) => !config.boardColumns.some((column) => matchesColumn(value, column)));
+  const columns = [...config.boardColumns, ...new Set(unconfigured)];
+  return <div className="live-kanban" aria-label="Kanban görünümü">{columns.map((column) => {
+    const columnRows = rows.filter((row) => matchesColumn(String(recordValue(row, fieldName) || "Durumsuz"), column));
+    return <section className="live-kanban-column" key={column}><header><span><Status>{column}</Status></span><b>{columnRows.length}</b></header><div>{columnRows.map((row, index) => <ViewCard key={row.id || index} row={row} config={config} canEdit={canEdit} onEdit={onEdit} onDetail={onDetail} getWorkflowActions={getWorkflowActions} onWorkflow={onWorkflow} />)}{columnRows.length === 0 && <small className="live-kanban-empty">Bu aşamada kayıt yok</small>}</div></section>;
+  })}</div>;
+}
+
+function localCalendarDate(value) {
+  if (!value) return null;
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const parsed = match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? null : new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+function CalendarView({ rows, config, onDetail }) {
+  const firstRecordDate = rows.map((row) => localCalendarDate(recordValue(row, config.dateField))).find(Boolean);
+  const [month, setMonth] = useState(() => firstRecordDate || new Date());
+  const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(gridStart.getDate() - ((monthStart.getDay() + 6) % 7));
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const item = new Date(gridStart);
+    item.setDate(gridStart.getDate() + index);
+    return item;
+  });
+  const datedRows = rows.filter((row) => localCalendarDate(recordValue(row, config.dateField)));
+  const monthLabel = new Intl.DateTimeFormat("tr-TR", { month: "long", year: "numeric" }).format(month);
+  const isSameDay = (left, right) => left && right && left.getTime() === right.getTime();
+  const today = localCalendarDate(new Date().toISOString());
+  const rowsForDay = (day) => datedRows.filter((row) => {
+    const start = localCalendarDate(recordValue(row, config.dateField));
+    const end = localCalendarDate(recordValue(row, config.rangeEndField)) || start;
+    return day >= start && day <= end;
+  });
+  if (!datedRows.length) return <div className="live-view-empty"><CalendarBlank /><b>Takvime yerleşecek tarih bulunamadı</b><small>Kayıtlara planlanan tarih eklediğinizde burada görünecek.</small></div>;
+  return <section className="live-calendar"><header><div><button type="button" className="live-icon-button" aria-label="Önceki ay" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}><CaretLeft /></button><button type="button" className="live-button secondary" onClick={() => setMonth(new Date())}>Bugün</button><button type="button" className="live-icon-button" aria-label="Sonraki ay" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}><CaretRight /></button></div><h3>{monthLabel}</h3><small>{datedRows.length} tarihli kayıt</small></header><div className="live-calendar-scroll"><div className="live-calendar-grid" role="grid"><div className="live-calendar-weekdays">{["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"].map((day) => <b key={day}>{day}</b>)}</div><div className="live-calendar-days">{days.map((day) => {
+    const dayRows = rowsForDay(day);
+    const outside = day.getMonth() !== month.getMonth();
+    return <div role="gridcell" className={`${outside ? "outside" : ""} ${isSameDay(day, today) ? "today" : ""}`} key={day.toISOString()}><time>{day.getDate()}</time><div>{dayRows.slice(0, 3).map((row, index) => <button type="button" key={row.id || index} onClick={() => onDetail(row)} title={String(recordValue(row, config.titleField) || "Kayıt")}><b>{recordValue(row, config.titleField) || "Adsız kayıt"}</b>{recordValue(row, config.boardField) && <small>{localizedEnum(recordValue(row, config.boardField))}</small>}</button>)}{dayRows.length > 3 && <span>+{dayRows.length - 3} kayıt</span>}</div></div>;
+  })}</div></div></div></section>;
+}
+
+function ResourceDataView({ view, rows, config, canEdit, onEdit, onDetail, canDelete, onDelete, onPermissions, getWorkflowActions, onWorkflow }) {
+  if (view === "kanban") return <KanbanView rows={rows} config={config} canEdit={canEdit} onEdit={onEdit} onDetail={onDetail} getWorkflowActions={getWorkflowActions} onWorkflow={onWorkflow} />;
+  if (view === "calendar") return <CalendarView rows={rows} config={config} onDetail={onDetail} />;
+  return <Table rows={rows} config={config} canEdit={canEdit} onEdit={onEdit} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} onPermissions={onPermissions} getWorkflowActions={getWorkflowActions} onWorkflow={onWorkflow} />;
 }
 
 function RecordModal({ module, record, session, saving, serverError, onClose, onSave }) {
@@ -795,6 +927,7 @@ function ResourceView({ module, session, online, onDataChanged, onNavigate }) {
   config = { ...config, officialScope: Boolean(config.officialScope && canViewOfficial), columns: config.columns.filter(([name]) => !blockedColumns.has(name)) };
   const [state, setState] = useState({ loading: true, rows: [], meta: null, error: null });
   const [query, setQuery] = useState("");
+  const [view, setView] = useState("list");
   const [officialFilter, setOfficialFilter] = useState(canViewOfficial ? (config.query?.official === true ? "official" : config.query?.official === false ? "unofficial" : "all") : "all");
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -811,6 +944,8 @@ function ResourceView({ module, session, online, onDataChanged, onNavigate }) {
   const canEdit = online && !module.readOnly && !module.noEdit && permissionAllows(session, "update", module.resource);
   const canDelete = online && !module.readOnly && permissionAllows(session, "delete", module.resource);
   const canManagePermissions = online && module.id === "roles" && permissionAllows(session, "manage", "roles");
+  const availableViews = config.views || ["list"];
+  const activeView = availableViews.includes(view) ? view : "list";
 
   async function load(search = query) {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -888,7 +1023,7 @@ function ResourceView({ module, session, online, onDataChanged, onNavigate }) {
     }
   }
 
-  return <><section className="live-panel"><header className="live-toolbar"><div><small>{module.id === "projects" ? "PROJE PORTFÖYÜ" : "CANLI KAYITLAR"}</small><h2>{module.title}</h2><p>{module.id === "projects" ? "Talep, keşif, teklif, sözleşme, üretim ve teslim aşamalarını tek zincirde yönetin." : config.description}</p></div>{canCreate && <button className="live-button primary" onClick={() => setModal({})}><Plus /> Yeni {module.singular}</button>}</header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button>Ara</button></form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><Table rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>{module.id === "projects" ? "Detay düğmesi proje komuta merkezini açar" : "Tenant kapsamındaki güncel veriler"}</small></footer></> : <EmptyState title={module.title} canCreate={canCreate} onCreate={() => setModal({})} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && (module.id === "projects" ? <ProjectCommandCenterModal record={detailRecord} onClose={() => setDetailRecord(null)} onNavigate={onNavigate} /> : <RecordDetailModal module={module} record={detailRecord} session={session} onClose={() => setDetailRecord(null)} />)}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
+  return <><section className="live-panel"><header className="live-toolbar"><div><small>{module.id === "projects" ? "PROJE PORTFÖYÜ" : "CANLI KAYITLAR"}</small><h2>{module.title}</h2><p>{module.id === "projects" ? "Talep, keşif, teklif, sözleşme, üretim ve teslim aşamalarını tek zincirde yönetin." : config.description}</p></div>{canCreate && <button className="live-button primary" onClick={() => setModal({})}><Plus /> Yeni {module.singular}</button>}</header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button className="live-search-submit">Ara</button>{availableViews.length > 1 && <ViewSwitcher available={availableViews} value={activeView} onChange={setView} />}</form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><ResourceDataView view={activeView} rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>{module.id === "projects" ? "Detay düğmesi proje komuta merkezini açar" : "Tenant kapsamındaki güncel veriler"}</small></footer></> : <EmptyState title={module.title} canCreate={canCreate} onCreate={() => setModal({})} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && (module.id === "projects" ? <ProjectCommandCenterModal record={detailRecord} onClose={() => setDetailRecord(null)} onNavigate={onNavigate} /> : <RecordDetailModal module={module} record={detailRecord} session={session} onClose={() => setDetailRecord(null)} />)}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
 }
 
 function Login({ error, loading, onSubmit, onPasswordLogin }) {
@@ -1000,9 +1135,11 @@ function LiveStyles() {
     .live-hero>button{border:1px solid #668777;background:#fff;color:var(--live-green);border-radius:9px;padding:10px 14px;font:inherit;font-size:11px;font-weight:800;cursor:pointer}.live-pipeline-panel{margin:18px 0}.live-pipeline-panel>header{display:flex;justify-content:space-between;align-items:center}.live-dashboard-pipeline{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(120px,1fr);overflow-x:auto}.live-dashboard-pipeline>button{min-height:105px;border:0;border-right:1px solid var(--live-line);background:#fff;color:var(--live-ink);padding:16px;text-align:left;cursor:pointer}.live-dashboard-pipeline>button:last-child{border-right:0}.live-dashboard-pipeline>button:hover{background:#f3f7f4}.live-dashboard-pipeline span{display:block;color:var(--live-green);font-size:24px;font-weight:800}.live-dashboard-pipeline b{display:block;margin-top:7px;font-size:11px}.live-dashboard-pipeline small{color:var(--live-muted);font-size:9px}.live-attention-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 18px}.live-attention-grid>button{min-height:78px;border:1px solid var(--live-line);background:#fff;border-radius:11px;padding:14px;display:flex;align-items:center;gap:12px;text-align:left;color:var(--live-green);cursor:pointer}.live-attention-grid>button.danger{color:var(--live-danger);border-color:#e4c3bf}.live-attention-grid svg{font-size:23px}.live-attention-grid span{display:flex;flex-direction:column}.live-attention-grid small{font-size:8px;color:var(--live-muted);font-weight:800;letter-spacing:.07em}.live-attention-grid strong{font-size:21px;color:var(--live-ink);margin-top:2px}
     .live-file-detail{width:min(1100px,100%)}.live-file-detail>header p{margin:5px 0 0;color:var(--live-muted);font-size:10px}.live-file-detail-body{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,.6fr);min-height:520px}.live-file-preview{min-height:520px;background:#18231f;display:grid;place-items:center;overflow:hidden}.live-file-preview img{width:100%;height:100%;max-height:70vh;object-fit:contain}.live-file-preview iframe{width:100%;height:100%;min-height:520px;border:0;background:#fff}.live-file-preview>div{display:flex;flex-direction:column;align-items:center;gap:8px;color:#fff;text-align:center}.live-file-preview>div svg{font-size:46px}.live-file-preview>div small{color:#b9c8c0}.live-file-detail aside{padding:24px;display:flex;flex-direction:column}.live-file-detail aside>small{font-size:8px;color:var(--live-green);font-weight:800;letter-spacing:.1em}.live-file-detail aside h3{font-size:14px;line-height:1.5;margin:8px 0 18px}.live-file-detail dl{margin:0}.live-file-detail dl>div{padding:10px 0;border-bottom:1px solid var(--live-line)}.live-file-detail dt{font-size:8px;color:var(--live-muted);font-weight:800}.live-file-detail dd{margin:4px 0 0;font-size:10px;word-break:break-word}.live-file-detail aside>a{margin-top:auto;text-decoration:none;text-align:center}
     .live-project-center{width:min(1180px,100%)}.live-project-center>header p{margin:5px 0 0;color:var(--live-muted);font-size:11px}.live-project-center-body{padding:22px;background:#f7f7f4}.live-project-stage-rail{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(130px,1fr);overflow-x:auto;border:1px solid var(--live-line);background:#fff}.live-project-stage-rail>div{min-height:86px;padding:13px;display:flex;align-items:center;gap:9px;border-right:1px solid var(--live-line)}.live-project-stage-rail>div:last-child{border-right:0}.live-project-stage-rail i{width:27px;height:27px;border-radius:50%;display:grid;place-items:center;flex:none;background:#edf0ee;color:#7c8781;font-size:10px;font-style:normal;font-weight:800}.live-project-stage-rail .complete i{background:var(--live-green);color:#fff}.live-project-stage-rail .current{background:#eef4f0;box-shadow:inset 0 -3px var(--live-green)}.live-project-stage-rail .current i{background:#d9b779;color:#173b2e}.live-project-stage-rail span{display:flex;flex-direction:column;gap:4px}.live-project-stage-rail b{font-size:10px}.live-project-stage-rail small{font-size:8px;color:var(--live-muted)}.live-project-summary{display:grid;grid-template-columns:1.25fr repeat(3,1fr);gap:10px;margin:14px 0}.live-project-summary>article{min-height:130px;background:#fff;border:1px solid var(--live-line);border-radius:11px;padding:16px;display:flex;flex-direction:column;align-items:flex-start}.live-project-summary small{font-size:8px;color:var(--live-muted);font-weight:800;letter-spacing:.08em}.live-project-summary strong{font-size:24px;margin:8px 0 4px}.live-project-summary p{margin:0;color:var(--live-muted);font-size:9px}.live-project-summary button{margin-top:auto;border:0;background:transparent;color:var(--live-green);font-size:9px;font-weight:800;padding:7px 0 0;cursor:pointer}.live-project-summary .readiness>span{width:100%;height:7px;background:#e7ebe8;border-radius:8px;overflow:hidden;margin:5px 0 7px}.live-project-summary .readiness>span i{height:100%;display:block;background:var(--live-green)}.live-project-columns{display:grid;grid-template-columns:1.15fr .85fr;gap:12px}.live-project-columns>section,.live-project-operational{background:#fff;border:1px solid var(--live-line);border-radius:11px;overflow:hidden}.live-project-columns section>header,.live-project-operational>header{padding:15px 16px;border-bottom:1px solid var(--live-line)}.live-project-columns header small,.live-project-operational header small{font-size:8px;color:var(--live-green);font-weight:800;letter-spacing:.09em}.live-project-columns h3,.live-project-operational h3{font-size:15px;margin:4px 0 0}.live-next-actions article{min-height:64px;display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:10px;padding:11px 15px;border-bottom:1px solid #eceeeb}.live-next-actions article:last-child{border-bottom:0}.live-next-actions article>span{width:25px;height:25px;border-radius:50%;display:grid;place-items:center;background:#edf3ef;color:var(--live-green);font-size:9px;font-weight:800}.live-next-actions article.high>span{background:#f8e8e6;color:var(--live-danger)}.live-next-actions article div{display:flex;flex-direction:column;gap:3px}.live-next-actions b{font-size:10px}.live-next-actions small{font-size:8px;color:var(--live-muted)}.live-next-actions button{border:1px solid var(--live-line);background:#fff;border-radius:7px;padding:6px 8px;color:var(--live-green);font-size:8px;font-weight:800;cursor:pointer}.live-gate-list>button{width:100%;min-height:64px;border:0;border-bottom:1px solid #eceeeb;background:#fff;display:grid;grid-template-columns:28px 1fr;align-items:center;gap:9px;padding:11px 15px;text-align:left;cursor:pointer}.live-gate-list>button:last-child{border-bottom:0}.live-gate-list>button>span{width:25px;height:25px;border-radius:50%;display:grid;place-items:center;background:#f8e8e6;color:var(--live-danger);font-weight:800}.live-gate-list>button.warning>span{background:#f7efda;color:var(--live-warning)}.live-gate-list>button div{display:flex;flex-direction:column;gap:3px}.live-gate-list b{font-size:10px}.live-gate-list small{font-size:8px;color:var(--live-muted)}.live-project-ready{min-height:96px;padding:18px;display:flex;align-items:center;gap:11px;color:var(--live-success)}.live-project-ready>svg{font-size:26px}.live-project-ready span{display:flex;flex-direction:column;gap:4px}.live-project-ready b{font-size:11px}.live-project-ready small{font-size:8px;color:var(--live-muted)}.live-project-operational{margin-top:12px}.live-project-operational>div{display:grid;grid-template-columns:repeat(6,minmax(100px,1fr));overflow-x:auto}.live-project-operational button{min-height:80px;border:0;border-right:1px solid var(--live-line);background:#fff;display:flex;flex-direction:column;justify-content:center;text-align:left;padding:13px;cursor:pointer}.live-project-operational button:last-child{border-right:0}.live-project-operational strong{font-size:17px;color:var(--live-green)}.live-project-operational span{font-size:8px;color:var(--live-muted);margin-top:4px}.live-gate-blockers{display:flex;flex-direction:column;gap:6px;margin-top:13px;padding:12px;background:#fff4f2;border:1px solid #ebcbc7;border-radius:8px}.live-gate-blockers>b{font-size:10px;color:var(--live-danger)}.live-gate-blockers>span{display:flex;align-items:center;gap:6px;font-size:9px;color:#73423e}
+    .live-view-switcher{display:flex;align-items:center;gap:3px;padding:3px;background:#f2f4f2;border:1px solid var(--live-line);border-radius:9px;margin-left:8px}.live-search .live-view-switcher button{min-height:30px;padding:5px 9px;border:0;background:transparent;color:var(--live-muted);display:flex;align-items:center;gap:5px;font-size:9px}.live-search .live-view-switcher button svg{font-size:15px}.live-search .live-view-switcher button.active{background:#fff;color:var(--live-green);box-shadow:0 1px 4px #1d352a18}.live-kanban{display:grid;grid-auto-flow:column;grid-auto-columns:260px;gap:12px;padding:16px;overflow-x:auto;background:#f7f7f4;min-height:430px;align-items:start}.live-kanban-column{border:1px solid var(--live-line);border-radius:11px;background:#eef1ee;overflow:hidden}.live-kanban-column>header{min-height:48px;padding:9px 11px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--live-line)}.live-kanban-column>header>b{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:#fff;color:var(--live-muted);font-size:9px}.live-kanban-column>div{padding:8px;display:flex;flex-direction:column;gap:8px}.live-kanban-card{background:#fff;border:1px solid #dfe2df;border-radius:9px;box-shadow:0 1px 4px #18231e0d;overflow:hidden}.live-kanban-card-main{width:100%;padding:12px;border:0;background:#fff;text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:6px;cursor:pointer;color:var(--live-ink)}.live-kanban-card-main:hover{background:#fbfcfa}.live-kanban-card-main>b{font-size:11px;line-height:1.4}.live-kanban-card-main>small{font-size:9px;color:var(--live-muted)}.live-kanban-card-main>span{width:100%;display:flex;align-items:center;justify-content:space-between;gap:7px;margin-top:4px}.live-kanban-card-main time{font-size:8px;color:var(--live-muted);white-space:nowrap}.live-kanban-card>footer{padding:8px;border-top:1px solid #eceeeb;display:flex;align-items:center;gap:5px;flex-wrap:wrap}.live-kanban-card>footer .live-icon-button{width:28px;height:28px;margin-left:auto}.live-kanban-empty{display:block;padding:18px 8px;text-align:center;color:var(--live-muted);font-size:9px}.live-calendar>header{min-height:62px;padding:11px 16px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;border-bottom:1px solid var(--live-line)}.live-calendar>header>div{display:flex;align-items:center;gap:6px}.live-calendar>header .live-button{min-height:34px;padding:7px 10px;font-size:10px}.live-calendar>header h3{font-size:16px;margin:0;text-transform:capitalize;text-align:center}.live-calendar>header>small{text-align:right;color:var(--live-muted);font-size:9px}.live-calendar-scroll{overflow-x:auto}.live-calendar-grid{min-width:840px}.live-calendar-weekdays,.live-calendar-days{display:grid;grid-template-columns:repeat(7,minmax(120px,1fr))}.live-calendar-weekdays b{padding:9px 10px;background:#fafaf8;border-right:1px solid var(--live-line);border-bottom:1px solid var(--live-line);color:var(--live-muted);font-size:9px;text-align:center}.live-calendar-days>div{min-height:124px;padding:7px;border-right:1px solid var(--live-line);border-bottom:1px solid var(--live-line);background:#fff}.live-calendar-days>div:nth-child(7n){border-right:0}.live-calendar-days>div.outside{background:#fafaf8;color:#aeb5b1}.live-calendar-days>div>time{width:23px;height:23px;display:grid;place-items:center;margin-bottom:5px;font-size:9px;font-weight:700}.live-calendar-days>div.today>time{border-radius:50%;background:var(--live-green);color:#fff}.live-calendar-days>div>div{display:flex;flex-direction:column;gap:4px}.live-calendar-days>div button{border:1px solid #d9e2dc;border-left:3px solid var(--live-green-2);border-radius:5px;background:#f1f6f3;padding:5px 6px;text-align:left;display:flex;flex-direction:column;gap:2px;cursor:pointer;min-width:0}.live-calendar-days>div button b{font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.live-calendar-days>div button small{font-size:7px;color:var(--live-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.live-calendar-days>div span{font-size:8px;color:var(--live-green);font-weight:700;padding:2px 4px}.live-view-empty{min-height:330px;padding:45px 20px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:7px;color:var(--live-muted);text-align:center}.live-view-empty svg{font-size:35px;color:var(--live-green)}.live-view-empty b{font-size:13px;color:var(--live-ink)}.live-view-empty small{font-size:10px}
     @media(max-width:1050px){.live-shell{grid-template-columns:76px 1fr}.live-sidebar{padding-inline:10px}.live-brand div,.live-tenant span,.live-tenant>svg+span,.live-sidebar nav button span,.live-user span,.live-user>button,.live-nav-group>small{display:none}.live-brand{padding:0;justify-content:center}.live-tenant{justify-content:center;padding:10px}.live-sidebar nav button{justify-content:center;padding:0}.live-user{justify-content:center;padding-inline:0}.live-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.live-project-summary{grid-template-columns:1fr 1fr}.live-project-columns{grid-template-columns:1fr}.live-attention-grid{grid-template-columns:1fr 1fr}}
     @media(max-width:720px){.live-shell{display:block;padding-bottom:70px}.live-sidebar{position:fixed;z-index:20;bottom:0;top:auto;left:0;right:0;width:100%;height:65px;min-height:0;padding:7px 10px;background:#173b2e}.live-brand,.live-tenant,.live-user{display:none}.live-sidebar nav{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(60px,1fr);overflow-x:auto;gap:2px}.live-nav-group{display:contents}.live-sidebar nav button{height:50px;min-width:60px;flex-direction:column;gap:2px;padding:4px;font-size:8px}.live-sidebar nav button svg{font-size:18px}.live-sidebar nav button span{display:block}.live-topbar{height:65px;padding:0 16px}.live-topbar h1{font-size:17px}.live-top-actions .secondary{display:none}.live-content{padding:16px}.live-toolbar{flex-direction:column}.live-toolbar .live-button{width:100%}.live-search{padding:0 15px}.live-hero{padding:22px;min-height:165px;align-items:flex-start;flex-direction:column}.live-hero h2{font-size:22px}.live-hero>span{display:none}.live-hero>button{margin-top:18px}.live-metric-grid{grid-template-columns:1fr 1fr;gap:9px}.live-metric-grid article,.live-metric-grid button{min-height:94px;padding:13px}.live-metric-grid article strong{font-size:19px}.live-attention-grid{grid-template-columns:1fr 1fr;gap:8px}.live-attention-grid>button{min-height:72px;padding:11px}.live-project-center-body{padding:12px}.live-project-summary{grid-template-columns:1fr 1fr}.live-project-summary>article{min-height:120px;padding:13px}.live-project-operational>div{grid-template-columns:repeat(6,125px)}.live-file-detail-body{grid-template-columns:1fr}.live-file-preview,.live-file-preview iframe{min-height:280px}.live-file-detail aside{padding:18px}.live-form-grid,.live-permission-grid,.live-detail-grid{grid-template-columns:1fr}.live-form-grid label.wide,.live-detail-grid>div.wide{grid-column:auto}.live-modal-backdrop{padding:0}.live-modal{height:100vh;max-height:none;border-radius:0}.live-modal>header{padding:18px}.live-modal form{padding:18px}.live-login{grid-template-columns:1fr}.live-login>section{min-height:230px;padding:28px}.live-login>section h1{font-size:30px}.live-login>form{margin:22px auto}}
     @media(max-width:900px){.live-global-search{width:42px;flex:none}.live-global-search>input{display:none}.live-global-search:focus-within{position:absolute;left:84px;right:120px;width:auto;background:#fff}.live-global-search:focus-within>input{display:block}}
     @media(max-width:720px){.live-global-search{display:none}.live-top-icon{width:34px;height:34px}.live-notification-list article{grid-template-columns:34px 1fr;padding:13px}.live-notification-list .live-dismiss{grid-column:2;justify-self:start}.live-notifications .live-toolbar{display:flex}}
+    @media(max-width:720px){.live-search{height:auto;min-height:58px;padding:9px 15px;flex-wrap:wrap}.live-search>input{min-width:150px}.live-view-switcher{order:3;width:100%;margin:0}.live-search .live-view-switcher button{flex:1;justify-content:center;min-height:34px}.live-kanban{grid-auto-columns:min(82vw,280px);min-height:390px;padding:12px}.live-calendar>header{grid-template-columns:1fr auto}.live-calendar>header>small{display:none}.live-calendar>header h3{font-size:14px;text-align:right}.live-calendar-grid{min-width:770px}.live-calendar-days>div{min-height:112px}}
   `}</style>;
 }
