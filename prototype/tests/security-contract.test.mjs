@@ -4,6 +4,12 @@ import worker from "../worker/index.js";
 
 const normalizeSql = (sql) => sql.replace(/\s+/g, " ").trim().toLowerCase();
 
+test("CORS preflight allows idempotent mutation headers", async () => {
+  const response = await worker.fetch(new Request("https://example.test/api/v1/projects", { method: "OPTIONS" }), {});
+  assert.equal(response.status, 204);
+  assert.match(response.headers.get("access-control-allow-headers") || "", /idempotency-key/i);
+});
+
 class FakeStatement {
   constructor(database, sql) {
     this.database = database;

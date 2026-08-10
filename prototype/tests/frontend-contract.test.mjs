@@ -49,14 +49,16 @@ test("the workspace has explicit loading, empty, retryable error and permission-
   assert.match(liveSource, /(?:status|code)[^\n]*(?:403|forbidden)|(?:403|forbidden)[^\n]*(?:status|code)/i);
 });
 
-test("offline state is observable and actually disables create, edit and save mutations", () => {
+test("offline state blocks risky mutations while allowing only the safe create queue", () => {
   assert.match(liveSource, /navigator\.onLine/);
   assert.match(liveSource, /addEventListener\(["']offline["']/);
   assert.match(liveSource, /Çevrimdışısınız/);
   assert.match(liveSource, /function ResourceView\(\{[^}]*online[^}]*\}\)/);
-  assert.match(liveSource, /canCreate\s*=\s*online\s*&&[^;]*permissionAllows/);
+  assert.match(liveSource, /offlineCreateAllowed\s*=\s*api\.canQueueOffline\(module\.resource\)/);
+  assert.match(liveSource, /canCreate\s*=\s*!module\.readOnly\s*&&\s*\(online\s*\|\|\s*offlineCreateAllowed\)/);
   assert.match(liveSource, /canEdit\s*=\s*online\s*&&[^;]*permissionAllows/);
   assert.match(liveSource, /<ResourceView[^>]*online=\{online\}/);
+  assert.match(liveSource, /!online\s*&&\s*\(modal\?\.id\s*\|\|\s*module\.id\s*===\s*"files"\s*\|\|\s*!offlineCreateAllowed\)/);
 });
 
 test("create and edit forms are connected to API mutations and backend-compatible permissions", () => {

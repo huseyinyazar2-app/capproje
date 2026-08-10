@@ -1800,7 +1800,7 @@ async function fetchHandler(request, env, context) {
   const url = new URL(request.url);
   const isApiRoute = url.pathname.startsWith("/api/v1/") || url.pathname.startsWith("/api/admin/");
   if (request.method === "OPTIONS" && isApiRoute) {
-    return new Response(null, { status: 204, headers: { allow: "GET,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "authorization,content-type,x-tenant-id,x-request-id", "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS" } });
+    return new Response(null, { status: 204, headers: { allow: "GET,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "authorization,content-type,idempotency-key,x-tenant-id,x-request-id", "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS" } });
   }
   if (isApiRoute) {
     try { return await handleApi(request, env, context); }

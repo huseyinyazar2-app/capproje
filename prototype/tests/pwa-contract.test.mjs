@@ -6,13 +6,15 @@ const manifestUrl = new URL("../public/manifest.webmanifest", import.meta.url);
 const serviceWorkerUrl = new URL("../public/sw.js", import.meta.url);
 const mainUrl = new URL("../src/main.jsx", import.meta.url);
 const workspaceUrl = new URL("../src/LiveWorkspace.jsx", import.meta.url);
+const apiUrl = new URL("../src/api.js", import.meta.url);
 const packagingUrl = new URL("../scripts/prepare-sites-build.mjs", import.meta.url);
 
-const [manifestSource, serviceWorkerSource, mainSource, workspaceSource, packagingSource] = await Promise.all([
+const [manifestSource, serviceWorkerSource, mainSource, workspaceSource, apiSource, packagingSource] = await Promise.all([
   readFile(manifestUrl, "utf8"),
   readFile(serviceWorkerUrl, "utf8"),
   readFile(mainUrl, "utf8"),
   readFile(workspaceUrl, "utf8"),
+  readFile(apiUrl, "utf8"),
   readFile(packagingUrl, "utf8"),
 ]);
 
@@ -76,13 +78,30 @@ test("runtime shell caching is limited to same-origin GET requests", () => {
   assert.match(serviceWorkerSource, /caches\.match\(["']\/index\.html["']\)/);
 });
 
-test("offline mode visibly and programmatically blocks critical mutations", () => {
+test("offline mode queues only allowlisted creates and blocks critical mutations", () => {
   assert.match(workspaceSource, /navigator\.onLine/);
   assert.match(workspaceSource, /addEventListener\(["']offline["']/);
-  assert.match(workspaceSource, /canCreate\s*=\s*online\s*&&[^;]*permissionAllows/);
+  assert.match(workspaceSource, /offlineCreateAllowed\s*=\s*api\.canQueueOffline\(module\.resource\)/);
   assert.match(workspaceSource, /canEdit\s*=\s*online\s*&&[^;]*permissionAllows/);
-  assert.match(workspaceSource, /async function save\([^)]*\)\s*\{\s*if\s*\(!online\)/);
-  assert.match(workspaceSource, /Çevrimdışıyken kayıt değiştirilemez/);
+  assert.match(workspaceSource, /module\.id\s*===\s*"files"\s*\|\|\s*!offlineCreateAllowed/);
+  assert.match(apiSource, /const OFFLINE_CREATE_RESOURCES = new Set/);
+  for (const blockedResource of ["finance", "accounting", "files", "payroll", "stockMovements", "handovers"]) {
+    assert.doesNotMatch(apiSource.match(/const OFFLINE_CREATE_RESOURCES = new Set\(\[([\s\S]*?)\]\);/)?.[1] || "", new RegExp(`"${blockedResource}"`));
+  }
+});
+
+test("offline queue is device-local, scoped, bounded and idempotently replayed", () => {
+  assert.match(apiSource, /indexedDB\.open\(OFFLINE_DB_NAME,\s*1\)/);
+  assert.match(apiSource, /context\?\.tenantId\s*&&\s*context\?\.userId/);
+  assert.match(apiSource, /store\.index\("scope"\)\.getAll\(scope\)/);
+  assert.match(apiSource, /OFFLINE_MAX_ITEMS\s*=\s*100/);
+  assert.match(apiSource, /OFFLINE_MAX_BYTES\s*=\s*128\s*\*\s*1024/);
+  assert.match(apiSource, /OFFLINE_TTL_MS\s*=\s*7\s*\*\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
+  assert.match(apiSource, /headers:\s*\{\s*"Idempotency-Key":\s*item\.idempotencyKey\s*\}/);
+  assert.match(apiSource, /headers:\s*\{\s*"Idempotency-Key":\s*key\s*\}/);
+  assert.match(apiSource, /if\s*\(offlineScope\(\)\s*!==\s*scopeAtStart\)\s*break/);
+  assert.match(workspaceSource, /function OfflineQueueControl\s*\(/);
+  assert.match(workspaceSource, /yalnız aynı kullanıcı ile firma kapsamında eşitlenir/i);
 });
 
 test("every database migration is copied unchanged into the Sites package", async () => {

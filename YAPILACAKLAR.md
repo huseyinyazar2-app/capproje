@@ -29,7 +29,8 @@
 - [x] Liste, kanban ve takvim görünümlerini rol ve modüle göre sunmak.
 - [ ] Uzun üretim ve kapasite planları için zaman çizelgesi görünümü eklemek.
 - [ ] Genel aramayı proje kodu, müşteri, mahal, ürün, teklif, sipariş ve belge içeriğinde çalıştırmak.
-- [ ] Mobil saha kullanımını büyük aksiyonlar, hızlı fotoğraf, çevrimdışı kuyruk ve bağlantı geri gelince güvenli eşitlemeyle tamamlamak.
+- [x] Mobilde güvenli yeni kayıtları tenant/kullanıcı kapsamlı çevrimdışı kuyruğa almak ve bağlantı gelince idempotent eşitlemek.
+- [ ] Mobil saha ekranlarını büyük aksiyonlar ve hızlı fotoğraf çekimi için ayrıca sadeleştirmek.
 - [ ] Rol bazlı ana sayfaları yönetim, satış/mimar, satın alma, üretim, montaj, finans ve insan kaynakları için özelleştirmek.
 - [ ] Yapay zekâ özelliklerini bu aşamada geliştirmemek; veri kalitesi ve operasyon altyapısı olgunlaşınca ayrıca ele almak.
 

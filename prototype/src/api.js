@@ -59,6 +59,19 @@ const TENANT_KEY = "capproje.tenant.id";
 const DEMO_USER_KEY = "capproje.demo.user-email";
 const DEMO_AUTH_ENABLED = import.meta.env.DEV || String(import.meta.env.VITE_ENABLE_DEMO_AUTH) === "true";
 let accessToken = null;
+const OFFLINE_DB_NAME = "capproje-offline-v1";
+const OFFLINE_STORE = "mutations";
+const OFFLINE_MAX_ITEMS = 100;
+const OFFLINE_MAX_BYTES = 128 * 1024;
+const OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const OFFLINE_CREATE_RESOURCES = new Set([
+  "siteSurveys", "surveyMeasurements", "workItems", "projectTasks", "purchases", "production", "installations",
+  "attendance", "projectMeetings", "meetingActions", "qualityInspections", "handoverPunchItems",
+  "projectCommunications", "resourceAssignments", "materialRequirements",
+]);
+const offlineQueueListeners = new Set();
+let offlineContext = null;
+let offlineSyncPromise = null;
 
 export const RESOURCE_SLUGS = Object.freeze({
   dashboard: "dashboard",
@@ -311,8 +324,175 @@ function idempotencyKey(resource, action) {
   return `capproje:${resource}:${action}:${nonce}`;
 }
 
+function offlineRecordId(prefix = "offline") {
+  const nonce = typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}_${nonce}`;
+}
+
+function offlineScope(context = offlineContext) {
+  return context?.tenantId && context?.userId ? `${context.tenantId}:${context.userId}` : null;
+}
+
+function openOfflineDb() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new ApiError("Bu cihaz çevrimdışı işlem kuyruğunu desteklemiyor.", { code: "OFFLINE_STORAGE_UNAVAILABLE" }));
+      return;
+    }
+    const request = indexedDB.open(OFFLINE_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(OFFLINE_STORE)) {
+        const store = db.createObjectStore(OFFLINE_STORE, { keyPath: "id" });
+        store.createIndex("scope", "scope", { unique: false });
+        store.createIndex("createdAt", "createdAt", { unique: false });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(new ApiError("Çevrimdışı işlem kuyruğu açılamadı.", { code: "OFFLINE_STORAGE_ERROR" }));
+  });
+}
+
+async function offlineStoreRequest(mode, operation) {
+  const db = await openOfflineDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const transaction = db.transaction(OFFLINE_STORE, mode);
+      const request = operation(transaction.objectStore(OFFLINE_STORE));
+      let result;
+      request.onsuccess = () => { result = request.result; };
+      request.onerror = () => reject(new ApiError("Çevrimdışı işlem kuyruğu güncellenemedi.", { code: "OFFLINE_STORAGE_ERROR" }));
+      transaction.oncomplete = () => resolve(result);
+      transaction.onerror = () => reject(new ApiError("Çevrimdışı işlem kuyruğu güncellenemedi.", { code: "OFFLINE_STORAGE_ERROR" }));
+      transaction.onabort = () => reject(new ApiError("Çevrimdışı işlem kuyruğu güncellenemedi.", { code: "OFFLINE_STORAGE_ERROR" }));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+const readScopedOfflineMutations = (scope) => offlineStoreRequest("readonly", (store) => store.index("scope").getAll(scope));
+const putOfflineMutation = (item) => offlineStoreRequest("readwrite", (store) => store.put(item));
+const deleteOfflineMutation = (id) => offlineStoreRequest("readwrite", (store) => store.delete(id));
+
+async function scopedOfflineMutations() {
+  const scope = offlineScope();
+  if (!scope) return [];
+  const nowMs = Date.now();
+  const all = await readScopedOfflineMutations(scope);
+  const expired = all.filter((item) => item.expiresAt <= nowMs);
+  await Promise.all(expired.map((item) => deleteOfflineMutation(item.id)));
+  return all.filter((item) => item.expiresAt > nowMs).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+async function offlineQueueSnapshot() {
+  if (!offlineScope()) return { items: [], pending: 0, failed: 0, syncing: false };
+  const items = await scopedOfflineMutations();
+  return {
+    items,
+    pending: items.filter((item) => item.status === "pending" || item.status === "syncing").length,
+    failed: items.filter((item) => item.status === "failed").length,
+    syncing: items.some((item) => item.status === "syncing"),
+  };
+}
+
+async function notifyOfflineQueue() {
+  try {
+    const snapshot = await offlineQueueSnapshot();
+    offlineQueueListeners.forEach((listener) => listener(snapshot));
+    return snapshot;
+  } catch (error) {
+    const snapshot = { items: [], pending: 0, failed: 0, syncing: false, error };
+    offlineQueueListeners.forEach((listener) => listener(snapshot));
+    return snapshot;
+  }
+}
+
+async function queueOfflineCreate(resource, values, path, body, key) {
+  const scope = offlineScope();
+  if (!scope) throw new ApiError("Çevrimdışı kayıt için aktif kullanıcı ve firma bilgisi bulunamadı.", { code: "OFFLINE_CONTEXT_REQUIRED" });
+  const items = await scopedOfflineMutations();
+  if (items.length >= OFFLINE_MAX_ITEMS) throw new ApiError("Çevrimdışı kuyruk dolu. Bağlantı kurup bekleyen kayıtları eşitleyin.", { code: "OFFLINE_QUEUE_FULL" });
+  const serialized = JSON.stringify(body);
+  const bytes = typeof TextEncoder === "function" ? new TextEncoder().encode(serialized).byteLength : serialized.length;
+  if (bytes > OFFLINE_MAX_BYTES) throw new ApiError("Bu kayıt çevrimdışı kuyruk için çok büyük.", { code: "OFFLINE_PAYLOAD_TOO_LARGE" });
+  const nowIso = new Date().toISOString();
+  const item = {
+    id: offlineRecordId(), localId: offlineRecordId("local"), scope, tenantId: offlineContext.tenantId, userId: offlineContext.userId,
+    resource, action: "create", method: "POST", path, body, idempotencyKey: key, status: "pending", attempts: 0,
+    createdAt: nowIso, expiresAt: Date.now() + OFFLINE_TTL_MS, errorCode: null, errorMessage: null,
+  };
+  await putOfflineMutation(item);
+  await notifyOfflineQueue();
+  return { id: item.localId, ...values, _offlineQueued: true, _offlineQueueId: item.id, createdAt: nowIso };
+}
+
+async function syncOfflineMutations() {
+  if (offlineSyncPromise) return offlineSyncPromise;
+  if (typeof navigator !== "undefined" && !navigator.onLine) return { synced: 0, remaining: (await offlineQueueSnapshot()).items.length };
+  const scopeAtStart = offlineScope();
+  if (!scopeAtStart) return { synced: 0, remaining: 0 };
+  offlineSyncPromise = (async () => {
+    let synced = 0;
+    const items = await scopedOfflineMutations();
+    for (const item of items) {
+      if (offlineScope() !== scopeAtStart) break;
+      await putOfflineMutation({ ...item, status: "syncing", attempts: item.attempts + 1, errorCode: null, errorMessage: null });
+      await notifyOfflineQueue();
+      try {
+        await request(item.path, { method: item.method, body: item.body, tenantId: item.tenantId, headers: { "Idempotency-Key": item.idempotencyKey } });
+        await deleteOfflineMutation(item.id);
+        synced += 1;
+      } catch (error) {
+        const retryable = ["OFFLINE", "NETWORK_ERROR", "TIMEOUT", "idempotency_in_progress"].includes(error.code) || error.status === 401 || error.status >= 500;
+        await putOfflineMutation({ ...item, status: retryable ? "pending" : "failed", attempts: item.attempts + 1, errorCode: error.code, errorMessage: error.message });
+        if (retryable) break;
+      }
+    }
+    const snapshot = await notifyOfflineQueue();
+    return { synced, remaining: snapshot.items.length, failed: snapshot.failed };
+  })();
+  try {
+    return await offlineSyncPromise;
+  } finally {
+    offlineSyncPromise = null;
+    await notifyOfflineQueue();
+  }
+}
+
 export const api = {
   config: API_CONFIG,
+  canQueueOffline(resource, action = "create") {
+    return action === "create" && OFFLINE_CREATE_RESOURCES.has(resource);
+  },
+  setOfflineContext(context) {
+    offlineContext = context?.tenantId && context?.userId ? { tenantId: String(context.tenantId), userId: String(context.userId) } : null;
+    return notifyOfflineQueue();
+  },
+  subscribeOfflineQueue(listener) {
+    offlineQueueListeners.add(listener);
+    notifyOfflineQueue();
+    return () => offlineQueueListeners.delete(listener);
+  },
+  offlineQueue() {
+    return offlineQueueSnapshot();
+  },
+  syncOfflineQueue() {
+    return syncOfflineMutations();
+  },
+  async retryOfflineQueue(id = null) {
+    const items = await scopedOfflineMutations();
+    const retryItems = items.filter((item) => (!id || item.id === id) && item.status === "failed");
+    await Promise.all(retryItems.map((item) => putOfflineMutation({ ...item, status: "pending", errorCode: null, errorMessage: null })));
+    await notifyOfflineQueue();
+    return syncOfflineMutations();
+  },
+  async discardOfflineMutation(id) {
+    const item = (await scopedOfflineMutations()).find((candidate) => candidate.id === id);
+    if (!item) return offlineQueueSnapshot();
+    await deleteOfflineMutation(item.id);
+    return notifyOfflineQueue();
+  },
   setToken(token) {
     // Deliberately memory-only. Production auth should use an HttpOnly cookie
     // or an ephemeral platform token; persistent browser storage exposes tokens
@@ -351,6 +531,7 @@ export const api = {
       storageSet(TENANT_KEY, null);
     }
     accessToken = null;
+    await this.setOfflineContext(null);
     if (DEMO_AUTH_ENABLED) storageSet(DEMO_USER_KEY, null);
   },
   async session() {
@@ -393,7 +574,19 @@ export const api = {
     const endpoint = API_CONFIG.endpoints[resource];
     if (!endpoint) throw new ApiError(`Bilinmeyen kaynak: ${resource}`, { code: "UNKNOWN_RESOURCE" });
     const createEndpoint = resource === "memberships" ? "/memberships/invite" : endpoint;
-    return mapIncoming(resource, (await request(createEndpoint, { method: "POST", body: mapOutgoing(resource, values) })).data);
+    const body = mapOutgoing(resource, values);
+    const key = idempotencyKey(resource, "create");
+    if (typeof navigator !== "undefined" && !navigator.onLine && this.canQueueOffline(resource)) {
+      return queueOfflineCreate(resource, values, createEndpoint, body, key);
+    }
+    try {
+      return mapIncoming(resource, (await request(createEndpoint, { method: "POST", body, headers: { "Idempotency-Key": key } })).data);
+    } catch (error) {
+      if (this.canQueueOffline(resource) && ["OFFLINE", "NETWORK_ERROR", "TIMEOUT"].includes(error.code)) {
+        return queueOfflineCreate(resource, values, createEndpoint, body, key);
+      }
+      throw error;
+    }
   },
   async update(resource, id, values) {
     const endpoint = API_CONFIG.endpoints[resource];
