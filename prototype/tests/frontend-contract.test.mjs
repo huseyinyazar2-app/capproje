@@ -144,3 +144,15 @@ test("operational records share accessible list, kanban and calendar views", () 
   assert.match(liveSource, /rangeEndField:\s*"plannedEnd"/);
   assert.match(liveSource, /day >= start && day <= end/);
 });
+
+test("field mode provides permission-aware mobile actions and contextual camera capture", () => {
+  assert.match(liveSource, /id:\s*"fieldMode"[^}]*resource:\s*"field-mode"[^}]*authenticated:\s*true/);
+  assert.match(liveSource, /function FieldMode\s*\(/);
+  assert.match(liveSource, /fieldActions\.filter\(\(action\)\s*=>\s*permissionAllows\(session,\s*"create",\s*resourceForAction\(action\)\)\)/);
+  assert.match(liveSource, /function QuickPhotoModal\s*\(/);
+  assert.match(liveSource, /accept="image\/\*"\s+capture="environment"/);
+  assert.match(liveSource, /10\s*\*\s*1024\s*\*\s*1024/);
+  assert.match(liveSource, /!online\s*&&\s*!canUseActionOffline\(action\)/);
+  assert.match(liveSource, /disabled=\{!online\s*&&\s*!canUseActionOffline\(action\)\}/);
+  assert.match(liveSource, /await api\.create\(targetModule\.resource,\s*values\)/);
+});
