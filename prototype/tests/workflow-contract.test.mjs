@@ -43,6 +43,7 @@ async function setup() {
   database.exec(await readFile(new URL("../migrations/0005_capproje_domain.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0006_phone_auth.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
   database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-a", "Firma A", "firma-a", timestamp, timestamp);
   database.prepare("INSERT INTO users (id,email,full_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("owner-a", "owner@a.test", "Firma Sahibi", "active", timestamp, timestamp);
   database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-owner", "tenant-a", "owner", "Firma Sahibi", 1, timestamp, timestamp);
@@ -67,6 +68,7 @@ test("bootstrap owner can open a session without knowing the tenant id", async (
   database.exec(await readFile(new URL("../migrations/0005_capproje_domain.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0006_phone_auth.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
   const env = { DB: new D1Database(database), ALLOW_DEV_AUTH: "true", BOOTSTRAP_SECRET: "secret-for-test", PASSWORD_AUTH_ENABLED: "true", PASSWORD_AUTH_PEPPER: "test-password-pepper-1234567890" };
   const bootstrapResponse = await worker.fetch(new Request("https://example.test/api/v1/bootstrap", {
     method: "POST",
@@ -206,6 +208,65 @@ test("project transitions reject skipped phases", async () => {
   assert.equal(response.status, 409);
 });
 
+test("project command center enforces readiness gates and creates stage tasks", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO projects (id,tenant_id,code,customer_id,name,status,contract_amount_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-AKIS", "customer-a", "Akıllı Akış", "discovery", 2_000_000, timestamp, timestamp);
+
+  let response = await worker.fetch(request("/api/v1/projects/project-a/command-center", { method: "GET" }), env);
+  let payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.data.nextStatus, "estimating");
+  assert.equal(payload.data.blockers[0].id, "survey");
+  assert.ok(payload.data.stages.some((stage) => stage.status === "production"));
+
+  response = await worker.fetch(request("/api/v1/projects/project-a/transition", { body: { status: "estimating" } }), env);
+  payload = await response.json();
+  assert.equal(response.status, 409);
+  assert.equal(payload.error.code, "project_gate_blocked");
+  assert.equal(database.prepare("SELECT status FROM projects WHERE id='project-a'").get().status, "discovery");
+
+  database.prepare("INSERT INTO site_surveys (id,tenant_id,project_id,customer_id,survey_number,survey_date,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").run("survey-a", "tenant-a", "project-a", "customer-a", "K-1", "2026-08-09", "approved", timestamp, timestamp);
+  response = await worker.fetch(request("/api/v1/projects/project-a/transition", { body: { status: "estimating" } }), env);
+  assert.equal(response.status, 200);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM project_tasks WHERE project_id='project-a' AND metadata_json LIKE '%auto_generated%'").get().count, 2);
+  response = await worker.fetch(request("/api/v1/notifications", { method: "GET" }), env);
+  payload = await response.json();
+  assert.equal(payload.meta.unread, 1);
+  assert.equal(payload.data[0].project_id, "project-a");
+  response = await worker.fetch(request(`/api/v1/notifications/${payload.data[0].id}/read`, { body: {} }), env);
+  assert.equal((await response.json()).data.status, "read");
+});
+
+test("owner project gate override requires a meaningful audited reason", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-IST", "İstisna", "discovery", timestamp, timestamp);
+
+  let response = await worker.fetch(request("/api/v1/projects/project-a/transition", { body: { status: "estimating", override_reason: "kısa" } }), env);
+  assert.equal(response.status, 422);
+  response = await worker.fetch(request("/api/v1/projects/project-a/transition", { body: { status: "estimating", override_reason: "Müşteri keşfi yarın imzalayacak" } }), env);
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.meta.override_used, true);
+  const audit = database.prepare("SELECT changes_json FROM audit_logs WHERE entity_type='projects' AND entity_id='project-a' ORDER BY created_at DESC LIMIT 1").get();
+  assert.match(audit.changes_json, /Müşteri keşfi yarın imzalayacak/);
+});
+
+test("communication, capacity and global search stay tenant scoped", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO projects (id,tenant_id,code,customer_id,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-ARAMA", "customer-a", "Arama Otel Projesi", "design", timestamp, timestamp);
+
+  let response = await worker.fetch(request("/api/v1/project-communications", { body: { project_id: "project-a", customer_id: "customer-a", channel: "whatsapp", direction: "outbound", contact_name: "Otel Müdürü", subject: "Numune onayı", summary: "Ceviz kaplama onaylandı", occurred_at: timestamp, next_follow_up_at: "2026-08-12T09:00:00.000Z", status: "follow_up" } }), env);
+  assert.equal(response.status, 200);
+  response = await worker.fetch(request("/api/v1/resource-assignments", { body: { project_id: "project-a", resource_type: "team", resource_name: "Montaj Ekibi A", role: "Lobi montajı", planned_start: "2026-08-15", planned_end: "2026-08-20", allocation_percent: 80, status: "confirmed" } }), env);
+  assert.equal(response.status, 200);
+
+  response = await worker.fetch(request("/api/v1/search?q=Arama", { method: "GET" }), env);
+  const results = (await response.json()).data;
+  assert.equal(results.some((item) => item.id === "project-a" && item.module === "projects"), true);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM project_communications WHERE tenant_id='tenant-a' AND project_id='project-a'").get().count, 1);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM resource_assignments WHERE tenant_id='tenant-a' AND project_id='project-a'").get().count, 1);
+});
+
 test("workflow state rolls back when the audit insert fails", async () => {
   const { database, env } = await setup();
   database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-FAIL", "Audit rollback", "lead", timestamp, timestamp);
@@ -263,8 +324,8 @@ test("scheduled backups include the latest schema manifest and never mix tenants
   for (const [key, content] of objects) {
     const lines = content.split("\n").map((line) => JSON.parse(line));
     const manifest = lines[0];
-    assert.equal(manifest.schema_version, 7);
-    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql"]);
+    assert.equal(manifest.schema_version, 8);
+    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql"]);
     assert.match(key, new RegExp(`^backups/${manifest.tenant_id}/`));
     for (const entry of lines.slice(1)) {
       if (entry.table === "users") continue;
@@ -294,7 +355,7 @@ test("request fallback creates at most one daily tenant backup and scheduled reu
   assert.equal(objects.size, 1);
   const manifest = JSON.parse([...objects.values()][0].split("\n")[0]);
   assert.equal(manifest.tenant_id, "tenant-a");
-  assert.equal(manifest.schema_version, 7);
+  assert.equal(manifest.schema_version, 8);
 });
 
 test("owner can create, rotate and revoke hashed expiring API tokens", async () => {

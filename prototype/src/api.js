@@ -47,6 +47,10 @@ export const API_CONFIG = Object.freeze({
     qualityInspections: "/quality-inspections",
     handovers: "/handovers",
     handoverPunchItems: "/handover-punch-items",
+    projectCommunications: "/project-communications",
+    resourceAssignments: "/resource-assignments",
+    notifications: "/notifications",
+    search: "/search",
   }),
 });
 
@@ -93,6 +97,8 @@ export const RESOURCE_SLUGS = Object.freeze({
   qualityInspections: "quality-inspections",
   handovers: "handovers",
   handoverPunchItems: "handover-punch-items",
+  projectCommunications: "project-communications",
+  resourceAssignments: "resource-assignments",
 });
 
 const FIELD_MAPS = Object.freeze({
@@ -131,6 +137,8 @@ const FIELD_MAPS = Object.freeze({
   qualityInspections: { inspectionNumber: "inspection_number", projectId: "project_id", workItemId: "work_item_id", productionOrderId: "production_order_id", installationId: "installation_id", inspectionType: "inspection_type", inspectionDate: "inspection_date", inspectorUserId: "inspector_user_id", checklist: "checklist_json", defectNotes: "defect_notes", correctiveAction: "corrective_action", correctiveDueDate: "corrective_due_date" },
   handovers: { handoverNumber: "handover_number", projectId: "project_id", installationId: "installation_id", handoverDate: "handover_date", customerContact: "customer_contact", satisfactionScore: "satisfaction_score", customerSignatureFileId: "customer_signature_file_id", acceptanceNotes: "acceptance_notes" },
   handoverPunchItems: { handoverId: "handover_id", responsibleUserId: "responsible_user_id", dueDate: "due_date", resolvedAt: "resolved_at", acceptedAt: "accepted_at" },
+  projectCommunications: { projectId: "project_id", customerId: "customer_id", contactName: "contact_name", occurredAt: "occurred_at", nextFollowUpAt: "next_follow_up_at", ownerUserId: "owner_user_id" },
+  resourceAssignments: { projectId: "project_id", employeeId: "employee_id", resourceType: "resource_type", resourceName: "resource_name", plannedStart: "planned_start", plannedEnd: "planned_end", allocationPercent: "allocation_percent" },
 });
 
 const STATUS_VALUES = Object.freeze({
@@ -347,6 +355,20 @@ export const api = {
   },
   async dashboard() {
     return mapIncoming("dashboard", (await request(API_CONFIG.endpoints.dashboard)).data);
+  },
+  async projectCommandCenter(projectId) {
+    const data = (await request(`/projects/${encodeURIComponent(projectId)}/command-center`)).data;
+    return { ...mapIncoming("dashboard", data), project: mapIncoming("projects", data.project) };
+  },
+  async globalSearch(query) {
+    return mapIncoming("dashboard", (await request(withQuery(API_CONFIG.endpoints.search, { q: query }))).data);
+  },
+  async notifications() {
+    const result = await request(API_CONFIG.endpoints.notifications);
+    return { ...result, data: mapIncoming("dashboard", result.data) };
+  },
+  async markNotification(notificationId, status = "read") {
+    return (await request(`/notifications/${encodeURIComponent(notificationId)}/read`, { method: "POST", body: { status } })).data;
   },
   async list(resource, query) {
     const endpoint = API_CONFIG.endpoints[resource];

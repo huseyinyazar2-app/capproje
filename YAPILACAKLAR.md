@@ -1,6 +1,6 @@
 # Capproje Ürün Yol Haritası ve Yapılacaklar
 
-> Mevcut aşama: Backend geliştirmesine geçmeden önce nihai ürün yapısını, ekranları, iş akışlarını ve form alanlarını müşteriyle netleştirmek.
+> Mevcut aşama: Çok firmalı çekirdek ürün çalışıyor. Şimdi proje süreçlerini birbirine bağlayan operasyon zekâsı ve kullanıcı deneyimi adım adım tamamlanıyor.
 
 ## Ürün konumu ve temel kararlar
 
@@ -11,6 +11,26 @@
 - [ ] Tek çekirdek ürün kullanmak; firma ihtiyaçlarını ayarlar, roller, süreç şablonları ve özel alanlarla karşılamak.
 - [ ] Müşteriye özel ayrı kod kolları oluşturmamak.
 - [ ] Her yeni özelliğin ölçülebilir şekilde zaman kazandırması, hatayı veya maliyet kaybını azaltması şartını koymak.
+
+## Kabul edilen operasyon zekâsı kapsamı — yapay zekâ hariç
+
+- [x] Tasarım 2'deki görünür proje aşama şeridini çalışan proje ekranına taşımak.
+- [x] Proje komuta merkezinde aşama hazırlık puanı, sıradaki en doğru işler, açık görevler, dosyalar ve proje kârlılığını birlikte göstermek.
+- [x] Keşif, teklif, sözleşme, tasarım, satın alma, üretim, kalite, montaj ve teslim arasına zorunlu kontrol kapıları koymak.
+- [x] Kritik eksikleri engel, daha düşük riskleri uyarı olarak sınıflandırmak.
+- [x] Firma sahibi/yönetici için gerekçeli istisna ve denetim kaydı oluşturmak.
+- [x] Proje aşaması değiştiğinde ilgili departmanlara standart görevleri otomatik açmak.
+- [x] Yönetim panelinde proje hattını ve geciken görev, bekleyen satın alma, tasarım ve kalite sorunlarını görünür yapmak.
+- [ ] Bildirim merkezi, kişiye özel görev kutusu, yaklaşan termin ve gecikme uyarılarını tamamlamak.
+- [ ] Proje iletişim günlüğünü telefon, e-posta, WhatsApp, toplantı, karar ve takip tarihiyle ilişkilendirmek.
+- [ ] Atölye, montaj ve proje ekipleri için kapasite/yük planını proje takvimine bağlamak.
+- [ ] Stok rezervasyonu, satın alma ihtiyacı ve üretim başlangıç tarihini tek akışta bağlamak.
+- [ ] Fotoğraf ve belgeleri proje, mahal, iş kalemi, revizyon, kalite kusuru ve montaj adımı bağlamında göstermek.
+- [ ] Liste, kanban, takvim ve zaman çizelgesi görünümlerini rol ve modüle göre sunmak.
+- [ ] Genel aramayı proje kodu, müşteri, mahal, ürün, teklif, sipariş ve belge içeriğinde çalıştırmak.
+- [ ] Mobil saha kullanımını büyük aksiyonlar, hızlı fotoğraf, çevrimdışı kuyruk ve bağlantı geri gelince güvenli eşitlemeyle tamamlamak.
+- [ ] Rol bazlı ana sayfaları yönetim, satış/mimar, satın alma, üretim, montaj, finans ve insan kaynakları için özelleştirmek.
+- [ ] Yapay zekâ özelliklerini bu aşamada geliştirmemek; veri kalitesi ve operasyon altyapısı olgunlaşınca ayrıca ele almak.
 
 ## Öncelik 0 — Müşteri onayı için ürün ve ekran tasarımı
 

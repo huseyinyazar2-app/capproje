@@ -37,6 +37,8 @@ const resources = {
   "quality-inspections": { table: "quality_inspections", required: ["inspection_number","project_id","inspection_type","inspection_date"], search: ["inspection_number","defect_notes","corrective_action"], filters: ["project_id","work_item_id","production_order_id","installation_id","inspection_type","result","status"], refs: { project_id: "projects", work_item_id: "work_items", production_order_id: "production_orders", installation_id: "installations" }, memberRefs: ["inspector_user_id"], fields: ["inspection_number","project_id","work_item_id","production_order_id","installation_id","inspection_type","inspection_date","inspector_user_id","result","checklist_json","defect_notes","corrective_action","corrective_due_date","status","metadata_json"] },
   handovers: { table: "handovers", required: ["handover_number","project_id","handover_date","customer_contact"], search: ["handover_number","customer_contact","acceptance_notes"], filters: ["project_id","installation_id","status"], refs: { project_id: "projects", installation_id: "installations", customer_signature_file_id: "files" }, fields: ["handover_number","project_id","installation_id","handover_date","customer_contact","satisfaction_score","customer_signature_file_id","acceptance_notes","status","metadata_json"] },
   "handover-punch-items": { table: "handover_punch_items", required: ["handover_id","title"], search: ["title","description"], filters: ["handover_id","responsible_user_id","severity","status"], refs: { handover_id: "handovers" }, memberRefs: ["responsible_user_id"], fields: ["handover_id","title","description","responsible_user_id","due_date","severity","status","resolved_at","accepted_at","metadata_json"] },
+  "project-communications": { table: "project_communications", required: ["project_id","channel","subject","occurred_at"], search: ["contact_name","subject","summary","decision"], filters: ["project_id","customer_id","channel","owner_user_id","status"], refs: { project_id: "projects", customer_id: "customers" }, memberRefs: ["owner_user_id"], fields: ["project_id","customer_id","channel","direction","contact_name","subject","summary","decision","occurred_at","next_follow_up_at","owner_user_id","status","metadata_json"] },
+  "resource-assignments": { table: "resource_assignments", required: ["project_id","resource_type","resource_name","planned_start","planned_end"], search: ["resource_name","role","notes"], filters: ["project_id","employee_id","resource_type","status"], refs: { project_id: "projects", employee_id: "employees" }, fields: ["project_id","employee_id","resource_type","resource_name","role","planned_start","planned_end","allocation_percent","status","notes","metadata_json"] },
 };
 
 const aliases = {
@@ -45,8 +47,8 @@ const aliases = {
   transactions: "financial-transactions",
 };
 
-const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql"];
+const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql"];
 const dailyBackupSeen = new Map();
 const ownerRoles = new Set(["owner", "admin"]);
 const PHONE_SESSION_COOKIE = "__Host-capproje_session";
@@ -73,6 +75,27 @@ const projectTransitions = {
   acceptance: ["completed", "installation", "on_hold"],
   on_hold: ["discovery", "estimating", "offered", "contracted", "design", "procurement", "production", "installation", "acceptance", "cancelled"],
   completed: [], lost: [], cancelled: [],
+};
+const projectStageDefinitions = [
+  ["lead", "Talep"], ["discovery", "Keşif"], ["estimating", "Teklif Hazırlığı"], ["offered", "Teklif"],
+  ["contracted", "Sözleşme"], ["design", "Tasarım"], ["procurement", "Satın Alma"],
+  ["production", "Üretim & Kalite"], ["installation", "Montaj"], ["acceptance", "Teslim"], ["completed", "Kapanış"],
+];
+const projectPrimaryNext = {
+  lead: "discovery", discovery: "estimating", estimating: "offered", offered: "contracted", contracted: "design",
+  design: "procurement", procurement: "production", production: "installation", installation: "acceptance", acceptance: "completed",
+};
+const projectTaskTemplates = {
+  discovery: [["Keşif randevusunu planla", "Proje", 3]],
+  estimating: [["Keşif metrajlarını doğrula", "Proje", 2], ["Güncel tedarikçi fiyatlarını topla", "Satın Alma", 4]],
+  offered: [["Teklifi müşteriye sun ve takip tarihini belirle", "Satış", 2]],
+  contracted: [["Sözleşme ve ödeme planını tamamla", "Finans", 3], ["Proje başlangıç toplantısını planla", "Proje", 2]],
+  design: [["2D/3D tasarım paketini hazırla", "Tasarım", 7], ["Müşteri tasarım onayını takip et", "Tasarım", 9]],
+  procurement: [["Malzeme ihtiyaç listesini kesinleştir", "Satın Alma", 3], ["Stok rezervasyonlarını kontrol et", "Depo", 3]],
+  production: [["Üretim emirlerini ve iş merkezi planını yayınla", "Üretim", 2], ["Final kalite kontrolünü planla", "Kalite", 7]],
+  installation: [["Saha hazır olma kontrolünü tamamla", "Montaj", 2], ["Sevk ve montaj ekibini kesinleştir", "Montaj", 2]],
+  acceptance: [["Teslim eksik listesini müşteriyle kontrol et", "Proje", 2]],
+  completed: [["Proje kapanış ve kârlılık değerlendirmesini tamamla", "Yönetim", 5]],
 };
 const workflowManagedResources = new Set(["offers", "projects", "production-orders", "purchase-requests", "leaves", "financial-transactions", "site-surveys", "contracts", "design-revisions", "progress-payments", "stock-movements", "project-meetings", "quality-inspections", "handovers"]);
 
@@ -409,7 +432,130 @@ async function getDashboard(env, principal) {
   const data = {};
   for (const [name, sql] of queries) data[name] = await one(env.DB.prepare(sql).bind(tenant));
   data.recentProjects = (await all(env.DB.prepare("SELECT id,code,name,status,progress_percent,updated_at FROM projects WHERE tenant_id=? ORDER BY updated_at DESC LIMIT 6").bind(tenant))).map(decodeRow);
+  data.pipeline = (await all(env.DB.prepare("SELECT status,COUNT(*) AS count FROM projects WHERE tenant_id=? AND status NOT IN ('cancelled','lost') GROUP BY status ORDER BY status").bind(tenant))).map(decodeRow);
+  data.attention = await one(env.DB.prepare("SELECT (SELECT COUNT(*) FROM project_tasks WHERE tenant_id=? AND status IN ('todo','in_progress','blocked') AND planned_end IS NOT NULL AND planned_end<date('now')) AS overdue_tasks,(SELECT COUNT(*) FROM purchase_requests WHERE tenant_id=? AND status='pending') AS pending_purchases,(SELECT COUNT(*) FROM design_revisions WHERE tenant_id=? AND status IN ('internal_review','client_review')) AS pending_designs,(SELECT COUNT(*) FROM quality_inspections WHERE tenant_id=? AND result IN ('conditional','fail') AND status<>'closed') AS quality_issues,(SELECT COUNT(*) FROM notifications WHERE tenant_id=? AND user_id=? AND status='unread') AS unread_notifications,(SELECT COUNT(*) FROM project_communications WHERE tenant_id=? AND status IN ('open','follow_up') AND next_follow_up_at IS NOT NULL AND next_follow_up_at<=date('now','+3 day')) AS pending_follow_ups,(SELECT COUNT(*) FROM resource_assignments WHERE tenant_id=? AND status IN ('planned','confirmed','active') AND planned_start<=date('now','+14 day') AND planned_end>=date('now')) AS upcoming_assignments").bind(tenant, tenant, tenant, tenant, tenant, principal.user.id, tenant, tenant));
   return json({ data });
+}
+
+async function getNotifications(env, principal) {
+  const rows = (await all(env.DB.prepare("SELECT id,project_id,type,title,message,module,record_id,status,due_at,read_at,created_at FROM notifications WHERE tenant_id=? AND user_id=? AND status<>'dismissed' ORDER BY CASE status WHEN 'unread' THEN 0 ELSE 1 END,created_at DESC LIMIT 50").bind(principal.tenantId, principal.user.id))).map(decodeRow);
+  return json({ data: rows, meta: { unread: rows.filter((row) => row.status === "unread").length } });
+}
+
+async function markNotification(request, env, principal, notificationId) {
+  const notification = await one(env.DB.prepare("SELECT id,status FROM notifications WHERE id=? AND tenant_id=? AND user_id=?").bind(notificationId, principal.tenantId, principal.user.id));
+  if (!notification) return problem(404, "not_found", "Bildirim bulunamadı.");
+  let body = {};
+  try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
+  const status = body?.status === "dismissed" ? "dismissed" : "read";
+  const timestamp = now();
+  await run(env.DB.prepare("UPDATE notifications SET status=?,read_at=?,updated_at=? WHERE id=? AND tenant_id=? AND user_id=?").bind(status, status === "read" ? timestamp : null, timestamp, notificationId, principal.tenantId, principal.user.id));
+  return json({ data: { id: notificationId, status } });
+}
+
+async function globalSearch(request, env, principal) {
+  const query = String(new URL(request.url).searchParams.get("q") || "").trim();
+  if (query.length < 2) return json({ data: [] });
+  const like = `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+  const tenant = principal.tenantId;
+  const definitions = [
+    ["projects", "projects", "code", "name", "status", "projects.read"],
+    ["customers", "customers", "code", "name", "contact_name", "customers.read"],
+    ["offers", "offers", "offer_number", "notes", "status", "offers.read"],
+    ["workItems", "work_items", "item_code", "description", "space_name", "work-items.read"],
+    ["purchases", "purchase_requests", "request_number", "description", "status", "purchase-requests.read"],
+    ["files", "files", "file_name", "description", "category", "files.read"],
+  ];
+  const data = [];
+  for (const [module, table, codeColumn, titleColumn, subtitleColumn, permission] of definitions) {
+    if (!allowed(principal, permission)) continue;
+    const sql = `SELECT id,${codeColumn} AS code,${titleColumn} AS title,${subtitleColumn} AS subtitle FROM ${table} WHERE tenant_id=? AND (COALESCE(${codeColumn},'') LIKE ? ESCAPE '\\' OR COALESCE(${titleColumn},'') LIKE ? ESCAPE '\\' OR COALESCE(${subtitleColumn},'') LIKE ? ESCAPE '\\') ORDER BY updated_at DESC LIMIT 6`;
+    for (const row of await all(env.DB.prepare(sql).bind(tenant, like, like, like))) data.push({ ...decodeRow(row), module });
+  }
+  return json({ data: data.slice(0, 30) });
+}
+
+function transitionConditions(target, facts) {
+  const condition = (id, label, passed, severity, module, message = label) => ({ id, label, passed: Boolean(passed), severity, module, message });
+  const rules = {
+    discovery: [condition("customer", "Müşteri bağlantısı tanımlı", facts.has_customer, "warning", "projects", "Projeye müşteri bağlanması önerilir.")],
+    estimating: [condition("survey", "Onaylı keşif ve metraj mevcut", facts.survey_approved > 0, "blocker", "siteSurveys")],
+    offered: [condition("offer", "Müşteriye sunulmuş teklif mevcut", facts.offer_presented > 0, "blocker", "offers")],
+    contracted: [condition("accepted_offer", "Kabul edilmiş teklif mevcut", facts.offer_accepted > 0 || facts.contract_signed > 0, "blocker", "offers"), condition("signed_contract", "İmzalı sözleşme mevcut", facts.contract_signed > 0, "warning", "contracts")],
+    design: [condition("contract", "İmzalı veya aktif sözleşme mevcut", facts.contract_signed > 0, "blocker", "contracts"), condition("payment_plan", "Ödeme planı tanımlı", facts.payment_plan_ready > 0, "warning", "contracts")],
+    procurement: [condition("approved_design", "Onaylı tasarım revizyonu mevcut", facts.design_approved > 0, "blocker", "designRevisions"), condition("work_items", "Ürün ve iş kalemleri tanımlı", facts.work_item_total > 0, "blocker", "workItems")],
+    production: [condition("approved_design", "Güncel tasarım onaylı", facts.design_approved > 0, "blocker", "designRevisions"), condition("work_items", "Üretilecek iş kalemleri hazır", facts.work_item_total > 0, "blocker", "workItems"), condition("purchase_approvals", "Bekleyen satın alma onayı yok", facts.purchase_pending === 0, "warning", "purchases")],
+    installation: [condition("production_complete", "Üretim emirleri tamamlandı", facts.production_total > 0 && facts.production_done === facts.production_total, "blocker", "production"), condition("quality_pass", "Final kalite kontrolü geçti", facts.final_quality_pass > 0, "blocker", "qualityInspections")],
+    acceptance: [condition("installation_complete", "Montaj tamamlandı", facts.installation_total > 0 && facts.installation_done === facts.installation_total, "blocker", "installations")],
+    completed: [condition("handover", "Müşteri teslimi kabul etti", facts.handover_accepted > 0, "blocker", "handovers"), condition("punch", "Açık teslim eksiği yok", facts.open_punch_items === 0, "blocker", "handoverPunchItems")],
+  };
+  return rules[target] || [];
+}
+
+async function projectCommandCenterData(env, principal, project) {
+  const tenant = principal.tenantId;
+  const projectId = project.id;
+  const facts = decodeRow(await one(env.DB.prepare(`SELECT
+    CASE WHEN ? IS NULL OR ?='' THEN 0 ELSE 1 END AS has_customer,
+    (SELECT COUNT(*) FROM site_surveys WHERE tenant_id=? AND project_id=? AND status='approved') AS survey_approved,
+    (SELECT COUNT(*) FROM offers WHERE tenant_id=? AND project_id=? AND status IN ('sent','accepted')) AS offer_presented,
+    (SELECT COUNT(*) FROM offers WHERE tenant_id=? AND project_id=? AND status='accepted') AS offer_accepted,
+    (SELECT COUNT(*) FROM contracts WHERE tenant_id=? AND project_id=? AND status IN ('signed','active','completed')) AS contract_signed,
+    (SELECT COUNT(*) FROM contracts WHERE tenant_id=? AND project_id=? AND status IN ('signed','active','completed') AND payment_schedule_json NOT IN ('','[]','{}')) AS payment_plan_ready,
+    (SELECT COUNT(*) FROM design_revisions WHERE tenant_id=? AND project_id=? AND status='approved') AS design_approved,
+    (SELECT COUNT(*) FROM work_items WHERE tenant_id=? AND project_id=?) AS work_item_total,
+    (SELECT COUNT(*) FROM purchase_requests WHERE tenant_id=? AND project_id=? AND status='pending') AS purchase_pending,
+    (SELECT COUNT(*) FROM production_orders WHERE tenant_id=? AND project_id=? AND status<>'cancelled') AS production_total,
+    (SELECT COUNT(*) FROM production_orders WHERE tenant_id=? AND project_id=? AND status='completed') AS production_done,
+    (SELECT COUNT(*) FROM quality_inspections WHERE tenant_id=? AND project_id=? AND inspection_type='final' AND result='pass' AND status IN ('completed','closed')) AS final_quality_pass,
+    (SELECT COUNT(*) FROM installations WHERE tenant_id=? AND project_id=? AND status<>'cancelled') AS installation_total,
+    (SELECT COUNT(*) FROM installations WHERE tenant_id=? AND project_id=? AND status='completed') AS installation_done,
+    (SELECT COUNT(*) FROM handovers WHERE tenant_id=? AND project_id=? AND status IN ('accepted','closed')) AS handover_accepted,
+    (SELECT COUNT(*) FROM handover_punch_items hpi JOIN handovers h ON h.id=hpi.handover_id AND h.tenant_id=hpi.tenant_id WHERE hpi.tenant_id=? AND h.project_id=? AND hpi.status IN ('open','in_progress','resolved')) AS open_punch_items,
+    (SELECT COUNT(*) FROM project_tasks WHERE tenant_id=? AND project_id=? AND status IN ('todo','in_progress','blocked')) AS open_tasks,
+    (SELECT COUNT(*) FROM project_tasks WHERE tenant_id=? AND project_id=? AND status IN ('todo','in_progress','blocked') AND planned_end IS NOT NULL AND planned_end<date('now')) AS overdue_tasks,
+    (SELECT COUNT(*) FROM files WHERE tenant_id=? AND entity_type='projects' AND entity_id=?) AS file_total,
+    (SELECT COALESCE(SUM(CASE WHEN type='income' AND status IN ('approved','collected','paid') THEN amount_minor ELSE 0 END),0) FROM financial_transactions WHERE tenant_id=? AND project_id=?) AS income_minor,
+    (SELECT COALESCE(SUM(CASE WHEN type='expense' AND status IN ('approved','paid') THEN amount_minor ELSE 0 END),0) FROM financial_transactions WHERE tenant_id=? AND project_id=?) AS expense_minor,
+    (SELECT COALESCE(SUM(grand_total_minor),0) FROM purchase_orders WHERE tenant_id=? AND project_id=? AND status NOT IN ('draft','cancelled')) AS committed_purchase_minor,
+    (SELECT COUNT(*) FROM project_communications WHERE tenant_id=? AND project_id=?) AS communication_total,
+    (SELECT COUNT(*) FROM project_communications WHERE tenant_id=? AND project_id=? AND status IN ('open','follow_up') AND next_follow_up_at IS NOT NULL) AS pending_follow_ups,
+    (SELECT COUNT(*) FROM resource_assignments WHERE tenant_id=? AND project_id=? AND status IN ('planned','confirmed','active')) AS assignment_total,
+    (SELECT COALESCE(SUM(allocation_percent),0) FROM resource_assignments WHERE tenant_id=? AND project_id=? AND status IN ('planned','confirmed','active') AND planned_start<=date('now') AND planned_end>=date('now')) AS active_allocation_percent
+  `).bind(project.customer_id, project.customer_id,
+    tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId,
+    tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId,
+    tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId,
+    tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId,
+    tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId)));
+  const normalizedFacts = Object.fromEntries(Object.entries(facts || {}).map(([key, value]) => [key, typeof value === "number" ? value : Number(value || 0)]));
+  const currentIndex = projectStageDefinitions.findIndex(([status]) => status === project.status);
+  const stages = projectStageDefinitions.map(([status, label], index) => {
+    const checks = transitionConditions(status, normalizedFacts);
+    const passed = checks.filter((item) => item.passed).length;
+    return { status, label, state: status === project.status ? "current" : index < currentIndex ? "complete" : "upcoming", score: checks.length ? Math.round((passed / checks.length) * 100) : index <= currentIndex ? 100 : 0, checks };
+  });
+  const nextStatus = projectPrimaryNext[project.status] || null;
+  const nextChecks = transitionConditions(nextStatus, normalizedFacts);
+  const blockers = nextChecks.filter((item) => !item.passed && item.severity === "blocker");
+  const warnings = nextChecks.filter((item) => !item.passed && item.severity === "warning");
+  const readiness = nextChecks.length ? Math.round((nextChecks.filter((item) => item.passed).length / nextChecks.length) * 100) : project.status === "completed" ? 100 : 0;
+  const contractValue = Number(project.contract_amount_minor || 0);
+  const actualCost = Math.abs(Number(normalizedFacts.expense_minor || 0)) + Number(normalizedFacts.committed_purchase_minor || 0);
+  const nextActions = [...blockers, ...warnings].map((item) => ({ title: item.message, module: item.module, priority: item.severity === "blocker" ? "high" : "normal" }));
+  if (!nextActions.length && nextStatus) nextActions.push({ title: `${projectStageDefinitions.find(([status]) => status === nextStatus)?.[1] || nextStatus} aşamasına geçmeye hazır`, module: "projects", priority: "normal" });
+  return {
+    project: serializeRow(project, "projects", principal), stages, nextStatus, readiness, blockers, warnings, nextActions,
+    facts: normalizedFacts,
+    finance: { contractValueMinor: contractValue, actualCostMinor: actualCost, estimatedProfitMinor: contractValue - actualCost, marginPercent: contractValue ? Math.round(((contractValue - actualCost) / contractValue) * 1000) / 10 : null },
+  };
+}
+
+async function getProjectCommandCenter(env, principal, projectId) {
+  if (!allowed(principal, "projects.read")) return problem(403, "forbidden", "Proje komuta merkezini görüntüleme yetkiniz yok.");
+  const project = await workflowRow(env, principal, "projects", projectId);
+  if (!project) return problem(404, "not_found", "Proje bulunamadı.");
+  return json({ data: await projectCommandCenterData(env, principal, project) });
 }
 
 async function listResource(request, env, principal, slug, config) {
@@ -898,12 +1044,29 @@ async function transitionProject(request, env, principal, projectId) {
   const target = body?.status;
   if (target === project.status) return json({ data: serializeRow(project, "projects", principal), meta: { replayed: true } });
   if (!projectTransitions[project.status]?.includes(target)) return problem(409, "invalid_transition", `${project.status} durumundan ${target || "boş"} durumuna geçilemez.`);
+  const intelligence = await projectCommandCenterData(env, principal, project);
+  const targetChecks = transitionConditions(target, intelligence.facts);
+  const blockers = targetChecks.filter((item) => !item.passed && item.severity === "blocker");
+  const warnings = targetChecks.filter((item) => !item.passed && item.severity === "warning");
+  const overrideReason = String(body.override_reason || "").trim();
+  if (blockers.length && !overrideReason) return problem(409, "project_gate_blocked", "Bu aşamaya geçmeden önce zorunlu proje koşulları tamamlanmalıdır.", { blockers, warnings, target });
+  if (blockers.length && !ownerRoles.has(principal.membership.role_code)) return problem(403, "override_forbidden", "Zorunlu proje koşullarını yalnız firma sahibi veya yönetici gerekçeyle aşabilir.", { blockers, warnings, target });
+  if (blockers.length && overrideReason.length < 10) return problem(422, "override_reason_required", "Yönetici istisnası için en az 10 karakterlik gerekçe yazılmalıdır.", { blockers, warnings, target });
   const timestamp = now();
   const completion = target === "completed" ? timestamp : project.actual_end_date;
+  const statements = [env.DB.prepare("UPDATE projects SET status=?,actual_end_date=?,updated_at=? WHERE id=? AND tenant_id=?").bind(target, completion || null, timestamp, projectId, principal.tenantId)];
+  for (const [index, [title, department, dueDays]] of (projectTaskTemplates[target] || []).entries()) {
+    const taskId = `tsk_auto_${projectId}_${target}_${index}`.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 100);
+    const plannedEnd = new Date(Date.now() + dueDays * 86400000).toISOString().slice(0, 10);
+    statements.push(env.DB.prepare("INSERT OR IGNORE INTO project_tasks (id,tenant_id,project_id,title,department,status,priority,planned_start,planned_end,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,'todo',?,?,?,?,?,?)").bind(taskId, principal.tenantId, projectId, title, department, blockers.length ? "high" : "normal", timestamp.slice(0, 10), plannedEnd, JSON.stringify({ auto_generated: true, source_stage: target }), timestamp, timestamp));
+  }
+  const notificationId = `ntf_${projectId}_${target}_${Date.now()}`.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 100);
+  const targetLabel = projectStageDefinitions.find(([status]) => status === target)?.[1] || target;
+  statements.push(env.DB.prepare("INSERT INTO notifications (id,tenant_id,user_id,project_id,type,title,message,module,record_id,status,due_at,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'unread',?,?,?,?)").bind(notificationId, principal.tenantId, project.manager_user_id || principal.user.id, projectId, blockers.length ? "warning" : "stage", `${project.code} · ${targetLabel}`, `${project.name} projesi ${targetLabel} aşamasına geçti. Açılan görevleri kontrol edin.`, "projects", projectId, project.planned_end_date || null, JSON.stringify({ source: "project_transition", override_used: Boolean(overrideReason) }), timestamp, timestamp));
   try {
-    await commitWorkflow(env, principal, request, [env.DB.prepare("UPDATE projects SET status=?,actual_end_date=?,updated_at=? WHERE id=? AND tenant_id=?").bind(target, completion || null, timestamp, projectId, principal.tenantId)], "transition", "projects", projectId, { from: project.status, to: target, note: body.note || null });
+    await commitWorkflow(env, principal, request, statements, "transition", "projects", projectId, { from: project.status, to: target, note: body.note || null, override_reason: overrideReason || null, blockers, warnings });
   } catch (error) { return workflowCommitProblem(env, error); }
-  return json({ data: serializeRow(await workflowRow(env, principal, "projects", projectId), "projects", principal) });
+  return json({ data: serializeRow(await workflowRow(env, principal, "projects", projectId), "projects", principal), meta: { warnings, override_used: Boolean(overrideReason) } });
 }
 
 async function approveWorkItemRevision(request, env, principal, workItemId) {
@@ -1272,7 +1435,7 @@ async function writeBackup(env, tenantId, triggeredBy = "scheduler") {
     return { id: backupId, tenant_id: tenantId, status: "failed", error_message: message };
   }
   try {
-    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 7, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
+    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 8, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
     const tenant = await one(env.DB.prepare("SELECT * FROM tenants WHERE id=?").bind(tenantId));
     lines.push(JSON.stringify({ table: "tenants", row: tenant }));
     const users = await all(env.DB.prepare("SELECT u.* FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=?").bind(tenantId));
@@ -1369,11 +1532,15 @@ async function bootstrap(request, env) {
 async function dispatchAuthenticated(request, env, principal, url, segments) {
   if ((url.pathname === "/api/v1/session" || url.pathname === "/api/v1/me") && request.method === "GET") return getSession(principal);
   if (url.pathname === "/api/v1/dashboard" && request.method === "GET") return getDashboard(env, principal);
+  if (url.pathname === "/api/v1/search" && request.method === "GET") return globalSearch(request, env, principal);
+  if (url.pathname === "/api/v1/notifications" && request.method === "GET") return getNotifications(env, principal);
+  if (segments.length === 5 && segments[2] === "notifications" && segments[4] === "read" && request.method === "POST" && validId(segments[3])) return markNotification(request, env, principal, segments[3]);
   if (segments[0] === "api" && segments[1] === "admin" && segments[2] === "backups") return backupRoute(request, env, principal, segments.slice(2));
   if (url.pathname === "/api/v1/files/upload" && request.method === "POST") return uploadFile(request, env, principal);
   if (segments.length === 5 && segments[2] === "files" && segments[4] === "content" && request.method === "GET") return downloadFile(env, principal, segments[3]);
   if (url.pathname === "/api/v1/memberships/invite" && request.method === "POST") return inviteMember(request, env, principal);
   if (segments.length === 5 && segments[2] === "roles" && segments[4] === "permissions") return rolePermissions(request, env, principal, segments[3]);
+  if (segments.length === 5 && segments[2] === "projects" && segments[4] === "command-center" && request.method === "GET" && validId(segments[3])) return getProjectCommandCenter(env, principal, segments[3]);
   if (segments[2] === "tokens") return tokenManagement(request, env, principal, segments);
   if (request.method === "POST" && segments.length === 5 && validId(segments[3])) {
     const [resource, resourceId, action] = [segments[2], segments[3], segments[4]];

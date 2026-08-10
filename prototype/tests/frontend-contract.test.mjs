@@ -106,3 +106,13 @@ test("production login temporarily uses phone and password without Google or bro
   assert.doesNotMatch(liveSource, /signin-with-chatgpt/);
   assert.doesNotMatch(apiSource, /localStorage\.setItem\([^\n]*(?:token|session)/i);
 });
+
+test("projects expose a Design 2 style command center with readiness guidance", () => {
+  assert.match(apiSource, /async projectCommandCenter\(projectId\)/);
+  assert.match(apiSource, /projects\/\$\{encodeURIComponent\(projectId\)\}\/command-center/);
+  assert.match(liveSource, /function ProjectCommandCenterModal\s*\(/);
+  assert.match(liveSource, /PROJE AŞAMALARI/);
+  assert.match(liveSource, /SONRAKİ AŞAMAYA HAZIRLIK/);
+  assert.match(liveSource, /SIRADAKİ DOĞRU İŞLER/);
+  assert.match(liveSource, /Yönetici istisna gerekçesi/);
+});
