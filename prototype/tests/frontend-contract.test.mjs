@@ -116,3 +116,16 @@ test("projects expose a Design 2 style command center with readiness guidance", 
   assert.match(liveSource, /SIRADAKİ DOĞRU İŞLER/);
   assert.match(liveSource, /Yönetici istisna gerekçesi/);
 });
+
+test("file center captures operational context and previews project evidence", () => {
+  for (const field of ["projectId", "workItemId", "designRevisionId", "qualityInspectionId", "installationId", "spaceName", "captureStage", "takenAt"]) {
+    assert.match(apiSource, new RegExp(`${field}:\\s*["'][a-z_]+["']`), `${field} API eşlemesi eksik`);
+  }
+  assert.match(liveSource, /BAĞLAMSAL DOSYA MERKEZİ/);
+  assert.match(liveSource, /Mahal \/ konum/);
+  assert.match(liveSource, /Kalite kontrolü/);
+  assert.match(liveSource, /Pazarlamada kullanılabilir/);
+  assert.match(liveSource, /DOSYA KANITI/);
+  assert.match(liveSource, /api\.fileContentUrl\(data\.id\)/);
+  assert.match(liveSource, /live-file-preview/);
+});

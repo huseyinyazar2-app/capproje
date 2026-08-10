@@ -118,7 +118,7 @@ const FIELD_MAPS = Object.freeze({
   attendance: { employeeId: "employee_id", workDate: "work_date", checkIn: "check_in", checkOut: "check_out", regularMinutes: "regular_minutes", overtimeMinutes: "overtime_minutes" },
   leaves: { employeeId: "employee_id", leaveType: "leave_type", startDate: "start_date", endDate: "end_date", dayCount: "day_count", approvedBy: "approved_by", approvedAt: "approved_at" },
   payroll: { employeeId: "employee_id", baseSalary: "base_salary_minor", overtimeAmount: "overtime_amount_minor", bonusAmount: "bonus_amount_minor", allowanceAmount: "allowance_amount_minor", deductionAmount: "deduction_amount_minor", advanceAmount: "advance_amount_minor", netPreview: "net_preview_minor" },
-  files: { entityType: "entity_type", entityId: "entity_id", fileName: "file_name", objectKey: "object_key", contentType: "content_type", sizeBytes: "size_bytes", uploadedBy: "uploaded_by" },
+  files: { entityType: "entity_type", entityId: "entity_id", fileName: "file_name", objectKey: "object_key", contentType: "content_type", sizeBytes: "size_bytes", uploadedBy: "uploaded_by", projectId: "project_id", workItemId: "work_item_id", designRevisionId: "design_revision_id", qualityInspectionId: "quality_inspection_id", installationId: "installation_id", spaceName: "space_name", captureStage: "capture_stage", takenAt: "taken_at", photoConsentSnapshot: "photo_consent_snapshot" },
   memberships: { userId: "user_id", roleId: "role_id", fullName: "full_name", temporaryPassword: "temporary_password" },
   auditLogs: { userId: "user_id", entityType: "entity_type", entityId: "entity_id", requestId: "request_id", ipAddress: "ip_address", changes: "changes_json", createdAt: "created_at" },
   backups: { tenantId: "tenant_id", triggeredBy: "triggered_by", objectKey: "object_key", rowCount: "row_count", errorMessage: "error_message", createdAt: "created_at", completedAt: "completed_at" },
@@ -414,6 +414,9 @@ export const api = {
     const mapped = mapOutgoing("files", fields);
     Object.entries(mapped).forEach(([key, value]) => body.set(key, typeof value === "string" ? value : JSON.stringify(value)));
     return mapIncoming("files", (await request("/files/upload", { method: "POST", body })).data);
+  },
+  fileContentUrl(fileId) {
+    return resolvePath(`/files/${encodeURIComponent(fileId)}/content`);
   },
   async getRolePermissions(roleId) {
     return (await request(`/roles/${encodeURIComponent(roleId)}/permissions`)).data;

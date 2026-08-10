@@ -25,7 +25,7 @@
 - [x] Proje iletişim günlüğünü telefon, e-posta, WhatsApp, toplantı, karar ve takip tarihiyle ilişkilendirmek.
 - [x] Atölye, montaj ve proje ekipleri için kapasite/yük planını proje takvimine bağlamak.
 - [x] Stok rezervasyonu, satın alma ihtiyacı ve üretim başlangıç tarihini tek akışta bağlamak.
-- [ ] Fotoğraf ve belgeleri proje, mahal, iş kalemi, revizyon, kalite kusuru ve montaj adımı bağlamında göstermek.
+- [x] Fotoğraf ve belgeleri proje, mahal, iş kalemi, revizyon, kalite kusuru ve montaj adımı bağlamında göstermek.
 - [ ] Liste, kanban, takvim ve zaman çizelgesi görünümlerini rol ve modüle göre sunmak.
 - [ ] Genel aramayı proje kodu, müşteri, mahal, ürün, teklif, sipariş ve belge içeriğinde çalıştırmak.
 - [ ] Mobil saha kullanımını büyük aksiyonlar, hızlı fotoğraf, çevrimdışı kuyruk ve bağlantı geri gelince güvenli eşitlemeyle tamamlamak.

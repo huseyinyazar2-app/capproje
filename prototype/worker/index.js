@@ -21,7 +21,7 @@ const resources = {
   attendance: { table: "attendance", required: ["employee_id", "work_date"], search: ["location", "notes"], filters: ["employee_id", "work_date", "status"], refs: { employee_id: "employees" }, fields: ["employee_id","work_date","check_in","check_out","regular_minutes","overtime_minutes","location","source","status","notes","metadata_json"] },
   leaves: { table: "leave_requests", required: ["employee_id", "leave_type", "start_date", "end_date", "day_count"], search: ["leave_type", "reason"], filters: ["employee_id", "status"], refs: { employee_id: "employees" }, fields: ["employee_id","leave_type","start_date","end_date","day_count","reason","status","approved_by","approved_at","metadata_json"] },
   "payroll-inputs": { table: "payroll_inputs", required: ["employee_id", "period"], search: ["period", "notes"], filters: ["employee_id", "period", "status"], refs: { employee_id: "employees" }, fields: ["employee_id","period","base_salary_minor","overtime_amount_minor","bonus_amount_minor","allowance_amount_minor","deduction_amount_minor","advance_amount_minor","net_preview_minor","currency","status","notes","metadata_json"] },
-  files: { table: "files", required: ["entity_type", "entity_id", "file_name", "object_key"], search: ["file_name", "category", "description"], filters: ["entity_type", "entity_id", "category"], fields: ["entity_type","entity_id","category","file_name","object_key","content_type","size_bytes","checksum","uploaded_by","description","metadata_json"] },
+  files: { table: "files", required: ["entity_type", "entity_id", "file_name", "object_key"], search: ["file_name", "category", "description", "space_name", "capture_stage"], filters: ["entity_type", "entity_id", "category", "project_id", "work_item_id", "installation_id", "quality_inspection_id", "capture_stage", "visibility"], refs: { project_id: "projects", work_item_id: "work_items", design_revision_id: "design_revisions", quality_inspection_id: "quality_inspections", installation_id: "installations" }, fields: ["entity_type","entity_id","category","file_name","object_key","content_type","size_bytes","checksum","uploaded_by","description","project_id","work_item_id","design_revision_id","quality_inspection_id","installation_id","space_name","capture_stage","taken_at","visibility","photo_consent_snapshot","metadata_json"] },
   "audit-logs": { table: "audit_logs", readOnly: true, search: ["action", "entity_type", "entity_id"], filters: ["user_id", "action", "entity_type"], fields: [] },
   memberships: { table: "memberships", required: ["user_id", "role_id"], search: ["title"], filters: ["user_id", "role_id", "status"], fields: ["user_id","role_id","title","status"] },
   roles: { table: "roles", required: ["code", "name"], search: ["code", "name", "description"], fields: ["code","name","description","is_system"] },
@@ -49,9 +49,20 @@ const aliases = {
 };
 
 const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql"];
 const dailyBackupSeen = new Map();
 const ownerRoles = new Set(["owner", "admin"]);
+const fileEntityContexts = {
+  projects: ["projects", null],
+  offers: ["offers", "project_id"],
+  "work-items": ["work_items", "project_id"],
+  "design-revisions": ["design_revisions", "project_id"],
+  "production-orders": ["production_orders", "project_id"],
+  "quality-inspections": ["quality_inspections", "project_id"],
+  installations: ["installations", "project_id"],
+  handovers: ["handovers", "project_id"],
+  employees: ["employees", null],
+};
 const PHONE_SESSION_COOKIE = "__Host-capproje_session";
 const PHONE_SESSION_SECONDS = 12 * 60 * 60;
 // Cloudflare Workers WebCrypto rejects PBKDF2 iteration counts above 100,000.
@@ -554,7 +565,13 @@ async function projectCommandCenterData(env, principal, project) {
       AND ((a.employee_id IS NOT NULL AND b.employee_id=a.employee_id) OR (a.employee_id IS NULL AND b.employee_id IS NULL AND b.resource_type=a.resource_type AND b.resource_name=a.resource_name))
     WHERE a.tenant_id=? AND a.status IN ('planned','confirmed','active')
       AND a.allocation_percent+b.allocation_percent>100 AND (a.project_id=? OR b.project_id=?)`).bind(tenant, projectId, projectId));
-  const combinedFacts = { ...(facts || {}), ...(materialFacts || {}), ...(capacityFacts || {}) };
+  const mediaFacts = await one(env.DB.prepare(`SELECT COUNT(*) AS file_total,
+    COALESCE(SUM(CASE WHEN content_type LIKE 'image/%' THEN 1 ELSE 0 END),0) AS photo_total
+    FROM files WHERE tenant_id=? AND (project_id=? OR (entity_type='projects' AND entity_id=?))`).bind(tenant, projectId, projectId));
+  const recentMedia = (await all(env.DB.prepare(`SELECT id,file_name,content_type,category,space_name,capture_stage,taken_at,visibility,description,created_at
+    FROM files WHERE tenant_id=? AND (project_id=? OR (entity_type='projects' AND entity_id=?))
+    ORDER BY COALESCE(taken_at,created_at) DESC LIMIT 8`).bind(tenant, projectId, projectId))).map(decodeRow);
+  const combinedFacts = { ...(facts || {}), ...(materialFacts || {}), ...(capacityFacts || {}), ...(mediaFacts || {}) };
   const normalizedFacts = Object.fromEntries(Object.entries(combinedFacts).map(([key, value]) => [key, typeof value === "number" ? value : Number(value || 0)]));
   const currentIndex = projectStageDefinitions.findIndex(([status]) => status === project.status);
   const stages = projectStageDefinitions.map(([status, label], index) => {
@@ -572,7 +589,7 @@ async function projectCommandCenterData(env, principal, project) {
   const nextActions = [...blockers, ...warnings].map((item) => ({ title: item.message, module: item.module, priority: item.severity === "blocker" ? "high" : "normal" }));
   if (!nextActions.length && nextStatus) nextActions.push({ title: `${projectStageDefinitions.find(([status]) => status === nextStatus)?.[1] || nextStatus} aşamasına geçmeye hazır`, module: "projects", priority: "normal" });
   return {
-    project: serializeRow(project, "projects", principal), stages, nextStatus, readiness, blockers, warnings, nextActions,
+    project: serializeRow(project, "projects", principal), stages, nextStatus, readiness, blockers, warnings, nextActions, recentMedia,
     facts: normalizedFacts,
     finance: { contractValueMinor: contractValue, actualCostMinor: actualCost, estimatedProfitMinor: contractValue - actualCost, marginPercent: contractValue ? Math.round(((contractValue - actualCost) / contractValue) * 1000) / 10 : null },
   };
@@ -1466,6 +1483,55 @@ async function deleteResource(request, env, principal, slug, config, resourceId)
   return new Response(null, { status: 204 });
 }
 
+async function resolveFileContext(env, principal, form, entityType, entityId) {
+  const entityDefinition = fileEntityContexts[entityType];
+  if (!entityDefinition) return { error: problem(422, "validation_error", "Desteklenmeyen bağlı modül seçildi.") };
+  const [entityTable, entityProjectColumn] = entityDefinition;
+  const entity = await one(env.DB.prepare(`SELECT * FROM ${entityTable} WHERE id=? AND tenant_id=?`).bind(entityId, principal.tenantId));
+  if (!entity) return { error: problem(422, "cross_tenant_reference", "Bağlı kayıt bu firmada bulunamadı.") };
+
+  const contextDefinitions = [
+    ["work_item_id", "work_items"],
+    ["design_revision_id", "design_revisions"],
+    ["quality_inspection_id", "quality_inspections"],
+    ["installation_id", "installations"],
+  ];
+  const context = {};
+  const projectIds = new Set();
+  if (entityType === "projects") projectIds.add(entity.id);
+  else if (entityProjectColumn && entity[entityProjectColumn]) projectIds.add(entity[entityProjectColumn]);
+
+  for (const [field, table] of contextDefinitions) {
+    const value = String(form.get(field) || "").trim();
+    if (!value) { context[field] = null; continue; }
+    if (!validId(value)) return { error: problem(422, "validation_error", `${field} geçerli bir kayıt ID'si olmalıdır.`) };
+    const record = await one(env.DB.prepare(`SELECT id,project_id FROM ${table} WHERE id=? AND tenant_id=?`).bind(value, principal.tenantId));
+    if (!record) return { error: problem(422, "cross_tenant_reference", `${field} bu firmada bulunamadı.`) };
+    context[field] = record.id;
+    if (record.project_id) projectIds.add(record.project_id);
+  }
+
+  const requestedProjectId = String(form.get("project_id") || "").trim();
+  if (requestedProjectId) {
+    if (!validId(requestedProjectId)) return { error: problem(422, "validation_error", "project_id geçerli bir kayıt ID'si olmalıdır.") };
+    projectIds.add(requestedProjectId);
+  }
+  if (projectIds.size > 1) return { error: problem(422, "project_context_mismatch", "Dosyanın proje, iş kalemi ve operasyon bağlantıları aynı projeye ait olmalıdır.") };
+
+  const projectId = [...projectIds][0] || null;
+  const project = projectId ? await one(env.DB.prepare("SELECT id,photo_consent FROM projects WHERE id=? AND tenant_id=?").bind(projectId, principal.tenantId)) : null;
+  if (projectId && !project) return { error: problem(422, "cross_tenant_reference", "Bağlı proje bu firmada bulunamadı.") };
+  const visibility = String(form.get("visibility") || "internal");
+  if (!["internal", "customer", "marketing"].includes(visibility)) return { error: problem(422, "validation_error", "Geçersiz dosya görünürlüğü.") };
+  if (visibility === "marketing" && project?.photo_consent !== "marketing_allowed") return { error: problem(409, "photo_consent_required", "Pazarlama görünürlüğü için projede pazarlama fotoğraf izni bulunmalıdır.") };
+  const captureStage = String(form.get("capture_stage") || "other");
+  if (!["discovery","design","procurement","production","quality","installation","handover","other"].includes(captureStage)) return { error: problem(422, "validation_error", "Geçersiz çekim aşaması.") };
+  const takenAt = String(form.get("taken_at") || "").trim();
+  if (takenAt && Number.isNaN(Date.parse(takenAt))) return { error: problem(422, "validation_error", "Çekim tarihi geçerli değil.") };
+  const spaceName = String(form.get("space_name") || "").trim().slice(0, 120) || null;
+  return { context: { ...context, project_id: projectId, space_name: spaceName, capture_stage: captureStage, taken_at: takenAt || null, visibility, photo_consent_snapshot: project?.photo_consent || null } };
+}
+
 async function uploadFile(request, env, principal) {
   if (!allowed(principal, permissionFor("files", "write"))) return problem(403, "forbidden", "Dosya yükleme yetkiniz yok.");
   if (!env.FILES) return problem(503, "storage_unavailable", "Dosya deposu yapılandırılmamış.");
@@ -1478,16 +1544,26 @@ async function uploadFile(request, env, principal) {
   const entityType = String(form.get("entity_type") || "general");
   const entityId = String(form.get("entity_id") || "general");
   if (!validId(entityId) || !/^[A-Za-z0-9_-]{1,50}$/.test(entityType)) return problem(422, "validation_error", "Geçersiz entity_type veya entity_id.");
+  const category = String(form.get("category") || "other");
+  if (category === "photo" && !String(file.type || "").startsWith("image/")) return problem(422, "validation_error", "Fotoğraf kategorisine yalnız görüntü dosyası yüklenebilir.");
+  const resolved = await resolveFileContext(env, principal, form, entityType, entityId);
+  if (resolved.error) return resolved.error;
+  const context = resolved.context;
   const fileId = id("fil_");
   const safeName = String(file.name || "file").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-120);
   const objectKey = `${principal.tenantId}/${entityType}/${entityId}/${fileId}-${safeName}`;
   const bytes = await file.arrayBuffer();
   const checksum = await sha256(bytes);
-  await env.FILES.put(objectKey, bytes, { httpMetadata: { contentType: file.type || "application/octet-stream" }, customMetadata: { tenantId: principal.tenantId, fileId } });
   const timestamp = now();
-  await run(env.DB.prepare("INSERT INTO files (id,tenant_id,entity_type,entity_id,category,file_name,object_key,content_type,size_bytes,checksum,uploaded_by,description,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-    .bind(fileId, principal.tenantId, entityType, entityId, form.get("category") || null, file.name || safeName, objectKey, file.type || "application/octet-stream", file.size, checksum, principal.user.id, form.get("description") || null, "{}", timestamp, timestamp));
-  await audit(env, principal, request, "upload", "files", fileId, { entity_type: entityType, entity_id: entityId, size_bytes: file.size });
+  try {
+    await env.FILES.put(objectKey, bytes, { httpMetadata: { contentType: file.type || "application/octet-stream" }, customMetadata: { tenantId: principal.tenantId, fileId, projectId: context.project_id || "" } });
+    await run(env.DB.prepare("INSERT INTO files (id,tenant_id,entity_type,entity_id,category,file_name,object_key,content_type,size_bytes,checksum,uploaded_by,description,project_id,work_item_id,design_revision_id,quality_inspection_id,installation_id,space_name,capture_stage,taken_at,visibility,photo_consent_snapshot,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(fileId, principal.tenantId, entityType, entityId, category, file.name || safeName, objectKey, file.type || "application/octet-stream", file.size, checksum, principal.user.id, form.get("description") || null, context.project_id, context.work_item_id, context.design_revision_id, context.quality_inspection_id, context.installation_id, context.space_name, context.capture_stage, context.taken_at, context.visibility, context.photo_consent_snapshot, "{}", timestamp, timestamp));
+  } catch (error) {
+    try { await env.FILES.delete(objectKey); } catch { /* best-effort orphan cleanup */ }
+    return problem(503, "file_store_failed", "Dosya ve bağlam kaydı güvenli biçimde tamamlanamadı; yükleme geri alındı.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined);
+  }
+  await audit(env, principal, request, "upload", "files", fileId, { entity_type: entityType, entity_id: entityId, project_id: context.project_id, capture_stage: context.capture_stage, visibility: context.visibility, size_bytes: file.size });
   return json({ data: decodeRow(await one(env.DB.prepare("SELECT * FROM files WHERE id=? AND tenant_id=?").bind(fileId, principal.tenantId))) }, 201);
 }
 
@@ -1523,7 +1599,7 @@ async function writeBackup(env, tenantId, triggeredBy = "scheduler") {
     return { id: backupId, tenant_id: tenantId, status: "failed", error_message: message };
   }
   try {
-    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 9, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
+    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 10, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
     const tenant = await one(env.DB.prepare("SELECT * FROM tenants WHERE id=?").bind(tenantId));
     lines.push(JSON.stringify({ table: "tenants", row: tenant }));
     const users = await all(env.DB.prepare("SELECT u.* FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=?").bind(tenantId));

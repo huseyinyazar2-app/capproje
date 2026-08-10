@@ -45,6 +45,7 @@ async function setup() {
   database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0009_material_planning.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0010_contextual_media.sql", import.meta.url), "utf8"));
   database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-a", "Firma A", "firma-a", timestamp, timestamp);
   database.prepare("INSERT INTO users (id,email,full_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("owner-a", "owner@a.test", "Firma Sahibi", "active", timestamp, timestamp);
   database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-owner", "tenant-a", "owner", "Firma Sahibi", 1, timestamp, timestamp);
@@ -71,6 +72,7 @@ test("bootstrap owner can open a session without knowing the tenant id", async (
   database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0009_material_planning.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0010_contextual_media.sql", import.meta.url), "utf8"));
   const env = { DB: new D1Database(database), ALLOW_DEV_AUTH: "true", BOOTSTRAP_SECRET: "secret-for-test", PASSWORD_AUTH_ENABLED: "true", PASSWORD_AUTH_PEPPER: "test-password-pepper-1234567890" };
   const bootstrapResponse = await worker.fetch(new Request("https://example.test/api/v1/bootstrap", {
     method: "POST",
@@ -326,8 +328,8 @@ test("scheduled backups include the latest schema manifest and never mix tenants
   for (const [key, content] of objects) {
     const lines = content.split("\n").map((line) => JSON.parse(line));
     const manifest = lines[0];
-    assert.equal(manifest.schema_version, 9);
-    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql"]);
+    assert.equal(manifest.schema_version, 10);
+    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql"]);
     assert.match(key, new RegExp(`^backups/${manifest.tenant_id}/`));
     for (const entry of lines.slice(1)) {
       if (entry.table === "users") continue;
@@ -357,7 +359,7 @@ test("request fallback creates at most one daily tenant backup and scheduled reu
   assert.equal(objects.size, 1);
   const manifest = JSON.parse([...objects.values()][0].split("\n")[0]);
   assert.equal(manifest.tenant_id, "tenant-a");
-  assert.equal(manifest.schema_version, 9);
+  assert.equal(manifest.schema_version, 10);
 });
 
 test("owner can create, rotate and revoke hashed expiring API tokens", async () => {
@@ -484,6 +486,64 @@ test("material planning reserves available stock, opens only the shortage purcha
   assert.equal(commandCenter.facts.material_requirement_total, 1);
   assert.equal(commandCenter.facts.material_shortage_count, 0);
   assert.equal(commandCenter.facts.capacity_conflict_count, 1);
+});
+
+test("contextual media links project evidence safely and enforces photo consent", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,photo_consent,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-FOTO", "Fotoğraf Projesi", "installation", "internal_only", timestamp, timestamp);
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,photo_consent,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").run("project-b", "tenant-a", "P-DIGER", "Diğer Proje", "production", "marketing_allowed", timestamp, timestamp);
+  database.prepare("INSERT INTO work_items (id,tenant_id,project_id,item_code,description,unit,quantity,status,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run("work-a", "tenant-a", "project-a", "KAPI-01", "Lobi kapısı", "adet", 2, "approved", "{}", timestamp, timestamp);
+  database.prepare("INSERT INTO work_items (id,tenant_id,project_id,item_code,description,unit,quantity,status,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").run("work-b", "tenant-a", "project-b", "DOLAP-01", "Oda dolabı", "adet", 1, "approved", "{}", timestamp, timestamp);
+  const objects = new Map();
+  env.FILES = {
+    async put(key, value) { objects.set(key, value); },
+    async get(key) { return objects.has(key) ? { body: objects.get(key), httpEtag: "test-etag" } : null; },
+    async delete(key) { objects.delete(key); },
+  };
+
+  const upload = async ({ projectId = "project-a", workItemId = "work-a", visibility = "customer" } = {}) => {
+    const form = new FormData();
+    form.set("file", new Blob([new Uint8Array([1, 2, 3])], { type: "image/jpeg" }), "montaj.jpg");
+    form.set("entity_type", "work-items");
+    form.set("entity_id", workItemId);
+    form.set("project_id", projectId);
+    form.set("work_item_id", workItemId);
+    form.set("category", "installation_evidence");
+    form.set("space_name", "Lobi");
+    form.set("capture_stage", "installation");
+    form.set("taken_at", "2026-08-10T12:30");
+    form.set("visibility", visibility);
+    return worker.fetch(new Request("https://example.test/api/v1/files/upload", { method: "POST", headers: { "x-user-email": "owner@a.test", "x-tenant-id": "tenant-a" }, body: form }), env);
+  };
+
+  let response = await upload({ workItemId: "work-b" });
+  assert.equal(response.status, 422);
+  assert.equal((await response.json()).error.code, "project_context_mismatch");
+  response = await upload({ visibility: "marketing" });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error.code, "photo_consent_required");
+  assert.equal(objects.size, 0);
+
+  response = await upload();
+  assert.equal(response.status, 201);
+  const media = (await response.json()).data;
+  const stored = database.prepare("SELECT project_id,work_item_id,space_name,capture_stage,visibility,photo_consent_snapshot FROM files WHERE id=?").get(media.id);
+  assert.equal(stored.project_id, "project-a");
+  assert.equal(stored.work_item_id, "work-a");
+  assert.equal(stored.space_name, "Lobi");
+  assert.equal(stored.capture_stage, "installation");
+  assert.equal(stored.visibility, "customer");
+  assert.equal(stored.photo_consent_snapshot, "internal_only");
+  assert.equal(objects.size, 1);
+
+  response = await worker.fetch(request(`/api/v1/files/${media.id}/content`, { method: "GET" }), env);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/jpeg");
+  response = await worker.fetch(request("/api/v1/projects/project-a/command-center", { method: "GET" }), env);
+  const commandCenter = (await response.json()).data;
+  assert.equal(commandCenter.facts.file_total, 1);
+  assert.equal(commandCenter.facts.photo_total, 1);
+  assert.equal(commandCenter.recentMedia[0].space_name, "Lobi");
 });
 
 test("meeting, quality and signed handover records follow tenant-audited lifecycles", async () => {
