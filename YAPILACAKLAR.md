@@ -22,9 +22,9 @@
 - [x] Proje aşaması değiştiğinde ilgili departmanlara standart görevleri otomatik açmak.
 - [x] Yönetim panelinde proje hattını ve geciken görev, bekleyen satın alma, tasarım ve kalite sorunlarını görünür yapmak.
 - [ ] Bildirim merkezi, kişiye özel görev kutusu, yaklaşan termin ve gecikme uyarılarını tamamlamak.
-- [ ] Proje iletişim günlüğünü telefon, e-posta, WhatsApp, toplantı, karar ve takip tarihiyle ilişkilendirmek.
-- [ ] Atölye, montaj ve proje ekipleri için kapasite/yük planını proje takvimine bağlamak.
-- [ ] Stok rezervasyonu, satın alma ihtiyacı ve üretim başlangıç tarihini tek akışta bağlamak.
+- [x] Proje iletişim günlüğünü telefon, e-posta, WhatsApp, toplantı, karar ve takip tarihiyle ilişkilendirmek.
+- [x] Atölye, montaj ve proje ekipleri için kapasite/yük planını proje takvimine bağlamak.
+- [x] Stok rezervasyonu, satın alma ihtiyacı ve üretim başlangıç tarihini tek akışta bağlamak.
 - [ ] Fotoğraf ve belgeleri proje, mahal, iş kalemi, revizyon, kalite kusuru ve montaj adımı bağlamında göstermek.
 - [ ] Liste, kanban, takvim ve zaman çizelgesi görünümlerini rol ve modüle göre sunmak.
 - [ ] Genel aramayı proje kodu, müşteri, mahal, ürün, teklif, sipariş ve belge içeriğinde çalıştırmak.

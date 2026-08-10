@@ -11,6 +11,24 @@ const authToken = process.env.TURSO_AUTH_TOKEN;
 if (!url || !authToken) throw new Error("TURSO_DATABASE_URL ve TURSO_AUTH_TOKEN zorunludur.");
 
 const client = createClient({ url, authToken });
+
+function splitSqlStatements(sql) {
+  const statements = [];
+  let buffer = "";
+  let trigger = false;
+  for (const line of sql.split(/\r?\n/)) {
+    if (!buffer.trim() && /^\s*CREATE\s+TRIGGER\b/i.test(line)) trigger = true;
+    buffer += `${line}\n`;
+    const complete = trigger ? /^\s*END;\s*$/i.test(line) : /;\s*(?:--.*)?$/.test(line);
+    if (!complete) continue;
+    statements.push(buffer.trim().replace(/;\s*$/, ""));
+    buffer = "";
+    trigger = false;
+  }
+  if (buffer.trim()) statements.push(buffer.trim());
+  return statements;
+}
+
 await client.execute(`CREATE TABLE IF NOT EXISTS schema_migrations (
   name TEXT PRIMARY KEY,
   applied_at TEXT NOT NULL
@@ -25,8 +43,7 @@ const files = (await readdir(path.join(root, "migrations")))
 for (const name of files) {
   if (applied.has(name)) continue;
   const sql = await readFile(path.join(root, "migrations", name), "utf8");
-  const statements = sql
-    .split(/;\s*(?:\r?\n|$)/)
+  const statements = splitSqlStatements(sql)
     .map((statement) => statement.trim())
     .filter(Boolean)
     .filter((statement) => !/^PRAGMA\s+(foreign_keys|optimize)\b/i.test(statement));

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { createD1CompatibleTurso, databaseFromEnv } from "../worker/database.js";
 
 function result(columns = [], rows = [], rowsAffected = 0, lastInsertRowid) {
@@ -37,4 +38,11 @@ test("D1 remains the default and Turso requires explicit configuration", () => {
   const d1 = { prepare() {} };
   assert.equal(databaseFromEnv({ DB: d1 }), d1);
   assert.throws(() => databaseFromEnv({ DATABASE_PROVIDER: "turso" }), /TURSO_DATABASE_URL/);
+});
+
+test("Turso migration splitter keeps trigger bodies as one SQL statement", async () => {
+  const source = await readFile(new URL("../scripts/migrate-turso.mjs", import.meta.url), "utf8");
+  assert.match(source, /CREATE\\s\+TRIGGER/);
+  assert.match(source, /END;\\s\*\$/);
+  assert.doesNotMatch(source, /\.split\(\/;\\s\*/);
 });

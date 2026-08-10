@@ -39,6 +39,7 @@ const resources = {
   "handover-punch-items": { table: "handover_punch_items", required: ["handover_id","title"], search: ["title","description"], filters: ["handover_id","responsible_user_id","severity","status"], refs: { handover_id: "handovers" }, memberRefs: ["responsible_user_id"], fields: ["handover_id","title","description","responsible_user_id","due_date","severity","status","resolved_at","accepted_at","metadata_json"] },
   "project-communications": { table: "project_communications", required: ["project_id","channel","subject","occurred_at"], search: ["contact_name","subject","summary","decision"], filters: ["project_id","customer_id","channel","owner_user_id","status"], refs: { project_id: "projects", customer_id: "customers" }, memberRefs: ["owner_user_id"], fields: ["project_id","customer_id","channel","direction","contact_name","subject","summary","decision","occurred_at","next_follow_up_at","owner_user_id","status","metadata_json"] },
   "resource-assignments": { table: "resource_assignments", required: ["project_id","resource_type","resource_name","planned_start","planned_end"], search: ["resource_name","role","notes"], filters: ["project_id","employee_id","resource_type","status"], refs: { project_id: "projects", employee_id: "employees" }, fields: ["project_id","employee_id","resource_type","resource_name","role","planned_start","planned_end","allocation_percent","status","notes","metadata_json"] },
+  "material-requirements": { table: "material_requirements", required: ["project_id","description","required_quantity","unit"], search: ["item_code","description","notes"], filters: ["project_id","work_item_id","inventory_item_id","preferred_supplier_id","status"], refs: { project_id: "projects", work_item_id: "work_items", inventory_item_id: "inventory_items", preferred_supplier_id: "suppliers", purchase_request_id: "purchase_requests" }, fields: ["project_id","work_item_id","inventory_item_id","preferred_supplier_id","item_code","description","required_quantity","unit","needed_by","status","notes","metadata_json"] },
 };
 
 const aliases = {
@@ -47,8 +48,8 @@ const aliases = {
   transactions: "financial-transactions",
 };
 
-const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql"];
+const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql"];
 const dailyBackupSeen = new Map();
 const ownerRoles = new Set(["owner", "admin"]);
 const PHONE_SESSION_COOKIE = "__Host-capproje_session";
@@ -433,7 +434,17 @@ async function getDashboard(env, principal) {
   for (const [name, sql] of queries) data[name] = await one(env.DB.prepare(sql).bind(tenant));
   data.recentProjects = (await all(env.DB.prepare("SELECT id,code,name,status,progress_percent,updated_at FROM projects WHERE tenant_id=? ORDER BY updated_at DESC LIMIT 6").bind(tenant))).map(decodeRow);
   data.pipeline = (await all(env.DB.prepare("SELECT status,COUNT(*) AS count FROM projects WHERE tenant_id=? AND status NOT IN ('cancelled','lost') GROUP BY status ORDER BY status").bind(tenant))).map(decodeRow);
-  data.attention = await one(env.DB.prepare("SELECT (SELECT COUNT(*) FROM project_tasks WHERE tenant_id=? AND status IN ('todo','in_progress','blocked') AND planned_end IS NOT NULL AND planned_end<date('now')) AS overdue_tasks,(SELECT COUNT(*) FROM purchase_requests WHERE tenant_id=? AND status='pending') AS pending_purchases,(SELECT COUNT(*) FROM design_revisions WHERE tenant_id=? AND status IN ('internal_review','client_review')) AS pending_designs,(SELECT COUNT(*) FROM quality_inspections WHERE tenant_id=? AND result IN ('conditional','fail') AND status<>'closed') AS quality_issues,(SELECT COUNT(*) FROM notifications WHERE tenant_id=? AND user_id=? AND status='unread') AS unread_notifications,(SELECT COUNT(*) FROM project_communications WHERE tenant_id=? AND status IN ('open','follow_up') AND next_follow_up_at IS NOT NULL AND next_follow_up_at<=date('now','+3 day')) AS pending_follow_ups,(SELECT COUNT(*) FROM resource_assignments WHERE tenant_id=? AND status IN ('planned','confirmed','active') AND planned_start<=date('now','+14 day') AND planned_end>=date('now')) AS upcoming_assignments").bind(tenant, tenant, tenant, tenant, tenant, principal.user.id, tenant, tenant));
+  data.attention = await one(env.DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM project_tasks WHERE tenant_id=? AND status IN ('todo','in_progress','blocked') AND planned_end IS NOT NULL AND planned_end<date('now')) AS overdue_tasks,
+    (SELECT COUNT(*) FROM purchase_requests WHERE tenant_id=? AND status='pending') AS pending_purchases,
+    (SELECT COUNT(*) FROM design_revisions WHERE tenant_id=? AND status IN ('internal_review','client_review')) AS pending_designs,
+    (SELECT COUNT(*) FROM quality_inspections WHERE tenant_id=? AND result IN ('conditional','fail') AND status<>'closed') AS quality_issues,
+    (SELECT COUNT(*) FROM notifications WHERE tenant_id=? AND user_id=? AND status='unread') AS unread_notifications,
+    (SELECT COUNT(*) FROM project_communications WHERE tenant_id=? AND status IN ('open','follow_up') AND next_follow_up_at IS NOT NULL AND next_follow_up_at<=date('now','+3 day')) AS pending_follow_ups,
+    (SELECT COUNT(*) FROM resource_assignments WHERE tenant_id=? AND status IN ('planned','confirmed','active') AND planned_start<=date('now','+14 day') AND planned_end>=date('now')) AS upcoming_assignments,
+    (SELECT COUNT(*) FROM material_requirements WHERE tenant_id=? AND status NOT IN ('cancelled','consumed') AND required_quantity>reserved_quantity+ordered_quantity) AS material_shortages,
+    (SELECT COUNT(*) FROM resource_assignments a JOIN resource_assignments b ON b.tenant_id=a.tenant_id AND b.id>a.id AND b.status IN ('planned','confirmed','active') AND b.planned_start<=a.planned_end AND b.planned_end>=a.planned_start AND ((a.employee_id IS NOT NULL AND b.employee_id=a.employee_id) OR (a.employee_id IS NULL AND b.employee_id IS NULL AND b.resource_type=a.resource_type AND b.resource_name=a.resource_name)) WHERE a.tenant_id=? AND a.status IN ('planned','confirmed','active') AND a.allocation_percent+b.allocation_percent>100) AS capacity_conflicts
+  `).bind(tenant, tenant, tenant, tenant, tenant, principal.user.id, tenant, tenant, tenant, tenant));
   return json({ data });
 }
 
@@ -484,7 +495,7 @@ function transitionConditions(target, facts) {
     contracted: [condition("accepted_offer", "Kabul edilmiş teklif mevcut", facts.offer_accepted > 0 || facts.contract_signed > 0, "blocker", "offers"), condition("signed_contract", "İmzalı sözleşme mevcut", facts.contract_signed > 0, "warning", "contracts")],
     design: [condition("contract", "İmzalı veya aktif sözleşme mevcut", facts.contract_signed > 0, "blocker", "contracts"), condition("payment_plan", "Ödeme planı tanımlı", facts.payment_plan_ready > 0, "warning", "contracts")],
     procurement: [condition("approved_design", "Onaylı tasarım revizyonu mevcut", facts.design_approved > 0, "blocker", "designRevisions"), condition("work_items", "Ürün ve iş kalemleri tanımlı", facts.work_item_total > 0, "blocker", "workItems")],
-    production: [condition("approved_design", "Güncel tasarım onaylı", facts.design_approved > 0, "blocker", "designRevisions"), condition("work_items", "Üretilecek iş kalemleri hazır", facts.work_item_total > 0, "blocker", "workItems"), condition("purchase_approvals", "Bekleyen satın alma onayı yok", facts.purchase_pending === 0, "warning", "purchases")],
+    production: [condition("approved_design", "Güncel tasarım onaylı", facts.design_approved > 0, "blocker", "designRevisions"), condition("work_items", "Üretilecek iş kalemleri hazır", facts.work_item_total > 0, "blocker", "workItems"), condition("material_plan", "Malzeme ihtiyaç planı hazır", facts.material_requirement_total > 0, "warning", "materialRequirements"), condition("material_shortage", "Tüm malzemeler stoktan ayrıldı veya siparişe bağlandı", facts.material_shortage_count === 0, "blocker", "materialRequirements"), condition("purchase_approvals", "Bekleyen satın alma onayı yok", facts.purchase_pending === 0, "warning", "purchases"), condition("capacity", "Ekip ve iş merkezi kapasite çakışması yok", facts.capacity_conflict_count === 0, "warning", "resourceAssignments")],
     installation: [condition("production_complete", "Üretim emirleri tamamlandı", facts.production_total > 0 && facts.production_done === facts.production_total, "blocker", "production"), condition("quality_pass", "Final kalite kontrolü geçti", facts.final_quality_pass > 0, "blocker", "qualityInspections")],
     acceptance: [condition("installation_complete", "Montaj tamamlandı", facts.installation_total > 0 && facts.installation_done === facts.installation_total, "blocker", "installations")],
     completed: [condition("handover", "Müşteri teslimi kabul etti", facts.handover_accepted > 0, "blocker", "handovers"), condition("punch", "Açık teslim eksiği yok", facts.open_punch_items === 0, "blocker", "handoverPunchItems")],
@@ -528,7 +539,23 @@ async function projectCommandCenterData(env, principal, project) {
     tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId,
     tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId,
     tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId, tenant, projectId)));
-  const normalizedFacts = Object.fromEntries(Object.entries(facts || {}).map(([key, value]) => [key, typeof value === "number" ? value : Number(value || 0)]));
+  const materialFacts = await one(env.DB.prepare(`SELECT
+    COUNT(*) AS material_requirement_total,
+    COALESCE(SUM(required_quantity),0) AS material_required_quantity,
+    COALESCE(SUM(reserved_quantity),0) AS material_reserved_quantity,
+    COALESCE(SUM(ordered_quantity),0) AS material_ordered_quantity,
+    COALESCE(SUM(CASE WHEN required_quantity>reserved_quantity+ordered_quantity THEN 1 ELSE 0 END),0) AS material_shortage_count
+    FROM material_requirements WHERE tenant_id=? AND project_id=? AND status NOT IN ('cancelled','consumed')`).bind(tenant, projectId));
+  const capacityFacts = await one(env.DB.prepare(`SELECT COUNT(*) AS capacity_conflict_count
+    FROM resource_assignments a
+    JOIN resource_assignments b ON b.tenant_id=a.tenant_id AND b.id>a.id
+      AND b.status IN ('planned','confirmed','active')
+      AND b.planned_start<=a.planned_end AND b.planned_end>=a.planned_start
+      AND ((a.employee_id IS NOT NULL AND b.employee_id=a.employee_id) OR (a.employee_id IS NULL AND b.employee_id IS NULL AND b.resource_type=a.resource_type AND b.resource_name=a.resource_name))
+    WHERE a.tenant_id=? AND a.status IN ('planned','confirmed','active')
+      AND a.allocation_percent+b.allocation_percent>100 AND (a.project_id=? OR b.project_id=?)`).bind(tenant, projectId, projectId));
+  const combinedFacts = { ...(facts || {}), ...(materialFacts || {}), ...(capacityFacts || {}) };
+  const normalizedFacts = Object.fromEntries(Object.entries(combinedFacts).map(([key, value]) => [key, typeof value === "number" ? value : Number(value || 0)]));
   const currentIndex = projectStageDefinitions.findIndex(([status]) => status === project.status);
   const stages = projectStageDefinitions.map(([status, label], index) => {
     const checks = transitionConditions(status, normalizedFacts);
@@ -1099,6 +1126,67 @@ async function releaseProductionOrder(request, env, principal, orderId) {
   return json({ data: serializeRow(await workflowRow(env, principal, "production_orders", orderId), "production-orders", principal) });
 }
 
+async function reserveMaterialRequirement(request, env, principal, requirementId) {
+  if (!allowed(principal, "material-requirements.reserve")) return problem(403, "forbidden", "Malzemeyi stoktan ayırma yetkiniz yok.");
+  const requirement = await workflowRow(env, principal, "material_requirements", requirementId);
+  if (!requirement) return problem(404, "not_found", "Malzeme ihtiyacı bulunamadı.");
+  if (["cancelled", "consumed"].includes(requirement.status)) return problem(409, "invalid_transition", "Kapalı malzeme ihtiyacı için rezervasyon yapılamaz.");
+  if (!requirement.inventory_item_id) return problem(422, "inventory_item_required", "Stoktan ayırmak için ihtiyaç kaydına stok kartı bağlanmalıdır.");
+  const inventory = await workflowRow(env, principal, "inventory_items", requirement.inventory_item_id);
+  if (!inventory || inventory.status !== "active") return problem(409, "inventory_unavailable", "Bağlı stok kartı aktif değil veya bulunamadı.");
+  let body;
+  try { body = await optionalJson(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
+  const remaining = Math.max(0, Number(requirement.required_quantity) - Number(requirement.reserved_quantity) - Number(requirement.ordered_quantity));
+  if (!remaining) return json({ data: serializeRow(requirement, "material-requirements", principal), meta: { replayed: true, reserved_quantity: 0 } });
+  const available = Math.max(0, Number(inventory.on_hand_quantity) - Number(inventory.reserved_quantity));
+  const requested = body.quantity == null ? remaining : Number(body.quantity);
+  if (!Number.isFinite(requested) || requested <= 0) return problem(422, "validation_error", "Ayrılacak miktar sıfırdan büyük olmalıdır.");
+  const quantity = Math.min(remaining, available, requested);
+  if (quantity <= 0) return problem(409, "insufficient_stock", "Bu stok kartında ayrılabilir miktar bulunmuyor.", { available_quantity: available, remaining_quantity: remaining });
+  const reservedTotal = Number(requirement.reserved_quantity) + quantity;
+  const covered = reservedTotal + Number(requirement.ordered_quantity) >= Number(requirement.required_quantity);
+  const timestamp = now();
+  try {
+    await commitWorkflow(env, principal, request, [
+      env.DB.prepare("UPDATE inventory_items SET reserved_quantity=reserved_quantity+?,updated_at=? WHERE id=? AND tenant_id=? AND reserved_quantity+?<=on_hand_quantity").bind(quantity, timestamp, inventory.id, principal.tenantId, quantity),
+      env.DB.prepare("UPDATE material_requirements SET reserved_quantity=reserved_quantity+?,status=?,updated_at=? WHERE id=? AND tenant_id=?").bind(quantity, covered ? "covered" : "shortage", timestamp, requirementId, principal.tenantId),
+    ], "reserve", "material-requirements", requirementId, { inventory_item_id: inventory.id, quantity });
+  } catch (error) { return workflowCommitProblem(env, error); }
+  const updatedInventory = await workflowRow(env, principal, "inventory_items", inventory.id);
+  if (Number(updatedInventory.reserved_quantity) < Number(inventory.reserved_quantity) + quantity) return problem(409, "reservation_conflict", "Stok başka bir işlem tarafından ayrıldı; güncel miktarla tekrar deneyin.");
+  return json({ data: serializeRow(await workflowRow(env, principal, "material_requirements", requirementId), "material-requirements", principal), meta: { reserved_quantity: quantity, available_quantity: Math.max(0, Number(updatedInventory.on_hand_quantity) - Number(updatedInventory.reserved_quantity)) } });
+}
+
+async function createMaterialPurchaseRequest(request, env, principal, requirementId) {
+  if (!allowed(principal, "material-requirements.purchase")) return problem(403, "forbidden", "Malzeme ihtiyacından satın alma talebi oluşturma yetkiniz yok.");
+  const requirement = await workflowRow(env, principal, "material_requirements", requirementId);
+  if (!requirement) return problem(404, "not_found", "Malzeme ihtiyacı bulunamadı.");
+  if (["cancelled", "consumed"].includes(requirement.status)) return problem(409, "invalid_transition", "Kapalı malzeme ihtiyacı satın almaya bağlanamaz.");
+  if (requirement.purchase_request_id) {
+    const existing = await workflowRow(env, principal, "purchase_requests", requirement.purchase_request_id);
+    if (existing) return json({ data: serializeRow(existing, "purchase-requests", principal), meta: { replayed: true, material_requirement_id: requirementId } });
+  }
+  const missing = Math.max(0, Number(requirement.required_quantity) - Number(requirement.reserved_quantity) - Number(requirement.ordered_quantity));
+  if (!missing) return problem(409, "material_already_covered", "Bu ihtiyaç stok veya mevcut tedarik kaydıyla karşılanmış durumda.");
+  const purchaseRequestId = id("pr_");
+  const requestNumber = `MAT-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${purchaseRequestId.slice(-6).toUpperCase()}`;
+  const timestamp = now();
+  try {
+    await commitWorkflow(env, principal, request, [
+      env.DB.prepare("INSERT INTO purchase_requests (id,tenant_id,request_number,project_id,requester_user_id,needed_by,priority,description,quantity,unit,preferred_supplier_id,status,notes,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?, 'normal',?,?,?,?, 'pending',?,?,?,?)").bind(purchaseRequestId, principal.tenantId, requestNumber, requirement.project_id, principal.user.id, requirement.needed_by || null, requirement.description, missing, requirement.unit, requirement.preferred_supplier_id || null, requirement.notes || null, JSON.stringify({ source: "material_requirement", material_requirement_id: requirementId, inventory_item_id: requirement.inventory_item_id || null }), timestamp, timestamp),
+      env.DB.prepare("UPDATE material_requirements SET ordered_quantity=ordered_quantity+?,purchase_request_id=?,status='covered',updated_at=? WHERE id=? AND tenant_id=? AND purchase_request_id IS NULL").bind(missing, purchaseRequestId, timestamp, requirementId, principal.tenantId),
+    ], "create-purchase-request", "material-requirements", requirementId, { purchase_request_id: purchaseRequestId, quantity: missing });
+  } catch (error) {
+    const concurrent = await workflowRow(env, principal, "material_requirements", requirementId);
+    if (concurrent?.purchase_request_id) {
+      const existing = await workflowRow(env, principal, "purchase_requests", concurrent.purchase_request_id);
+      if (existing) return json({ data: serializeRow(existing, "purchase-requests", principal), meta: { replayed: true, material_requirement_id: requirementId } });
+    }
+    return workflowCommitProblem(env, error);
+  }
+  return json({ data: serializeRow(await workflowRow(env, principal, "purchase_requests", purchaseRequestId), "purchase-requests", principal), meta: { material_requirement_id: requirementId } }, 201);
+}
+
 async function approvePurchaseRequest(request, env, principal, requestId) {
   if (!allowed(principal, "purchase-requests.approve")) return problem(403, "forbidden", "Satın alma talebi onaylama yetkiniz yok.");
   const record = await workflowRow(env, principal, "purchase_requests", requestId);
@@ -1435,7 +1523,7 @@ async function writeBackup(env, tenantId, triggeredBy = "scheduler") {
     return { id: backupId, tenant_id: tenantId, status: "failed", error_message: message };
   }
   try {
-    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 8, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
+    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 9, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
     const tenant = await one(env.DB.prepare("SELECT * FROM tenants WHERE id=?").bind(tenantId));
     lines.push(JSON.stringify({ table: "tenants", row: tenant }));
     const users = await all(env.DB.prepare("SELECT u.* FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=?").bind(tenantId));
@@ -1548,6 +1636,8 @@ async function dispatchAuthenticated(request, env, principal, url, segments) {
     if (resource === "projects" && action === "transition") return transitionProject(request, env, principal, resourceId);
     if (resource === "work-items" && action === "approve-revision") return approveWorkItemRevision(request, env, principal, resourceId);
     if (resource === "production-orders" && action === "release") return releaseProductionOrder(request, env, principal, resourceId);
+    if (resource === "material-requirements" && action === "reserve") return reserveMaterialRequirement(request, env, principal, resourceId);
+    if (resource === "material-requirements" && action === "create-purchase-request") return createMaterialPurchaseRequest(request, env, principal, resourceId);
     if (resource === "purchase-requests" && action === "approve") return approvePurchaseRequest(request, env, principal, resourceId);
     if (resource === "leaves" && ["approve", "reject"].includes(action)) return decideLeave(request, env, principal, resourceId, action);
     if (resource === "financial-transactions" && ["approve", "reverse"].includes(action)) return financialAction(request, env, principal, resourceId, action);

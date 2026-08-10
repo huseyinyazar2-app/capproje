@@ -49,6 +49,7 @@ export const API_CONFIG = Object.freeze({
     handoverPunchItems: "/handover-punch-items",
     projectCommunications: "/project-communications",
     resourceAssignments: "/resource-assignments",
+    materialRequirements: "/material-requirements",
     notifications: "/notifications",
     search: "/search",
   }),
@@ -99,6 +100,7 @@ export const RESOURCE_SLUGS = Object.freeze({
   handoverPunchItems: "handover-punch-items",
   projectCommunications: "project-communications",
   resourceAssignments: "resource-assignments",
+  materialRequirements: "material-requirements",
 });
 
 const FIELD_MAPS = Object.freeze({
@@ -139,6 +141,7 @@ const FIELD_MAPS = Object.freeze({
   handoverPunchItems: { handoverId: "handover_id", responsibleUserId: "responsible_user_id", dueDate: "due_date", resolvedAt: "resolved_at", acceptedAt: "accepted_at" },
   projectCommunications: { projectId: "project_id", customerId: "customer_id", contactName: "contact_name", occurredAt: "occurred_at", nextFollowUpAt: "next_follow_up_at", ownerUserId: "owner_user_id" },
   resourceAssignments: { projectId: "project_id", employeeId: "employee_id", resourceType: "resource_type", resourceName: "resource_name", plannedStart: "planned_start", plannedEnd: "planned_end", allocationPercent: "allocation_percent" },
+  materialRequirements: { projectId: "project_id", workItemId: "work_item_id", inventoryItemId: "inventory_item_id", preferredSupplierId: "preferred_supplier_id", purchaseRequestId: "purchase_request_id", itemCode: "item_code", requiredQuantity: "required_quantity", reservedQuantity: "reserved_quantity", orderedQuantity: "ordered_quantity", receivedQuantity: "received_quantity", neededBy: "needed_by" },
 });
 
 const STATUS_VALUES = Object.freeze({
@@ -183,7 +186,7 @@ function mapOutgoing(resource, value) {
     let mapped = raw;
     if (apiKey.endsWith("_minor")) mapped = Math.round(Number(raw) * 100);
     else if (["progress_percent", "revision"].includes(apiKey)) mapped = Number(raw);
-    else if (["quantity"].includes(apiKey)) mapped = Number(raw);
+    else if (["quantity", "required_quantity", "allocation_percent"].includes(apiKey)) mapped = Number(raw);
     if (apiKey === "status") mapped = STATUS_VALUES[resource]?.[raw] || raw;
     if (apiKey === "production_type") mapped = raw === "Dış imalat" ? "external" : raw === "İç üretim" ? "internal" : raw;
     if (apiKey === "type" && resource === "finance") mapped = raw === "Gelir" ? "income" : raw === "Gider" ? "expense" : raw === "Hakediş" ? "progress_payment" : raw === "Avans" ? "advance" : raw === "Maliyet tahmini" ? "cost_forecast" : raw;

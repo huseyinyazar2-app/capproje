@@ -44,6 +44,7 @@ async function setup() {
   database.exec(await readFile(new URL("../migrations/0006_phone_auth.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0009_material_planning.sql", import.meta.url), "utf8"));
   database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-a", "Firma A", "firma-a", timestamp, timestamp);
   database.prepare("INSERT INTO users (id,email,full_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("owner-a", "owner@a.test", "Firma Sahibi", "active", timestamp, timestamp);
   database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-owner", "tenant-a", "owner", "Firma Sahibi", 1, timestamp, timestamp);
@@ -69,6 +70,7 @@ test("bootstrap owner can open a session without knowing the tenant id", async (
   database.exec(await readFile(new URL("../migrations/0006_phone_auth.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0009_material_planning.sql", import.meta.url), "utf8"));
   const env = { DB: new D1Database(database), ALLOW_DEV_AUTH: "true", BOOTSTRAP_SECRET: "secret-for-test", PASSWORD_AUTH_ENABLED: "true", PASSWORD_AUTH_PEPPER: "test-password-pepper-1234567890" };
   const bootstrapResponse = await worker.fetch(new Request("https://example.test/api/v1/bootstrap", {
     method: "POST",
@@ -324,8 +326,8 @@ test("scheduled backups include the latest schema manifest and never mix tenants
   for (const [key, content] of objects) {
     const lines = content.split("\n").map((line) => JSON.parse(line));
     const manifest = lines[0];
-    assert.equal(manifest.schema_version, 8);
-    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql"]);
+    assert.equal(manifest.schema_version, 9);
+    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql"]);
     assert.match(key, new RegExp(`^backups/${manifest.tenant_id}/`));
     for (const entry of lines.slice(1)) {
       if (entry.table === "users") continue;
@@ -355,7 +357,7 @@ test("request fallback creates at most one daily tenant backup and scheduled reu
   assert.equal(objects.size, 1);
   const manifest = JSON.parse([...objects.values()][0].split("\n")[0]);
   assert.equal(manifest.tenant_id, "tenant-a");
-  assert.equal(manifest.schema_version, 8);
+  assert.equal(manifest.schema_version, 9);
 });
 
 test("owner can create, rotate and revoke hashed expiring API tokens", async () => {
@@ -435,6 +437,53 @@ test("posted stock movements update quantity atomically and reject insufficient 
   assert.equal((await worker.fetch(request(`/api/v1/stock-movements/${excessive.id}/post`), env)).status, 409);
   assert.equal(database.prepare("SELECT on_hand_quantity FROM inventory_items WHERE id=?").get(item.id).on_hand_quantity, 10);
   assert.equal(database.prepare("SELECT status FROM stock_movements WHERE id=?").get(excessive.id).status, "draft");
+});
+
+test("material planning reserves available stock, opens only the shortage purchase request and reports capacity conflicts", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-MAT", "Malzeme Projesi", "design", timestamp, timestamp);
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("project-b", "tenant-a", "P-KAP", "Kapasite Projesi", "production", timestamp, timestamp);
+
+  let response = await worker.fetch(request("/api/v1/inventory-items", { body: { sku: "MDF-18-MAT", name: "18mm MDF", unit: "plaka" } }), env);
+  const inventory = (await response.json()).data;
+  database.prepare("UPDATE inventory_items SET on_hand_quantity=10 WHERE id=?").run(inventory.id);
+
+  response = await worker.fetch(request("/api/v1/material-requirements", { body: { project_id: "project-a", inventory_item_id: inventory.id, item_code: "MDF-18", description: "Meşe desen MDF", required_quantity: 15, unit: "plaka", needed_by: "2026-08-20" } }), env);
+  assert.equal(response.status, 200);
+  const requirement = (await response.json()).data;
+
+  response = await worker.fetch(request(`/api/v1/material-requirements/${requirement.id}/reserve`, { body: {} }), env);
+  assert.equal(response.status, 200);
+  assert.equal(database.prepare("SELECT reserved_quantity FROM inventory_items WHERE id=?").get(inventory.id).reserved_quantity, 10);
+  let requirementRow = database.prepare("SELECT reserved_quantity,ordered_quantity,status FROM material_requirements WHERE id=?").get(requirement.id);
+  assert.equal(requirementRow.reserved_quantity, 10);
+  assert.equal(requirementRow.ordered_quantity, 0);
+  assert.equal(requirementRow.status, "shortage");
+
+  response = await worker.fetch(request(`/api/v1/material-requirements/${requirement.id}/create-purchase-request`, { body: {} }), env);
+  assert.equal(response.status, 201);
+  const purchase = (await response.json()).data;
+  assert.equal(purchase.quantity, 5);
+  assert.equal(purchase.status, "pending");
+  requirementRow = database.prepare("SELECT reserved_quantity,ordered_quantity,status,purchase_request_id FROM material_requirements WHERE id=?").get(requirement.id);
+  assert.equal(requirementRow.reserved_quantity, 10);
+  assert.equal(requirementRow.ordered_quantity, 5);
+  assert.equal(requirementRow.status, "covered");
+  assert.equal(requirementRow.purchase_request_id, purchase.id);
+  response = await worker.fetch(request(`/api/v1/material-requirements/${requirement.id}/create-purchase-request`, { body: {} }), env);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).meta.replayed, true);
+
+  for (const [id, projectId, allocation] of [["capacity-a", "project-a", 70], ["capacity-b", "project-b", 50]]) {
+    database.prepare("INSERT INTO resource_assignments (id,tenant_id,project_id,resource_type,resource_name,planned_start,planned_end,allocation_percent,status,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run(id, "tenant-a", projectId, "work_center", "CNC-01", "2026-08-10", "2026-08-15", allocation, "planned", "{}", timestamp, timestamp);
+  }
+  response = await worker.fetch(request("/api/v1/dashboard", { method: "GET" }), env);
+  assert.equal((await response.json()).data.attention.capacity_conflicts, 1);
+  response = await worker.fetch(request("/api/v1/projects/project-a/command-center", { method: "GET" }), env);
+  const commandCenter = (await response.json()).data;
+  assert.equal(commandCenter.facts.material_requirement_total, 1);
+  assert.equal(commandCenter.facts.material_shortage_count, 0);
+  assert.equal(commandCenter.facts.capacity_conflict_count, 1);
 });
 
 test("meeting, quality and signed handover records follow tenant-audited lifecycles", async () => {
