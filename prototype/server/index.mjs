@@ -7,6 +7,7 @@ import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import worker from "../worker/index.js";
+import { databaseFromEnv } from "../worker/database.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const migrationPattern = /^\d{4}_.+\.sql$/;
@@ -207,23 +208,32 @@ export async function createDailySqliteBackup(sqlite, backupDirectory, retention
 
 export async function createRuntime(environment = process.env) {
   if (environment.ALLOW_DEV_AUTH === "true") throw new Error("ALLOW_DEV_AUTH üretim sunucusunda true olamaz.");
+  const databaseProvider = environment.DATABASE_PROVIDER === "turso" ? "turso" : "sqlite";
   const dataDirectory = path.resolve(environment.CAPPROJE_DATA_DIR || path.join(projectRoot, "data"));
   const databasePath = path.resolve(environment.SQLITE_DATABASE_PATH || path.join(dataDirectory, "capproje.sqlite"));
   const objectDirectory = path.resolve(environment.OBJECT_STORAGE_DIR || path.join(dataDirectory, "objects"));
   const backupDirectory = path.resolve(environment.SQLITE_BACKUP_DIR || path.join(dataDirectory, "backups"));
   const assetsDirectory = path.resolve(environment.STATIC_ASSETS_DIR || path.join(projectRoot, "dist", "client"));
   if (!existsSync(path.join(assetsDirectory, "index.html"))) throw new Error("Üretim arayüzü bulunamadı. Önce npm run build çalıştırılmalıdır.");
-  await mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
   await mkdir(objectDirectory, { recursive: true, mode: 0o700 });
-  const sqlite = new DatabaseSync(databasePath, { timeout: 5000 });
-  sqlite.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=1000;");
-  await migrateLocalDatabase(sqlite);
-  await chmod(databasePath, 0o600).catch(() => {});
+  let sqlite = null;
+  let database;
+  if (databaseProvider === "turso") {
+    database = databaseFromEnv({ ...environment, DATABASE_PROVIDER: "turso" });
+  } else {
+    await mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+    sqlite = new DatabaseSync(databasePath, { timeout: 5000 });
+    sqlite.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=1000;");
+    await migrateLocalDatabase(sqlite);
+    await chmod(databasePath, 0o600).catch(() => {});
+    database = new LocalD1Database(sqlite);
+  }
   return {
     sqlite,
+    database,
     backupDirectory,
     retentionDays: safeInteger(environment.SQLITE_BACKUP_RETENTION_DAYS, 30, 1, 3650),
-    env: { ...environment, DATABASE_PROVIDER: "sqlite", DB: new LocalD1Database(sqlite), FILES: new FilesystemBucket(objectDirectory), ASSETS: new StaticAssets(assetsDirectory) },
+    env: { ...environment, DATABASE_PROVIDER: databaseProvider, DB: database, FILES: new FilesystemBucket(objectDirectory), ASSETS: new StaticAssets(assetsDirectory) },
   };
 }
 
@@ -294,7 +304,7 @@ async function runScheduled(runtime) {
   const tasks = [];
   await worker.scheduled({}, runtime.env, { waitUntil(task) { tasks.push(Promise.resolve(task)); } });
   await Promise.all(tasks);
-  await createDailySqliteBackup(runtime.sqlite, runtime.backupDirectory, runtime.retentionDays);
+  if (runtime.sqlite) await createDailySqliteBackup(runtime.sqlite, runtime.backupDirectory, runtime.retentionDays);
 }
 
 async function main() {
@@ -315,7 +325,8 @@ async function main() {
     clearInterval(timer);
     server.close(async () => {
       await Promise.allSettled([server.waitForBackgroundTasks(), ...scheduledTasks]);
-      runtime.sqlite.close();
+      runtime.sqlite?.close();
+      runtime.database?.client?.close?.();
       process.exit(0);
     });
     setTimeout(() => process.exit(1), 10_000).unref();

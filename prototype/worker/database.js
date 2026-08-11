@@ -62,6 +62,7 @@ export function createD1CompatibleTurso(client) {
 
 export function databaseFromEnv(env) {
   if (env.DATABASE_PROVIDER !== "turso") return env.DB || null;
+  if (env.DB?.provider === "turso") return env.DB;
   if (!env.TURSO_DATABASE_URL || !env.TURSO_AUTH_TOKEN) {
     throw new Error("Turso bağlantısı için TURSO_DATABASE_URL ve TURSO_AUTH_TOKEN zorunludur.");
   }

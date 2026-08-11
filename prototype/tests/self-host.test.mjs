@@ -118,6 +118,19 @@ test("self-host server refuses accidental direct public binding", async () => {
   await assert.rejects(() => startSelfHostedServer({ env: {} }, { HOST: "0.0.0.0", PORT: "0" }), /doğrudan genel ağa açılamaz/);
 });
 
+test("self-host Turso runtime requires remote database credentials", async (t) => {
+  const directory = await temporaryDirectory();
+  const assetsDirectory = path.join(directory, "client");
+  await mkdir(assetsDirectory, { recursive: true });
+  await writeFile(path.join(assetsDirectory, "index.html"), "<!doctype html><title>Capproje</title>");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await assert.rejects(() => createRuntime({
+    DATABASE_PROVIDER: "turso",
+    CAPPROJE_DATA_DIR: path.join(directory, "data"),
+    STATIC_ASSETS_DIR: assetsDirectory,
+  }), /TURSO_DATABASE_URL ve TURSO_AUTH_TOKEN/);
+});
+
 test("self-host runtime bootstraps and authenticates through the real HTTP bridge", async (t) => {
   const directory = await temporaryDirectory();
   const assetsDirectory = path.join(directory, "client");
