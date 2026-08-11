@@ -168,3 +168,13 @@ test("sidebar groups are accessible accordions and the workspace uses the walnut
   assert.match(liveSource, /--live-green:#6b432b/);
   assert.match(liveSource, /\.live-sidebar,.live-login>section\{background:#3b261b\}/);
 });
+
+test("user invitation selects one or more named roles and form enums are localized", () => {
+  assert.match(liveSource, /field\("roleIds",\s*"Roller",\s*"multiselect"/);
+  assert.match(liveSource, /optionsResource:\s*"roles"/);
+  assert.match(liveSource, /api\.list\(resource,\s*\{\s*pageSize:\s*100\s*\}\)/);
+  assert.doesNotMatch(liveSource, /field\("roleId",\s*"Rol ID"/);
+  assert.match(apiSource, /roleIds:\s*"role_ids"/);
+  for (const label of ["Şirket", "Bireysel", "Otel", "Mimar", "Yıllık izin", "Kredi kartı", "Haftalık proje"]) assert.match(liveSource, new RegExp(label));
+  assert.match(liveSource, /<option value=\{option\.value\} key=\{option\.value\}>\{option\.label\}<\/option>/);
+});

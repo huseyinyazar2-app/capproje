@@ -46,6 +46,7 @@ async function setup() {
   database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0009_material_planning.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0010_contextual_media.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0011_membership_roles.sql", import.meta.url), "utf8"));
   database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-a", "Firma A", "firma-a", timestamp, timestamp);
   database.prepare("INSERT INTO users (id,email,full_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("owner-a", "owner@a.test", "Firma Sahibi", "active", timestamp, timestamp);
   database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-owner", "tenant-a", "owner", "Firma Sahibi", 1, timestamp, timestamp);
@@ -73,6 +74,7 @@ test("bootstrap owner can open a session without knowing the tenant id", async (
   database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0009_material_planning.sql", import.meta.url), "utf8"));
   database.exec(await readFile(new URL("../migrations/0010_contextual_media.sql", import.meta.url), "utf8"));
+  database.exec(await readFile(new URL("../migrations/0011_membership_roles.sql", import.meta.url), "utf8"));
   const env = { DB: new D1Database(database), ALLOW_DEV_AUTH: "true", BOOTSTRAP_SECRET: "secret-for-test", PASSWORD_AUTH_ENABLED: "true", PASSWORD_AUTH_PEPPER: "test-password-pepper-1234567890" };
   const bootstrapResponse = await worker.fetch(new Request("https://example.test/api/v1/bootstrap", {
     method: "POST",
@@ -212,6 +214,32 @@ test("project transitions reject skipped phases", async () => {
   assert.equal(response.status, 409);
 });
 
+test("a user can receive multiple roles and session permissions are combined", async () => {
+  const { database, env } = await setup();
+  env.PASSWORD_AUTH_PEPPER = "test-password-pepper-1234567890";
+  database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-project", "tenant-a", "project_manager", "Proje Yöneticisi", 1, timestamp, timestamp);
+  database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-finance", "tenant-a", "finance", "Finans", 1, timestamp, timestamp);
+  database.prepare("INSERT INTO role_permissions (tenant_id,role_id,permission_code) VALUES (?,?,?)").run("tenant-a", "role-project", "projects.read");
+  database.prepare("INSERT INTO role_permissions (tenant_id,role_id,permission_code) VALUES (?,?,?)").run("tenant-a", "role-finance", "financial-transactions.read");
+
+  const response = await worker.fetch(request("/api/v1/memberships/invite", { body: {
+    email: "manager@a.test", phone: "0532 111 22 33", full_name: "Proje Yöneticisi", temporary_password: "Test-password-123",
+    role_ids: ["role-project", "role-finance"], title: "Proje Yöneticisi",
+  } }), env);
+  const payload = await response.json();
+  assert.equal(response.status, 201);
+  assert.deepEqual(payload.data.role_ids, ["role-project", "role-finance"]);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM membership_roles WHERE membership_id=?").get(payload.data.id).count, 2);
+
+  database.prepare("UPDATE users SET status='active' WHERE email=?").run("manager@a.test");
+  database.prepare("UPDATE memberships SET status='active' WHERE id=?").run(payload.data.id);
+  const sessionResponse = await worker.fetch(request("/api/v1/session", { method: "GET", email: "manager@a.test" }), env);
+  const session = await sessionResponse.json();
+  assert.equal(sessionResponse.status, 200);
+  assert.deepEqual(session.data.roles.map((role) => role.code).sort(), ["finance", "project_manager"]);
+  assert.deepEqual(session.data.permissions.sort(), ["financial-transactions.read", "projects.read"]);
+});
+
 test("project command center enforces readiness gates and creates stage tasks", async () => {
   const { database, env } = await setup();
   database.prepare("INSERT INTO projects (id,tenant_id,code,customer_id,name,status,contract_amount_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-AKIS", "customer-a", "Akıllı Akış", "discovery", 2_000_000, timestamp, timestamp);
@@ -328,8 +356,8 @@ test("scheduled backups include the latest schema manifest and never mix tenants
   for (const [key, content] of objects) {
     const lines = content.split("\n").map((line) => JSON.parse(line));
     const manifest = lines[0];
-    assert.equal(manifest.schema_version, 10);
-    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql"]);
+    assert.equal(manifest.schema_version, 11);
+    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql"]);
     assert.match(key, new RegExp(`^backups/${manifest.tenant_id}/`));
     for (const entry of lines.slice(1)) {
       if (entry.table === "users") continue;
@@ -359,7 +387,7 @@ test("request fallback creates at most one daily tenant backup and scheduled reu
   assert.equal(objects.size, 1);
   const manifest = JSON.parse([...objects.values()][0].split("\n")[0]);
   assert.equal(manifest.tenant_id, "tenant-a");
-  assert.equal(manifest.schema_version, 10);
+  assert.equal(manifest.schema_version, 11);
 });
 
 test("owner can create, rotate and revoke hashed expiring API tokens", async () => {

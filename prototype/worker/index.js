@@ -48,8 +48,8 @@ const aliases = {
   transactions: "financial-transactions",
 };
 
-const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql"];
+const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","membership_roles","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql"];
 const dailyBackupSeen = new Map();
 const ownerRoles = new Set(["owner", "admin"]);
 const fileEntityContexts = {
@@ -310,24 +310,45 @@ async function authenticate(request, env) {
   }
   if (!user) return null;
 
+  async function expandMembership(membership) {
+    const extraRoles = await all(env.DB.prepare("SELECT r.id AS role_id,r.code AS role_code,r.name AS role_name FROM membership_roles mr JOIN roles r ON r.id=mr.role_id AND r.tenant_id=mr.tenant_id WHERE mr.tenant_id=? AND mr.membership_id=? ORDER BY r.name").bind(membership.tenant_id, membership.membership_id));
+    const roles = [];
+    const seen = new Set();
+    for (const role of [{ role_id: membership.role_id, role_code: membership.role_code, role_name: membership.role_name }, ...extraRoles]) {
+      if (!role.role_id || seen.has(role.role_id)) continue;
+      seen.add(role.role_id);
+      roles.push({ id: role.role_id, code: role.role_code, name: role.role_name });
+    }
+    const isOwner = roles.some((role) => ownerRoles.has(role.code));
+    const permissionCodes = new Set();
+    if (!isOwner) {
+      for (const role of roles) {
+        const rows = await all(env.DB.prepare("SELECT permission_code FROM role_permissions WHERE tenant_id=? AND role_id=?").bind(membership.tenant_id, role.id));
+        rows.forEach((item) => permissionCodes.add(item.permission_code));
+      }
+    }
+    return { membership: { ...membership, roles }, permissions: [...permissionCodes], isOwner };
+  }
+
   const tenantId = request.headers.get("x-tenant-id");
   if (!tenantId) {
     const memberships = await all(env.DB.prepare("SELECT m.id AS membership_id,m.tenant_id,m.title,r.id AS role_id,r.code AS role_code,r.name AS role_name,t.name AS tenant_name,t.slug AS tenant_slug FROM memberships m JOIN roles r ON r.id=m.role_id AND r.tenant_id=m.tenant_id JOIN tenants t ON t.id=m.tenant_id WHERE m.user_id=? AND m.status='active' AND t.status='active' ORDER BY t.name").bind(user.id));
     if (memberships.length === 0) return { user, forbiddenTenant: true };
-    if (memberships.length > 1) return { user, tenantSelectionRequired: true, tenants: memberships.map((item) => ({ id: item.tenant_id, name: item.tenant_name, slug: item.tenant_slug, role: { id: item.role_id, code: item.role_code, name: item.role_name } })) };
-    const membership = memberships[0];
-    const permissionRows = ownerRoles.has(membership.role_code) ? [] : await all(env.DB.prepare("SELECT permission_code FROM role_permissions WHERE tenant_id=? AND role_id=?").bind(membership.tenant_id, membership.role_id));
-    return { user, tenantId: membership.tenant_id, membership, permissions: permissionRows.map((item) => item.permission_code), tenantAutoSelected: true };
+    if (memberships.length > 1) {
+      const expanded = await Promise.all(memberships.map((item) => expandMembership(item)));
+      return { user, tenantSelectionRequired: true, tenants: expanded.map(({ membership }) => ({ id: membership.tenant_id, name: membership.tenant_name, slug: membership.tenant_slug, role: membership.roles[0], roles: membership.roles })) };
+    }
+    const expanded = await expandMembership(memberships[0]);
+    return { user, tenantId: memberships[0].tenant_id, ...expanded, tenantAutoSelected: true };
   }
   if (!validId(tenantId)) return { user, tenantMissing: true };
   const membership = await one(env.DB.prepare("SELECT m.id AS membership_id,m.tenant_id,m.title,r.id AS role_id,r.code AS role_code,r.name AS role_name,t.name AS tenant_name,t.slug AS tenant_slug FROM memberships m JOIN roles r ON r.id=m.role_id AND r.tenant_id=m.tenant_id JOIN tenants t ON t.id=m.tenant_id WHERE m.user_id=? AND m.tenant_id=? AND m.status='active' AND t.status='active'").bind(user.id, tenantId));
   if (!membership) return { user, forbiddenTenant: true };
-  const permissionRows = ownerRoles.has(membership.role_code) ? [] : await all(env.DB.prepare("SELECT permission_code FROM role_permissions WHERE tenant_id=? AND role_id=?").bind(tenantId, membership.role_id));
-  return { user, tenantId, membership, permissions: permissionRows.map((item) => item.permission_code) };
+  return { user, tenantId, ...(await expandMembership(membership)) };
 }
 
 function allowed(principal, permission) {
-  return ownerRoles.has(principal.membership.role_code) || principal.permissions.includes(permission);
+  return principal.isOwner || principal.permissions.includes(permission);
 }
 
 function permissionFor(slug, action) {
@@ -424,8 +445,9 @@ async function getSession(principal) {
     user: principal.user,
     tenant: { id: principal.tenantId, name: principal.membership.tenant_name, slug: principal.membership.tenant_slug },
     membership: { id: principal.membership.membership_id, title: principal.membership.title },
-    role: { id: principal.membership.role_id, code: principal.membership.role_code, name: principal.membership.role_name },
-    permissions: ownerRoles.has(principal.membership.role_code) ? ["*"] : principal.permissions,
+    role: principal.membership.roles[0],
+    roles: principal.membership.roles,
+    permissions: principal.isOwner ? ["*"] : principal.permissions,
     tenant_auto_selected: Boolean(principal.tenantAutoSelected),
   } });
 }
@@ -621,7 +643,16 @@ async function listResource(request, env, principal, slug, config) {
   const where = clauses.join(" AND ");
   const totalRow = await one(env.DB.prepare(`SELECT COUNT(*) AS total FROM ${config.table} WHERE ${where}`).bind(...bindings));
   const rows = await all(env.DB.prepare(`SELECT * FROM ${config.table} WHERE ${where} ORDER BY ${config.table === "audit_logs" ? "created_at" : "updated_at"} DESC LIMIT ? OFFSET ?`).bind(...bindings, pageSize, (page - 1) * pageSize));
-  return json({ data: rows.map((row) => serializeRow(row, slug, principal)), meta: { page, pageSize, total: Number(totalRow?.total || 0) } });
+  const serialized = rows.map((row) => serializeRow(row, slug, principal));
+  if (slug === "memberships") {
+    for (let index = 0; index < rows.length; index += 1) {
+      const roleRows = await all(env.DB.prepare("SELECT r.id,r.code,r.name FROM membership_roles mr JOIN roles r ON r.id=mr.role_id AND r.tenant_id=mr.tenant_id WHERE mr.tenant_id=? AND mr.membership_id=? ORDER BY r.name").bind(principal.tenantId, rows[index].id));
+      const roles = roleRows.length ? roleRows : await all(env.DB.prepare("SELECT id,code,name FROM roles WHERE tenant_id=? AND id=?").bind(principal.tenantId, rows[index].role_id));
+      serialized[index].role_ids = roles.map((role) => role.id);
+      serialized[index].role_names = roles.map((role) => role.name).join(", ");
+    }
+  }
+  return json({ data: serialized, meta: { page, pageSize, total: Number(totalRow?.total || 0) } });
 }
 
 async function getResource(env, principal, slug, config, resourceId) {
@@ -749,9 +780,14 @@ async function inviteMember(request, env, principal) {
   if (!allowed(principal, "users.manage")) return problem(403, "forbidden", "Kullanıcı yönetme yetkiniz yok.");
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
-  if (!body?.email || !body?.phone || !body?.full_name || !body?.role_id || !validPassword(body?.temporary_password)) return problem(422, "validation_error", "email, phone, full_name, role_id ve en az 8 karakter geçici şifre zorunludur.");
-  const role = await one(env.DB.prepare("SELECT id FROM roles WHERE id=? AND tenant_id=?").bind(body.role_id, principal.tenantId));
-  if (!role) return problem(422, "cross_tenant_reference", "Rol bu firmaya ait değil.");
+  const roleIds = [...new Set((Array.isArray(body?.role_ids) ? body.role_ids : body?.role_id ? [body.role_id] : []).filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim()))];
+  if (!body?.email || !body?.phone || !body?.full_name || !roleIds.length || !validPassword(body?.temporary_password)) return problem(422, "validation_error", "E-posta, telefon, ad soyad, en az bir rol ve en az 8 karakter geçici şifre zorunludur.");
+  const roles = [];
+  for (const roleId of roleIds) {
+    const role = await one(env.DB.prepare("SELECT id,code,name FROM roles WHERE id=? AND tenant_id=?").bind(roleId, principal.tenantId));
+    if (!role) return problem(422, "cross_tenant_reference", "Seçilen rollerden biri bu firmaya ait değil.");
+    roles.push(role);
+  }
   const email = String(body.email).trim().toLowerCase();
   const phone = normalizeTurkishMobile(body.phone);
   if (!phone) return problem(422, "invalid_phone", "Türkiye cep telefonu numarasını kontrol edin.");
@@ -772,10 +808,13 @@ async function inviteMember(request, env, principal) {
   } catch { return problem(409, "identity_conflict", "E-posta veya telefon başka bir kullanıcı tarafından kullanılıyor."); }
   const membershipId = id("mem_");
   try {
-    await run(env.DB.prepare("INSERT INTO memberships (id,tenant_id,user_id,role_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'invited',?,?)").bind(membershipId, principal.tenantId, user.id, body.role_id, body.title || null, timestamp, timestamp));
+    const statements = [env.DB.prepare("INSERT INTO memberships (id,tenant_id,user_id,role_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'invited',?,?)").bind(membershipId, principal.tenantId, user.id, roleIds[0], body.title || null, timestamp, timestamp)];
+    roleIds.forEach((roleId) => statements.push(env.DB.prepare("INSERT INTO membership_roles (tenant_id,membership_id,role_id,created_at) VALUES (?,?,?,?)").bind(principal.tenantId, membershipId, roleId, timestamp)));
+    if (typeof env.DB.batch === "function") await env.DB.batch(statements);
+    else for (const statement of statements) await run(statement);
   } catch { return problem(409, "membership_exists", "Bu kullanıcı firmaya daha önce eklenmiş."); }
-  await audit(env, principal, request, "invite", "memberships", membershipId, { user_id: user.id, role_id: body.role_id });
-  return json({ data: { id: membershipId, tenant_id: principal.tenantId, user, role_id: body.role_id, title: body.title || null, status: "invited" } }, 201);
+  await audit(env, principal, request, "invite", "memberships", membershipId, { user_id: user.id, role_ids: roleIds });
+  return json({ data: { id: membershipId, tenant_id: principal.tenantId, user, role_id: roleIds[0], role_ids: roleIds, roles, role_names: roles.map((role) => role.name).join(", "), title: body.title || null, status: "invited" } }, 201);
 }
 
 async function rolePermissions(request, env, principal, roleId) {
@@ -810,7 +849,7 @@ function tokenExpiry(days = 90) {
 }
 
 async function tokenManagement(request, env, principal, segments) {
-  if (!ownerRoles.has(principal.membership.role_code) && !allowed(principal, "tokens.manage")) return problem(403, "forbidden", "API tokenı yönetme yetkiniz yok.");
+  if (!principal.isOwner && !allowed(principal, "tokens.manage")) return problem(403, "forbidden", "API tokenı yönetme yetkiniz yok.");
   if (segments.length === 3 && request.method === "GET") {
     const rows = await all(env.DB.prepare("SELECT id,name,expires_at,last_used_at,revoked_at,created_at FROM api_tokens WHERE user_id=? ORDER BY created_at DESC").bind(principal.user.id));
     return json({ data: rows });
@@ -1094,7 +1133,7 @@ async function transitionProject(request, env, principal, projectId) {
   const warnings = targetChecks.filter((item) => !item.passed && item.severity === "warning");
   const overrideReason = String(body.override_reason || "").trim();
   if (blockers.length && !overrideReason) return problem(409, "project_gate_blocked", "Bu aşamaya geçmeden önce zorunlu proje koşulları tamamlanmalıdır.", { blockers, warnings, target });
-  if (blockers.length && !ownerRoles.has(principal.membership.role_code)) return problem(403, "override_forbidden", "Zorunlu proje koşullarını yalnız firma sahibi veya yönetici gerekçeyle aşabilir.", { blockers, warnings, target });
+  if (blockers.length && !principal.isOwner) return problem(403, "override_forbidden", "Zorunlu proje koşullarını yalnız firma sahibi veya yönetici gerekçeyle aşabilir.", { blockers, warnings, target });
   if (blockers.length && overrideReason.length < 10) return problem(422, "override_reason_required", "Yönetici istisnası için en az 10 karakterlik gerekçe yazılmalıdır.", { blockers, warnings, target });
   const timestamp = now();
   const completion = target === "completed" ? timestamp : project.actual_end_date;
@@ -1607,7 +1646,7 @@ async function writeBackup(env, tenantId, triggeredBy = "scheduler") {
     return { id: backupId, tenant_id: tenantId, status: "failed", error_message: message };
   }
   try {
-    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 10, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
+    const lines = [JSON.stringify({ type: "manifest", version: 1, schema_version: 11, migrations: backupMigrations, tenant_id: tenantId, created_at: started })];
     const tenant = await one(env.DB.prepare("SELECT * FROM tenants WHERE id=?").bind(tenantId));
     lines.push(JSON.stringify({ table: "tenants", row: tenant }));
     const users = await all(env.DB.prepare("SELECT u.* FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=?").bind(tenantId));
@@ -1646,7 +1685,7 @@ async function ensureDailyBackup(env, tenantId) {
 }
 
 async function backupRoute(request, env, principal, segments) {
-  if (!ownerRoles.has(principal.membership.role_code)) return problem(403, "owner_required", "Yedek yönetimi yalnızca firma sahibine açıktır.");
+  if (!principal.isOwner) return problem(403, "owner_required", "Yedek yönetimi yalnızca firma sahibine açıktır.");
   if (segments.length === 1 && request.method === "GET") {
     const rows = await all(env.DB.prepare("SELECT * FROM backup_runs WHERE tenant_id=? ORDER BY created_at DESC LIMIT 100").bind(principal.tenantId));
     return json({ data: rows.map(decodeRow) });
@@ -1687,6 +1726,7 @@ async function bootstrap(request, env) {
       env.DB.prepare("INSERT INTO users (id,email,full_name,phone,password_hash,password_salt,password_iterations,password_changed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(userId, String(body.owner_email).toLowerCase(), body.owner_name, ownerPhone, ownerCredential?.hash || null, ownerCredential?.salt || null, ownerCredential?.iterations || null, ownerCredential ? timestamp : null, timestamp, timestamp),
       env.DB.prepare("INSERT INTO roles (id,tenant_id,code,name,description,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").bind(roleId, tenantId, "owner", "Firma Sahibi", "Tüm tenant yetkilerine sahiptir.", 1, timestamp, timestamp),
       env.DB.prepare("INSERT INTO memberships (id,tenant_id,user_id,role_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'active',?,?)").bind(membershipId, tenantId, userId, roleId, body.owner_title || "Firma Sahibi", timestamp, timestamp),
+      env.DB.prepare("INSERT INTO membership_roles (tenant_id,membership_id,role_id,created_at) VALUES (?,?,?,?)").bind(tenantId, membershipId, roleId, timestamp),
       env.DB.prepare("INSERT INTO api_tokens (id,user_id,name,token_hash,expires_at,created_at) VALUES (?,?,?,?,?,?)").bind(id("tok_"), userId, "İlk kurulum", tokenHash, tokenExpiresAt, timestamp),
     ];
     for (const template of templates) {

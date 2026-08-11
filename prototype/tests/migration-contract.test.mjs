@@ -5,6 +5,7 @@ import test from "node:test";
 const migrationUrl = new URL("../migrations/0001_tenant_core.sql", import.meta.url);
 const phoneMigrationUrl = new URL("../migrations/0006_phone_auth.sql", import.meta.url);
 const passwordMigrationUrl = new URL("../migrations/0007_password_auth.sql", import.meta.url);
+const membershipRolesMigrationUrl = new URL("../migrations/0011_membership_roles.sql", import.meta.url);
 const workerUrl = new URL("../worker/index.js", import.meta.url);
 
 test("tenant-owned business tables require tenant_id", async () => {
@@ -66,4 +67,12 @@ test("password authentication stores only salted adaptive hashes and rate-limit 
 test("password hashing stays within the production WebCrypto limit", async () => {
   const source = await readFile(workerUrl, "utf8");
   assert.match(source, /const PASSWORD_ITERATIONS = 100_000;/);
+});
+
+test("memberships support multiple tenant-scoped roles with a legacy backfill", async () => {
+  const sql = await readFile(membershipRolesMigrationUrl, "utf8");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS membership_roles/);
+  assert.match(sql, /tenant_id TEXT NOT NULL/);
+  assert.match(sql, /PRIMARY KEY \(tenant_id, membership_id, role_id\)/);
+  assert.match(sql, /INSERT OR IGNORE INTO membership_roles[\s\S]*SELECT tenant_id, id, role_id, created_at[\s\S]*FROM memberships/);
 });
