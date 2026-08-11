@@ -156,3 +156,14 @@ test("field mode provides permission-aware mobile actions and contextual camera 
   assert.match(liveSource, /disabled=\{!online\s*&&\s*!canUseActionOffline\(action\)\}/);
   assert.match(liveSource, /await api\.create\(targetModule\.resource,\s*values\)/);
 });
+
+test("sidebar groups are accessible accordions and the workspace uses the walnut palette", () => {
+  assert.match(liveSource, /const \[openNavGroup, setOpenNavGroup\]/);
+  assert.match(liveSource, /aria-label="Ana menü"/);
+  assert.match(liveSource, /className="live-nav-group-toggle"/);
+  assert.match(liveSource, /aria-expanded=\{expanded\}/);
+  assert.match(liveSource, /aria-controls=\{panelId\}/);
+  assert.match(liveSource, /hidden=\{!expanded\}/);
+  assert.match(liveSource, /--live-green:#6b432b/);
+  assert.match(liveSource, /\.live-sidebar,.live-login>section\{background:#3b261b\}/);
+});
