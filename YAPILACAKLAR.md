@@ -125,10 +125,10 @@
 
 - [ ] Bulut tabanlı, çok firmalı (multi-tenant) ana ürün mimarisini tasarlamak.
 - [ ] Her firmanın verisini güvenli biçimde ayırmak.
-- [ ] Büyük firmalar için özel sunucu veya kurum içi kurulum seçeneği hazırlamak.
+- [x] Büyük firmalar için özel sunucu veya kurum içi kurulum seçeneği hazırlamak.
 - [ ] Rol bazlı okuma, yazma, onay, silme, maliyet görme ve dışa aktarma izinleri oluşturmak.
 - [ ] Kritik işlemler için değiştirilemez denetim kaydı tutmak.
-- [ ] Otomatik günlük yedekleme, saklama süresi ve geri yükleme testlerini planlamak.
+- [x] Otomatik günlük yedekleme ve saklama süresini uygulamak; sunucu dışı yedek hedefi ile periyodik geri yükleme tatbikatını kurulumda tamamlamak.
 - [ ] Dosya/fotoğraf depolama, kota, virüs tarama ve erişim politikalarını belirlemek.
 - [ ] Firma, şube, depo, para birimi, dil ve belge numaralandırmasını ayarlanabilir yapmak.
 - [ ] Excel'den veri aktarımı ve hazır sektör şablonlarıyla hızlı kurulum sağlamak.

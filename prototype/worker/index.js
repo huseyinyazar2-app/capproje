@@ -1574,7 +1574,15 @@ async function downloadFile(env, principal, fileId) {
   if (!metadata) return problem(404, "not_found", "Dosya bulunamadı.");
   const object = await env.FILES.get(metadata.object_key);
   if (!object) return problem(404, "object_missing", "Dosya nesnesi bulunamadı.");
-  const headers = new Headers({ "content-type": metadata.content_type || "application/octet-stream", "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(metadata.file_name)}`, "cache-control": "private, max-age=300", "x-content-type-options": "nosniff" });
+  const inlineTypes = new Set(["image/avif", "image/gif", "image/jpeg", "image/png", "image/webp", "application/pdf"]);
+  const inline = inlineTypes.has(String(metadata.content_type || "").toLowerCase());
+  const headers = new Headers({
+    "content-type": inline ? metadata.content_type : "application/octet-stream",
+    "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(metadata.file_name)}`,
+    "content-security-policy": "default-src 'none'; sandbox",
+    "cache-control": "private, max-age=300",
+    "x-content-type-options": "nosniff",
+  });
   if (object.httpEtag) headers.set("etag", object.httpEtag);
   return new Response(object.body, { headers });
 }
@@ -1772,7 +1780,15 @@ async function handleApi(request, env, context) {
   if (!env.DB) return problem(503, "database_unavailable", "DB binding yapılandırılmamış.");
   const url = new URL(request.url);
   const segments = url.pathname.split("/").filter(Boolean);
-  if (url.pathname === "/api/v1/health" && request.method === "GET") return json({ data: { status: "ok", time: now() } });
+  if (url.pathname === "/api/v1/health" && request.method === "GET") {
+    try {
+      const check = await one(env.DB.prepare("SELECT 1 AS ok"));
+      if (Number(check?.ok) !== 1) throw new Error("database_check_failed");
+      return json({ data: { status: "ok", database: "ok", storage: env.FILES ? "ok" : "unavailable", time: now() } });
+    } catch {
+      return problem(503, "database_unavailable", "Veritabanı sağlık kontrolü başarısız.");
+    }
+  }
   if (url.pathname === "/api/v1/bootstrap" && request.method === "POST") return bootstrap(request, env);
   if (url.pathname === "/api/v1/auth/phone/start" && request.method === "POST") return startPhoneAuth(request, env);
   if (url.pathname === "/api/v1/auth/phone/verify" && request.method === "POST") return verifyPhoneAuth(request, env);

@@ -31,6 +31,14 @@ pnpm build
 
 Veritabanı migration'ları `prototype/migrations`, Worker API'si `prototype/worker`, canlı arayüz ise `prototype/src/LiveWorkspace.jsx` altındadır.
 
+## Ubuntu sunucu hedefi
+
+Uygulama, bulut önizlemesine ek olarak Node.js 24 ve yerel SQLite ile kendi sunucusunda çalışabilir. `prototype/server/index.mjs`; aynı API, tenant izolasyonu ve rol kontrollerini kullanır, migration'ları başlangıçta uygular, yüklenen dosyaları özel veri dizininde saklar ve her gün okunabilir bir SQLite yedeği üretir.
+
+Sunucuda çalışma sırası `npm ci`, `npm run build` ve `npm run start:self-host` şeklindedir. Üretim ayarları Git'e eklenmeyen bir ortam dosyasından verilmelidir. Uygulama varsayılan olarak yalnızca `127.0.0.1:3000` dinler; alan adı ve HTTPS, Nginx üzerinden bu adrese yönlendirilir. `/var/lib/capproje` dizini uygulama kullanıcısına özel tutulmalı ve ayrıca sunucu dışındaki şifreli bir hedefe yedeklenmelidir.
+
+Kurulumdan önce en az şu değerler değiştirilmelidir: `PASSWORD_AUTH_PEPPER`, `BOOTSTRAP_SECRET` ve ilk yönetici şifresi. `ALLOW_DEV_AUTH` üretimde hiçbir zaman açılmamalıdır. Sağlık kontrolü `/api/v1/health` adresindedir.
+
 ## Vercel ile yayınlama
 
 1. Bu GitHub deposunu Vercel'e bağlayın.

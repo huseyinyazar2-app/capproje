@@ -539,11 +539,19 @@ test("contextual media links project evidence safely and enforces photo consent"
   response = await worker.fetch(request(`/api/v1/files/${media.id}/content`, { method: "GET" }), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-type"), "image/jpeg");
+  assert.match(response.headers.get("content-disposition"), /^inline;/);
+  assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; sandbox");
   response = await worker.fetch(request("/api/v1/projects/project-a/command-center", { method: "GET" }), env);
   const commandCenter = (await response.json()).data;
   assert.equal(commandCenter.facts.file_total, 1);
   assert.equal(commandCenter.facts.photo_total, 1);
   assert.equal(commandCenter.recentMedia[0].space_name, "Lobi");
+  database.prepare("INSERT INTO files (id,tenant_id,entity_type,entity_id,file_name,object_key,content_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").run("unsafe-html", "tenant-a", "projects", "project-a", "unsafe.html", "tenant-a/unsafe.html", "text/html", timestamp, timestamp);
+  objects.set("tenant-a/unsafe.html", "<script>document.cookie</script>");
+  response = await worker.fetch(request("/api/v1/files/unsafe-html/content", { method: "GET" }), env);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "application/octet-stream");
+  assert.match(response.headers.get("content-disposition"), /^attachment;/);
 });
 
 test("meeting, quality and signed handover records follow tenant-audited lifecycles", async () => {

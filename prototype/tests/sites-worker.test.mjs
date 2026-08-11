@@ -72,7 +72,7 @@ test("adds restrictive security headers to static assets and the app shell", asy
 });
 
 test("keeps API responses non-cacheable", async () => {
-  const response = await worker.fetch(new Request("https://example.test/api/v1/health"), { DB: {} });
+  const response = await worker.fetch(new Request("https://example.test/api/v1/health"), { DB: { prepare: () => ({ first: async () => ({ ok: 1 }) }) } });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");

@@ -1,6 +1,7 @@
 .pnpm-store/
 prototype/node_modules/
 prototype/dist/
+prototype/data/
 .vercel/
 prototype/qa/
 prototype/design-qa.md

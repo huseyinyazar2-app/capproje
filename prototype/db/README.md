@@ -14,3 +14,9 @@ Worker, varsayılan olarak Cloudflare D1'i `DB` binding'i üzerinden kullanır. 
 - Owner API tokenları `/api/v1/tokens` üzerinden oluşturulur, yenilenir ve iptal edilir. Ham token yalnız oluşturma/yenileme cevabında bir kez gösterilir; D1'de yalnız SHA-256 özeti tutulur. Token ömrü varsayılan 90, en fazla 365 gündür.
 
 Geri yükleme endpoint'i kasıtlı olarak `501 restore_not_enabled` döndürür. Otomatik restore; şema sürümü, bütünlük kontrolü ve bakım penceresi tasarlanmadan etkinleştirilmemelidir.
+
+## Kendi Ubuntu sunucusunda SQLite
+
+`server/index.mjs`, Node.js'in yerleşik SQLite sürücüsünü D1 uyumlu adaptör üzerinden kullanır. Başlangıçta WAL, foreign key, tam senkronizasyon ve busy timeout ayarlarını etkinleştirir; uygulanmayan migration dosyalarını transaction içinde çalıştırır. SQLite dosyası, WAL dosyaları, yüklemeler ve günlük fiziksel yedekler `CAPPROJE_DATA_DIR` altında tutulur. Fiziksel yedekler varsayılan olarak 30 gün saklanır.
+
+Yerel yedek aynı disk arızasına karşı yeterli değildir. Canlı kurulumda veri dizininin tamamı ayrıca sunucu dışındaki şifreli bir depoya aktarılmalı ve geri yükleme düzenli olarak denenmelidir.
