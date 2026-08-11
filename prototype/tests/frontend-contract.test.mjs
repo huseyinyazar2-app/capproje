@@ -164,6 +164,7 @@ test("sidebar groups are accessible accordions and the workspace uses the walnut
   assert.match(liveSource, /aria-expanded=\{expanded\}/);
   assert.match(liveSource, /aria-controls=\{panelId\}/);
   assert.match(liveSource, /hidden=\{!expanded\}/);
+  assert.match(liveSource, /\.live-nav-group-items\[hidden\]\{display:none\}/);
   assert.match(liveSource, /--live-green:#6b432b/);
   assert.match(liveSource, /\.live-sidebar,.live-login>section\{background:#3b261b\}/);
 });
