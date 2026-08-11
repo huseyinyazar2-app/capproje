@@ -7,8 +7,7 @@ const LiveWorkspace = lazy(() => import("./LiveWorkspace.jsx").then(({ LiveWorks
 
 function Root() {
   const params = new URLSearchParams(window.location.search);
-  const liveHost = window.location.hostname.endsWith(".chatgpt.site");
-  const [prototypeMode, setPrototypeMode] = useState(() => params.get("prototype") === "1" || (!liveHost && params.get("live") !== "1"));
+  const [prototypeMode, setPrototypeMode] = useState(() => params.get("prototype") === "1" || (import.meta.env.DEV && params.get("live") !== "1"));
 
   return (
     <Suspense fallback={<div role="status" style={{ padding: "2rem", fontFamily: "system-ui", color: "#20262c" }}>Capproje hazırlanıyor…</div>}>

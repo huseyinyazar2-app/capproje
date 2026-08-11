@@ -90,6 +90,12 @@ test("offline mode queues only allowlisted creates and blocks critical mutations
   }
 });
 
+test("production opens the real workspace unless prototype mode is explicit", () => {
+  assert.match(mainSource, /params\.get\(["']prototype["']\)\s*===\s*["']1["']/);
+  assert.match(mainSource, /import\.meta\.env\.DEV\s*&&\s*params\.get\(["']live["']\)\s*!==\s*["']1["']/);
+  assert.doesNotMatch(mainSource, /hostname\.endsWith\(["']\.chatgpt\.site["']\)/);
+});
+
 test("offline queue is device-local, scoped, bounded and idempotently replayed", () => {
   assert.match(apiSource, /indexedDB\.open\(OFFLINE_DB_NAME,\s*1\)/);
   assert.match(apiSource, /context\?\.tenantId\s*&&\s*context\?\.userId/);
