@@ -17,7 +17,11 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 COPY --from=build --chown=node:node /app /app
-RUN mkdir -p /app/storage && chown node:node /app/storage
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/storage \
+    && chown node:node /app/storage
 USER node
 EXPOSE 3000
 
