@@ -364,3 +364,23 @@ test("resetting a password requires the dedicated capability and never targets a
   assert.equal(response.status, 403);
   assert.equal((await body(response)).error.code, "privileged_role_forbidden");
 });
+
+test("finalised sourcing and production records cannot be edited or deleted directly", async () => {
+  const { database, env } = await setup();
+  seedSourcing(database);
+  const quotation = (await body(await send(env, "/api/v1/supplier-quotations", { body: { purchase_request_id: "req-a", supplier_id: "sup-a", total_minor: 100_000, status: "received" } }))).data;
+  assert.equal((await send(env, `/api/v1/supplier-quotations/${quotation.id}/select`, { body: {} })).status, 200);
+
+  // Seçilmiş teklif, satın alma kararının kanıtıdır; sonradan değiştirilemez.
+  let response = await send(env, `/api/v1/supplier-quotations/${quotation.id}`, { method: "PATCH", body: { total_minor: 1 } });
+  assert.equal(response.status, 409);
+  assert.equal((await body(response)).error.code, "workflow_record_immutable");
+  assert.equal((await send(env, `/api/v1/supplier-quotations/${quotation.id}`, { method: "DELETE" })).status, 409);
+
+  database.prepare("INSERT INTO production_orders (id,tenant_id,order_number,project_id,quantity,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").run("order-a", "tenant-a", "U-1", "project-a", 2, "planned", timestamp, timestamp);
+  const issue = (await body(await send(env, "/api/v1/production-issues", { body: { production_order_id: "order-a", issue_type: "quality", description: "Kusur" } }))).data;
+  await send(env, `/api/v1/production-issues/${issue.id}/resolve`, { body: { resolution: "Düzeltildi", rework_quantity: 1 } });
+  // Çözülmüş sorun silinseydi üretim emrindeki yeniden işlem miktarı asılı kalırdı.
+  assert.equal((await send(env, `/api/v1/production-issues/${issue.id}`, { method: "DELETE" })).status, 409);
+  assert.equal(database.prepare("SELECT rework_quantity FROM production_orders WHERE id='order-a'").get().rework_quantity, 1);
+});

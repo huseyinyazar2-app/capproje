@@ -206,6 +206,33 @@ export async function createDailySqliteBackup(sqlite, backupDirectory, retention
   return destination;
 }
 
+// Veri dizini kalıcı bir diske bağlanmadığında her dağıtımda veritabanı sıfırlanır
+// ve bu, sorun çıkana kadar fark edilmez. Açılışta dizine bir işaret dosyası yazıp
+// önceki açılışları sayıyoruz; sayaç sıfırlanmışsa dizin kalıcı değildir.
+export async function checkStoragePersistence(dataDirectory, hasDatabase) {
+  const markerPath = path.join(dataDirectory, ".capproje-storage.json");
+  let previous = null;
+  try { previous = JSON.parse(await readFile(markerPath, "utf8")); }
+  catch { previous = null; }
+  const marker = {
+    installation_id: previous?.installation_id || randomUUID(),
+    first_seen_at: previous?.first_seen_at || new Date().toISOString(),
+    boot_count: Number(previous?.boot_count || 0) + 1,
+    last_seen_at: new Date().toISOString(),
+  };
+  await writeFile(markerPath, JSON.stringify(marker, null, 2), { mode: 0o600 }).catch(() => {});
+  // İlk açılışta veritabanı zaten yoktur; uyarı yalnızca veri beklenen bir
+  // kurulumda işaret dosyasının kaybolmuş olması hâlinde anlamlıdır.
+  const persistent = Boolean(previous);
+  if (!persistent && hasDatabase) {
+    console.warn("UYARI: Veri dizininde önceki açılış izi yok ama veritabanı dosyası mevcut. Kalıcı disk yapılandırmasını kontrol edin.");
+  }
+  if (!previous) {
+    console.log(`Veri dizini ilk kez kullanılıyor: ${dataDirectory}. Bu dizin kalıcı bir diske bağlı değilse yeniden dağıtımda tüm veriler silinir.`);
+  }
+  return { ...marker, persistent, dataDirectory };
+}
+
 export async function createRuntime(environment = process.env) {
   if (environment.ALLOW_DEV_AUTH === "true") throw new Error("ALLOW_DEV_AUTH üretim sunucusunda true olamaz.");
   const databaseProvider = environment.DATABASE_PROVIDER === "turso" ? "turso" : "sqlite";
@@ -215,7 +242,9 @@ export async function createRuntime(environment = process.env) {
   const backupDirectory = path.resolve(environment.SQLITE_BACKUP_DIR || path.join(dataDirectory, "backups"));
   const assetsDirectory = path.resolve(environment.STATIC_ASSETS_DIR || path.join(projectRoot, "dist", "client"));
   if (!existsSync(path.join(assetsDirectory, "index.html"))) throw new Error("Üretim arayüzü bulunamadı. Önce npm run build çalıştırılmalıdır.");
+  await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
   await mkdir(objectDirectory, { recursive: true, mode: 0o700 });
+  const storage = await checkStoragePersistence(dataDirectory, existsSync(databasePath));
   let sqlite = null;
   let database;
   if (databaseProvider === "turso") {
@@ -232,8 +261,9 @@ export async function createRuntime(environment = process.env) {
     sqlite,
     database,
     backupDirectory,
+    storage,
     retentionDays: safeInteger(environment.SQLITE_BACKUP_RETENTION_DAYS, 30, 1, 3650),
-    env: { ...environment, DATABASE_PROVIDER: databaseProvider, DB: database, FILES: new FilesystemBucket(objectDirectory), ASSETS: new StaticAssets(assetsDirectory) },
+    env: { ...environment, DATABASE_PROVIDER: databaseProvider, DB: database, FILES: new FilesystemBucket(objectDirectory), ASSETS: new StaticAssets(assetsDirectory), STORAGE_STATE: storage },
   };
 }
 

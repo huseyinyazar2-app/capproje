@@ -47,9 +47,22 @@ sunuluyorsa `ALLOWED_ORIGINS` ile bu alan adı tanımlanmalıdır.
 
 Varsayılan veri katmanı sunucunun kendi diskindeki SQLite'tır
 (`DATABASE_PROVIDER=sqlite`); migration'lar uygulama açılışında otomatik
-uygulanır, ayrı bir komut gerekmez. `CAPPROJE_DATA_DIR` kalıcı bir diske
-bağlanmalıdır — Coolify/Docker kullanılıyorsa bu dizin bir volume olmalıdır,
-aksi hâlde her dağıtımda veritabanı, yüklenen dosyalar ve yedekler silinir.
+uygulanır, ayrı bir komut gerekmez.
+
+### Kalıcı disk (Coolify / Docker)
+
+Veritabanı, yüklenen dosyalar ve yedekler tek bir dizinde tutulur. Docker imajında
+bu dizin `/app/storage`'dır ve `VOLUME` olarak tanımlıdır. Konteyner yeniden
+başlatmalarında veri korunur; **yeniden dağıtımlarda da korunması için barındırma
+tarafında bu yola adlandırılmış kalıcı bir disk bağlanmalıdır.**
+
+Coolify'da: uygulamanın sayfasında **Storages → Add** → Name: `capproje-data`,
+Mount Path: `/app/storage` → kaydedip yeniden dağıtın. Başka bir yol kullanmak
+isterseniz `CAPPROJE_DATA_DIR` değişkenini de aynı yola ayarlayın.
+
+Doğrulama: `GET /api/v1/health` çıktısındaki `persistent_storage` alanı ikinci
+dağıtımdan sonra `true` olmalıdır. `false` kalıyorsa disk bağlı değildir ve her
+dağıtımda veri sıfırlanır; uygulama açılış günlüğüne de uyarı yazar.
 
 Turso yalnızca bulut önizlemesi için bir seçenektir ve zorunlu değildir.
 Kullanılırsa migration'lar otomatik uygulanmaz; her dağıtımdan sonra

@@ -1,5 +1,13 @@
 import { databaseFromEnv } from "./database.js";
 
+// "0" ve "false" metinleri JavaScript'te doğru kabul edilir; seçim listesinden
+// gelen değerlerin yanlış yorumlanmaması için ayrıca çözümlenir.
+const BOOLEAN_COLUMNS = ["official", "is_system", "is_outsourced"];
+function booleanValue(value) {
+  if (typeof value === "string") return !["", "0", "false", "hayir", "hayır", "no"].includes(value.trim().toLowerCase());
+  return Boolean(value);
+}
+
 const JSON_COLUMNS = new Set(["settings_json", "metadata_json", "dependency_ids_json", "team_json", "payment_schedule_json", "attendees_json", "checklist_json"]);
 
 const resources = {
@@ -357,7 +365,7 @@ function decodeRow(row) {
       try { decoded[key] = JSON.parse(decoded[key]); } catch { /* Eski/bozuk kayıt ham haliyle kalır. */ }
     }
   }
-  for (const key of ["official", "is_system"]) {
+  for (const key of BOOLEAN_COLUMNS) {
     if (key in decoded) decoded[key] = Boolean(decoded[key]);
   }
   return decoded;
@@ -544,7 +552,7 @@ function normalizeInput(slug, config, body, creating) {
       const serialized = typeof value === "string" ? value : JSON.stringify(value ?? (key.endsWith("_ids_json") || key === "team_json" ? [] : {}));
       if (serialized.length > JSON_FIELD_LIMIT) return { error: `${key} en fazla ${JSON_FIELD_LIMIT} karakter olabilir.` };
       values[key] = serialized;
-    } else if (["official", "is_system"].includes(key)) values[key] = value ? 1 : 0;
+    } else if (BOOLEAN_COLUMNS.includes(key)) values[key] = booleanValue(value) ? 1 : 0;
     else {
       if (key === "status" && allowedStatuses && value !== undefined && value !== null && value !== "" && !allowedStatuses.includes(value)) {
         return { error: `status yalnız şu değerlerden biri olabilir: ${allowedStatuses.join(", ")}` };
@@ -1158,6 +1166,10 @@ async function updateResource(request, env, principal, slug, config, resourceId)
     "project-meetings": ["published", "closed"],
     "quality-inspections": ["completed", "closed"],
     handovers: ["accepted", "closed"],
+    // Kesinleşmiş tedarik kararı ve kapatılmış üretim kaydı doğrudan değiştirilemez.
+    "supplier-quotations": ["selected", "rejected", "expired"],
+    "production-operations": ["completed", "skipped"],
+    "production-issues": ["resolved", "cancelled"],
   };
   if (immutableDomainStates[slug]?.includes(existing.status)) return problem(409, "workflow_record_immutable", "Kesinleşmiş iş akışı kaydı doğrudan düzenlenemez.");
   if (slug === "survey-measurements") {
@@ -2523,7 +2535,7 @@ async function deleteResource(request, env, principal, slug, config, resourceId)
   const existing = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?`).bind(resourceId, principal.tenantId));
   if (!existing) return problem(404, "not_found", "Kayıt bulunamadı.");
   if (slug === "financial-transactions" && ["approved", "reversed"].includes(existing.status)) return problem(409, "approved_record_immutable", "Onaylı finans kaydı silinemez; ters kayıt oluşturun.");
-  const protectedStates = { "site-surveys": ["approved"], contracts: ["signed","active","completed","terminated"], "design-revisions": ["approved","superseded"], "progress-payments": ["approved","invoiced","paid"], "stock-movements": ["posted"], "project-meetings": ["published","closed"], "quality-inspections": ["completed","closed"], handovers: ["accepted","closed"] };
+  const protectedStates = { "site-surveys": ["approved"], contracts: ["signed","active","completed","terminated"], "design-revisions": ["approved","superseded"], "progress-payments": ["approved","invoiced","paid"], "stock-movements": ["posted"], "project-meetings": ["published","closed"], "quality-inspections": ["completed","closed"], handovers: ["accepted","closed"], "supplier-quotations": ["selected"], "production-operations": ["completed"], "production-issues": ["resolved"] };
   if (protectedStates[slug]?.includes(existing.status)) return problem(409, "workflow_record_immutable", "Kesinleşmiş iş akışı kaydı silinemez.");
   if (slug === "survey-measurements") {
     const survey = await workflowRow(env, principal, "site_surveys", existing.site_survey_id);
@@ -2924,7 +2936,24 @@ async function handleApi(request, env, context) {
     try {
       const check = await one(env.DB.prepare("SELECT 1 AS ok"));
       if (Number(check?.ok) !== 1) throw new Error("database_check_failed");
-      return json({ data: { status: "ok", database: "ok", storage: env.FILES ? "ok" : "unavailable", time: now() } });
+      // Hiç firma yoksa sistem henüz kurulmamıştır. Bunu gizlemenin bir faydası
+      // yok; aksine giriş ekranı sebepsiz "hatalı şifre" diyerek çıkmaza sokuyor.
+      // Yardımcı sorgu, sağlık kontrolünün kendisini düşürmemelidir.
+      let setupRequired = null;
+      try {
+        const tenants = await one(env.DB.prepare("SELECT COUNT(*) AS count FROM tenants"));
+        if (tenants) setupRequired = Number(tenants.count || 0) === 0;
+      } catch { setupRequired = null; }
+      return json({ data: {
+        status: "ok",
+        database: "ok",
+        storage: env.FILES ? "ok" : "unavailable",
+        ...(setupRequired === null ? {} : { setup_required: setupRequired }),
+        // Kalıcı disk bağlı değilse yeniden dağıtımda veri kaybı olur; sağlık
+        // çıktısında görünür olsun ki kurulum sessizce yanlış kalmasın.
+        ...(env.STORAGE_STATE ? { persistent_storage: env.STORAGE_STATE.persistent, boot_count: env.STORAGE_STATE.boot_count } : {}),
+        time: now(),
+      } });
     } catch {
       return problem(503, "database_unavailable", "Veritabanı sağlık kontrolü başarısız.");
     }

@@ -180,3 +180,11 @@ test("user invitation selects one or more named roles and form enums are localiz
   for (const label of ["Şirket", "Bireysel", "Otel", "Mimar", "Yıllık izin", "Kredi kartı", "Haftalık proje"]) assert.match(liveSource, new RegExp(label));
   assert.match(liveSource, /<option value=\{option\.value\} key=\{option\.value\}>\{option\.label\}<\/option>/);
 });
+
+test("session payload field names are read exactly as the server sends them", () => {
+  // Oturum yanıtı camelCase'e çevrilmez. Arayüz camelCase okursa zorunlu şifre
+  // değiştirme ekranı hiç açılmaz ve kullanıcı her yazma denemesinde 403 alır.
+  assert.match(apiSource, /async session\(\) \{\s*return \(await request\(API_CONFIG\.endpoints\.session\)\)\.data;/);
+  assert.match(liveSource, /sessionState\.session\?\.must_change_password/);
+  assert.doesNotMatch(liveSource, /sessionState\.session\?\.mustChangePassword/);
+});

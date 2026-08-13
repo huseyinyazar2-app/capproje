@@ -569,6 +569,9 @@ export const api = {
     await this.setOfflineContext(null);
     if (DEMO_AUTH_ENABLED) storageSet(DEMO_USER_KEY, null);
   },
+  async health() {
+    return (await request("/health")).data;
+  },
   async session() {
     return (await request(API_CONFIG.endpoints.session)).data;
   },
