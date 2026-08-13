@@ -1,8 +1,20 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import worker from "../worker/index.js";
+
+// Migration listesi elle sayılmaz; dizin sıralı okunur ki yeni bir migration
+// eklendiğinde testler sessizce eski şemayla çalışmasın.
+const migrationsDirectory = new URL("../migrations/", import.meta.url);
+export async function migrationFiles() {
+  return (await readdir(migrationsDirectory)).filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
+}
+async function applyMigrations(database) {
+  for (const name of await migrationFiles()) {
+    database.exec(await readFile(new URL(name, migrationsDirectory), "utf8"));
+  }
+}
 
 class D1Statement {
   constructor(database, sql) { this.database = database; this.sql = sql; this.values = []; }
@@ -36,17 +48,7 @@ const timestamp = "2026-08-09T10:00:00.000Z";
 
 async function setup() {
   const database = new DatabaseSync(":memory:");
-  database.exec(await readFile(new URL("../migrations/0001_tenant_core.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0002_permissions.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0003_workflows.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0004_production_readiness.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0005_capproje_domain.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0006_phone_auth.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0009_material_planning.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0010_contextual_media.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0011_membership_roles.sql", import.meta.url), "utf8"));
+  await applyMigrations(database);
   database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-a", "Firma A", "firma-a", timestamp, timestamp);
   database.prepare("INSERT INTO users (id,email,full_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("owner-a", "owner@a.test", "Firma Sahibi", "active", timestamp, timestamp);
   database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-owner", "tenant-a", "owner", "Firma Sahibi", 1, timestamp, timestamp);
@@ -64,17 +66,7 @@ function request(path, { method = "POST", body, tenant = "tenant-a", includeTena
 
 test("bootstrap owner can open a session without knowing the tenant id", async () => {
   const database = new DatabaseSync(":memory:");
-  database.exec(await readFile(new URL("../migrations/0001_tenant_core.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0002_permissions.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0003_workflows.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0004_production_readiness.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0005_capproje_domain.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0006_phone_auth.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0007_password_auth.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0008_operational_intelligence.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0009_material_planning.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0010_contextual_media.sql", import.meta.url), "utf8"));
-  database.exec(await readFile(new URL("../migrations/0011_membership_roles.sql", import.meta.url), "utf8"));
+  await applyMigrations(database);
   const env = { DB: new D1Database(database), ALLOW_DEV_AUTH: "true", BOOTSTRAP_SECRET: "secret-for-test", PASSWORD_AUTH_ENABLED: "true", PASSWORD_AUTH_PEPPER: "test-password-pepper-1234567890" };
   const bootstrapResponse = await worker.fetch(new Request("https://example.test/api/v1/bootstrap", {
     method: "POST",
@@ -356,8 +348,8 @@ test("scheduled backups include the latest schema manifest and never mix tenants
   for (const [key, content] of objects) {
     const lines = content.split("\n").map((line) => JSON.parse(line));
     const manifest = lines[0];
-    assert.equal(manifest.schema_version, 11);
-    assert.deepEqual(manifest.migrations, ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql"]);
+    assert.deepEqual(manifest.migrations, await migrationFiles());
+    assert.equal(manifest.schema_version, manifest.migrations.length);
     assert.match(key, new RegExp(`^backups/${manifest.tenant_id}/`));
     for (const entry of lines.slice(1)) {
       if (entry.table === "users") continue;
@@ -387,7 +379,7 @@ test("request fallback creates at most one daily tenant backup and scheduled reu
   assert.equal(objects.size, 1);
   const manifest = JSON.parse([...objects.values()][0].split("\n")[0]);
   assert.equal(manifest.tenant_id, "tenant-a");
-  assert.equal(manifest.schema_version, 11);
+  assert.equal(manifest.schema_version, (await migrationFiles()).length);
 });
 
 test("owner can create, rotate and revoke hashed expiring API tokens", async () => {

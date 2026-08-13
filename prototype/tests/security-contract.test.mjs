@@ -108,9 +108,12 @@ class FakeD1 {
   }
 
   all(sql, bindings) {
-    if (sql.includes("select permission_code from role_permissions")) {
-      return (this.permissions.get(bindings[1]) || []).map((permission_code) => ({ permission_code }));
+    if (sql.includes("permission_code from role_permissions")) {
+      // İlk bağlama tenant_id, kalanlar rol kimlikleridir.
+      const codes = new Set(bindings.slice(1).flatMap((roleId) => this.permissions.get(roleId) || []));
+      return [...codes].map((permission_code) => ({ permission_code }));
     }
+    if (sql.includes("from membership_roles")) return [];
     return [];
   }
 
