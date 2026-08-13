@@ -50,6 +50,11 @@ export const API_CONFIG = Object.freeze({
     projectCommunications: "/project-communications",
     resourceAssignments: "/resource-assignments",
     materialRequirements: "/material-requirements",
+    supplierQuotations: "/supplier-quotations",
+    workCenters: "/work-centers",
+    bomLines: "/bom-lines",
+    productionOperations: "/production-operations",
+    productionIssues: "/production-issues",
     notifications: "/notifications",
     search: "/search",
   }),
@@ -114,6 +119,11 @@ export const RESOURCE_SLUGS = Object.freeze({
   projectCommunications: "project-communications",
   resourceAssignments: "resource-assignments",
   materialRequirements: "material-requirements",
+  supplierQuotations: "supplier-quotations",
+  workCenters: "work-centers",
+  bomLines: "bom-lines",
+  productionOperations: "production-operations",
+  productionIssues: "production-issues",
 });
 
 const FIELD_MAPS = Object.freeze({
@@ -154,6 +164,11 @@ const FIELD_MAPS = Object.freeze({
   handoverPunchItems: { handoverId: "handover_id", responsibleUserId: "responsible_user_id", dueDate: "due_date", resolvedAt: "resolved_at", acceptedAt: "accepted_at" },
   projectCommunications: { projectId: "project_id", customerId: "customer_id", contactName: "contact_name", occurredAt: "occurred_at", nextFollowUpAt: "next_follow_up_at", ownerUserId: "owner_user_id" },
   resourceAssignments: { projectId: "project_id", employeeId: "employee_id", resourceType: "resource_type", resourceName: "resource_name", plannedStart: "planned_start", plannedEnd: "planned_end", allocationPercent: "allocation_percent" },
+  supplierQuotations: { purchaseRequestId: "purchase_request_id", supplierId: "supplier_id", quotationNumber: "quotation_number", quotationDate: "quotation_date", validUntil: "valid_until", unitPrice: "unit_price_minor", total: "total_minor", leadTimeDays: "lead_time_days", paymentTerms: "payment_terms", qualityNote: "quality_note", rejectionReason: "rejection_reason", supplierName: "supplier_name" },
+  workCenters: { dailyCapacityMinutes: "daily_capacity_minutes", hourlyCost: "hourly_cost_minor", isOutsourced: "is_outsourced" },
+  bomLines: { workItemId: "work_item_id", inventoryItemId: "inventory_item_id", itemCode: "item_code", quantityPerUnit: "quantity_per_unit", scrapRate: "scrap_rate", unitCost: "unit_cost_minor", supplierId: "supplier_id", sortOrder: "sort_order" },
+  productionOperations: { productionOrderId: "production_order_id", workCenterId: "work_center_id", plannedMinutes: "planned_minutes", actualMinutes: "actual_minutes", plannedStart: "planned_start", plannedEnd: "planned_end", assigneeUserId: "assignee_user_id", startedAt: "started_at", completedAt: "completed_at" },
+  productionIssues: { productionOrderId: "production_order_id", productionOperationId: "production_operation_id", projectId: "project_id", workItemId: "work_item_id", issueNumber: "issue_number", issueType: "issue_type", responsibleUserId: "responsible_user_id", reworkQuantity: "rework_quantity", scrapQuantity: "scrap_quantity", costImpact: "cost_impact_minor", delayDays: "delay_days", rootCause: "root_cause", resolvedAt: "resolved_at", reportedAt: "reported_at" },
   materialRequirements: { projectId: "project_id", workItemId: "work_item_id", inventoryItemId: "inventory_item_id", preferredSupplierId: "preferred_supplier_id", purchaseRequestId: "purchase_request_id", itemCode: "item_code", requiredQuantity: "required_quantity", reservedQuantity: "reserved_quantity", orderedQuantity: "ordered_quantity", receivedQuantity: "received_quantity", neededBy: "needed_by" },
 });
 
@@ -559,6 +574,27 @@ export const api = {
   },
   async dashboard() {
     return mapIncoming("dashboard", (await request(API_CONFIG.endpoints.dashboard)).data);
+  },
+  async projectCostBreakdown(projectId) {
+    const { data } = await request(`/projects/${encodeURIComponent(projectId)}/cost-breakdown`);
+    return data;
+  },
+  async quotationComparison(purchaseRequestId) {
+    const { data } = await request(`/purchase-requests/${encodeURIComponent(purchaseRequestId)}/quotation-comparison`);
+    return data;
+  },
+  async workCenterLoad(query = {}) {
+    const result = await request(withQuery("/work-centers/load", query));
+    return { data: result.data || [], meta: result.meta || null };
+  },
+  async passwordResetRequests() {
+    return (await request("/password-reset-requests")).data || [];
+  },
+  async requestPasswordReset({ phone, note }) {
+    return (await request("/auth/password/reset-request", { method: "POST", body: { phone, note } })).data;
+  },
+  async resetMemberPassword(membershipId, temporaryPassword) {
+    return (await request(`/memberships/${encodeURIComponent(membershipId)}/reset-password`, { method: "POST", body: { temporary_password: temporaryPassword } })).data;
   },
   async projectCommandCenter(projectId) {
     const data = (await request(`/projects/${encodeURIComponent(projectId)}/command-center`)).data;

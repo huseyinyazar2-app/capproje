@@ -204,11 +204,23 @@
 - [x] Kârlılıkta taahhüt/gerçekleşen ayrımı, alacak kapsamı, toplam yük bazlı kapasite çakışması.
 - [x] Yedek geri yükleme provası (`npm run db:verify-backup`).
 
-### Bu incelemeden çıkan, hâlâ açık maddeler
+### Bu incelemeden çıkan maddeler (0013 sürümünde kapatıldı)
 
-- [ ] Tedarikçi fiyat toplama ve teklif karşılaştırma ekranı.
-- [ ] Mahal ve iş kalemi seviyesinde maliyet kırılımı ve kalan tahmini maliyet.
-- [ ] Ürün reçetesi, operasyon sırası ve iş merkezi kapasite planı.
-- [ ] Üretimde sorun bildirme ve yeniden işlem kaydı.
-- [ ] SMS OTP'nin devreye alınması (altyapı hazır, kapalı).
-- [ ] Şifre sıfırlama (unutan kullanıcı için yönetici dışı akış).
+- [x] Tedarikçi fiyat toplama ve teklif karşılaştırma ekranı; en ucuz teklif
+      seçilmediğinde gerekçe zorunlu, karar denetim kaydına yazılıyor.
+- [x] Mahal ve iş kalemi seviyesinde maliyet kırılımı: bütçe, gerçekleşen,
+      taahhüt, kalan tahmin ve bitiş maliyeti tahmini ayrı kolonlarda.
+- [x] Ürün reçetesi (fire paylı, malzeme planına patlatılabilir), operasyon
+      sırası ve iş merkezi kapasite/darboğaz görünümü.
+- [x] Üretimde sorun bildirme, kök neden, yeniden işlem ve hurda kaydı;
+      maliyet etkisi proje kârlılığında görünüyor.
+- [x] Şifre sıfırlama: kullanıcı talep açar, yetkili yeni geçici şifre verir,
+      ilk girişte değiştirmek zorunludur.
+
+### Hâlâ açık
+
+- [ ] SMS OTP'nin devreye alınması (altyapı hazır, kapalı — bilinçli erteleme).
+- [ ] Şifre sıfırlamada teslim kanalı: SMS veya e-posta devreye girince
+      yönetici adımı tamamen kaldırılabilir.
+- [ ] Ürün reçetesinin parametrik hâle getirilmesi (ölçüden miktar hesabı).
+- [ ] Tedarikçi performans raporu (fiyat, termin, kusur geçmişi).

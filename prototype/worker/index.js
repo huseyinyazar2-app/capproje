@@ -40,6 +40,11 @@ const resources = {
   "project-communications": { table: "project_communications", required: ["project_id","channel","subject","occurred_at"], search: ["contact_name","subject","summary","decision"], filters: ["project_id","customer_id","channel","owner_user_id","status"], refs: { project_id: "projects", customer_id: "customers" }, memberRefs: ["owner_user_id"], fields: ["project_id","customer_id","channel","direction","contact_name","subject","summary","decision","occurred_at","next_follow_up_at","owner_user_id","status","metadata_json"] },
   "resource-assignments": { table: "resource_assignments", required: ["project_id","resource_type","resource_name","planned_start","planned_end"], search: ["resource_name","role","notes"], filters: ["project_id","employee_id","resource_type","status"], refs: { project_id: "projects", employee_id: "employees" }, fields: ["project_id","employee_id","resource_type","resource_name","role","planned_start","planned_end","allocation_percent","status","notes","metadata_json"] },
   "material-requirements": { table: "material_requirements", required: ["project_id","description","required_quantity","unit"], search: ["item_code","description","notes"], filters: ["project_id","work_item_id","inventory_item_id","preferred_supplier_id","status"], refs: { project_id: "projects", work_item_id: "work_items", inventory_item_id: "inventory_items", preferred_supplier_id: "suppliers", purchase_request_id: "purchase_requests" }, fields: ["project_id","work_item_id","inventory_item_id","preferred_supplier_id","item_code","description","required_quantity","unit","needed_by","status","notes","metadata_json"] },
+  "supplier-quotations": { table: "supplier_quotations", required: ["purchase_request_id", "supplier_id"], search: ["quotation_number", "payment_terms", "quality_note", "notes"], filters: ["purchase_request_id", "supplier_id", "status"], refs: { purchase_request_id: "purchase_requests", supplier_id: "suppliers" }, fields: ["purchase_request_id","supplier_id","quotation_number","quotation_date","valid_until","currency","quantity","unit","unit_price_minor","total_minor","lead_time_days","payment_terms","quality_note","status","rejection_reason","notes","metadata_json"] },
+  "work-centers": { table: "work_centers", required: ["code", "name"], search: ["code", "name", "category", "notes"], filters: ["category", "status", "is_outsourced"], fields: ["code","name","category","daily_capacity_minutes","hourly_cost_minor","is_outsourced","status","notes","metadata_json"] },
+  "bom-lines": { table: "bom_lines", required: ["work_item_id", "description", "quantity_per_unit", "unit"], search: ["item_code", "description", "notes"], filters: ["work_item_id", "inventory_item_id", "supplier_id"], refs: { work_item_id: "work_items", inventory_item_id: "inventory_items", supplier_id: "suppliers" }, fields: ["work_item_id","inventory_item_id","item_code","description","quantity_per_unit","unit","scrap_rate","unit_cost_minor","supplier_id","sort_order","notes","metadata_json"] },
+  "production-operations": { table: "production_operations", required: ["production_order_id", "name"], search: ["name", "description", "notes"], filters: ["production_order_id", "work_center_id", "status"], refs: { production_order_id: "production_orders", work_center_id: "work_centers" }, memberRefs: ["assignee_user_id"], fields: ["production_order_id","work_center_id","sequence","name","description","planned_minutes","planned_start","planned_end","assignee_user_id","status","notes","metadata_json"] },
+  "production-issues": { table: "production_issues", required: ["production_order_id", "issue_type", "description"], search: ["issue_number", "description", "root_cause", "resolution"], filters: ["production_order_id", "production_operation_id", "project_id", "work_item_id", "issue_type", "severity", "status"], refs: { production_order_id: "production_orders", production_operation_id: "production_operations", project_id: "projects", work_item_id: "work_items" }, memberRefs: ["responsible_user_id"], serverDefaults: (principal, timestamp) => ({ reported_at: timestamp, reported_by: principal.user.id }), fields: ["production_order_id","production_operation_id","project_id","work_item_id","issue_number","issue_type","severity","description","responsible_user_id","rework_quantity","scrap_quantity","cost_impact_minor","delay_days","root_cause","status","metadata_json"] },
 };
 
 const aliases = {
@@ -48,8 +53,8 @@ const aliases = {
   transactions: "financial-transactions",
 };
 
-const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","membership_roles","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql"];
+const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","membership_roles","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements","supplier_quotations","work_centers","bom_lines","production_operations","production_issues"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql"];
 const BACKUP_SCHEMA_VERSION = backupMigrations.length;
 const dailyBackupSeen = new Map();
 const DAILY_BACKUP_SEEN_LIMIT = 500;
@@ -131,7 +136,7 @@ const projectTaskTemplates = {
   acceptance: [["Teslim eksik listesini müşteriyle kontrol et", "Proje", 2]],
   completed: [["Proje kapanış ve kârlılık değerlendirmesini tamamla", "Yönetim", 5]],
 };
-const workflowManagedResources = new Set(["offers", "projects", "production-orders", "purchase-requests", "purchase-orders", "leaves", "financial-transactions", "site-surveys", "contracts", "design-revisions", "progress-payments", "stock-movements", "project-meetings", "quality-inspections", "handovers", "material-requirements"]);
+const workflowManagedResources = new Set(["offers", "projects", "production-orders", "purchase-requests", "purchase-orders", "leaves", "financial-transactions", "site-surveys", "contracts", "design-revisions", "progress-payments", "stock-movements", "project-meetings", "quality-inspections", "handovers", "material-requirements", "supplier-quotations", "production-operations", "production-issues"]);
 
 // Eski tablolarda durum alanı serbest metindi. Kanonik küme hem burada hem de
 // 0012 migration'ındaki tetikleyicilerde tanımlıdır; ikisi birlikte güncellenmelidir.
@@ -156,6 +161,10 @@ const statusEnums = {
   "inventory-items": ["active","passive","discontinued"],
   "material-requirements": ["draft","shortage","covered","consumed","cancelled"],
   memberships: ["active","invited","disabled"],
+  "supplier-quotations": ["draft","received","selected","rejected","expired"],
+  "work-centers": ["active","passive"],
+  "production-operations": ["pending","in_progress","blocked","completed","skipped"],
+  "production-issues": ["open","in_progress","resolved","cancelled"],
 };
 const enumFields = {
   "work-items": { revision_status: ["draft","review","changes_requested","approved","superseded"], production_type: ["internal","external"] },
@@ -166,6 +175,7 @@ const enumFields = {
   projects: { photo_consent: ["not_requested","denied","internal_only","marketing_allowed"], priority: ["low","normal","high","critical"] },
   "project-tasks": { priority: ["low","normal","high","critical"] },
   files: { visibility: ["internal","customer","marketing"] },
+  "production-issues": { issue_type: ["material","quality","machine","drawing","manpower","supplier","other"], severity: ["low","normal","high","critical"] },
 };
 // Serbest metin alanları için üst sınırlar. Gövde boyutu sınırı tek başına
 // veritabanına devasa tek alan yazılmasını engellemiyordu.
@@ -849,6 +859,130 @@ async function projectCommandCenterData(env, principal, project) {
   };
 }
 
+// Mahal ve iş kalemi seviyesinde maliyet kırılımı.
+//
+// Dört kolon ayrı tutulur ve asla toplanmaz:
+//   bütçe      = iş kalemi birim maliyeti × miktar (teklif anındaki hedef)
+//   gerçekleşen = onaylı/ödenmiş gider hareketleri + kesinleşmiş stok çıkışları
+//   taahhüt     = açık satın alma siparişleri (faturası kesilmemiş kısım)
+//   kalan tahmin = bütçeden henüz harcanmamış kısım
+// Bitiş tahmini (EAC) = gerçekleşen + taahhüt + kalan tahmin.
+async function getProjectCostBreakdown(request, env, principal, projectId) {
+  if (!allowed(principal, "projects.read")) return problem(403, "forbidden", "Proje maliyetini görüntüleme yetkiniz yok.");
+  if (!allowed(principal, "cost.view")) return problem(403, "forbidden", "Maliyet kırılımı için cost.view yetkisi gereklidir.");
+  const project = await workflowRow(env, principal, "projects", projectId);
+  if (!project) return problem(404, "not_found", "Proje bulunamadı.");
+  const tenant = principal.tenantId;
+
+  const items = await all(env.DB.prepare(`SELECT wi.id, wi.space_name, wi.item_code, wi.description, wi.product_type,
+      COALESCE(wi.quantity,0) AS quantity, COALESCE(wi.unit_cost_minor,0) AS unit_cost_minor, COALESCE(wi.unit_price_minor,0) AS unit_price_minor,
+      wi.status, wi.revision_no,
+      (SELECT COALESCE(SUM(ft.amount_minor),0) FROM financial_transactions ft
+        WHERE ft.tenant_id=wi.tenant_id AND ft.work_item_id=wi.id AND ft.type='expense' AND ft.status IN ('approved','paid')) AS expense_minor,
+      (SELECT COALESCE(SUM(sm.total_cost_minor),0) FROM stock_movements sm
+        WHERE sm.tenant_id=wi.tenant_id AND sm.work_item_id=wi.id AND sm.status='posted' AND sm.movement_type IN ('issue','project_issue','adjustment_out')) AS stock_cost_minor,
+      (SELECT COALESCE(SUM(po.grand_total_minor),0) FROM purchase_orders po
+        WHERE po.tenant_id=wi.tenant_id AND po.work_item_id=wi.id AND po.status NOT IN ('draft','cancelled')) AS committed_minor,
+      (SELECT COALESCE(SUM(pi.cost_impact_minor),0) FROM production_issues pi
+        WHERE pi.tenant_id=wi.tenant_id AND pi.work_item_id=wi.id AND pi.status='resolved') AS issue_cost_minor,
+      (SELECT COALESCE(SUM(pi.rework_quantity),0) FROM production_issues pi
+        WHERE pi.tenant_id=wi.tenant_id AND pi.work_item_id=wi.id AND pi.status='resolved') AS rework_quantity,
+      (SELECT COALESCE(SUM(bl.quantity_per_unit*(1+bl.scrap_rate/100.0)*COALESCE(wi.quantity,0)*bl.unit_cost_minor),0) FROM bom_lines bl
+        WHERE bl.tenant_id=wi.tenant_id AND bl.work_item_id=wi.id) AS bom_cost_minor
+    FROM work_items wi WHERE wi.tenant_id=? AND wi.project_id=? ORDER BY COALESCE(wi.space_name,''), wi.item_code, wi.created_at`).bind(tenant, projectId));
+
+  const rows = items.map((row) => {
+    const quantity = Number(row.quantity || 0);
+    const bomCost = Number(row.bom_cost_minor || 0);
+    // Reçete varsa bütçe reçeteden, yoksa iş kalemi birim maliyetinden gelir.
+    const budget = bomCost > 0 ? Math.round(bomCost) : Math.round(Number(row.unit_cost_minor || 0) * quantity);
+    const actual = Math.abs(Number(row.expense_minor || 0)) + Math.abs(Number(row.stock_cost_minor || 0)) + Math.abs(Number(row.issue_cost_minor || 0));
+    const committed = Number(row.committed_minor || 0);
+    const remaining = Math.max(0, budget - actual - committed);
+    const forecast = actual + committed + remaining;
+    const revenue = Math.round(Number(row.unit_price_minor || 0) * quantity);
+    return {
+      id: row.id,
+      space_name: row.space_name || "Belirtilmemiş",
+      item_code: row.item_code,
+      description: row.description,
+      product_type: row.product_type,
+      status: row.status,
+      revision_no: row.revision_no,
+      quantity,
+      rework_quantity: Number(row.rework_quantity || 0),
+      revenue_minor: revenue,
+      budget_cost_minor: budget,
+      actual_cost_minor: actual,
+      committed_cost_minor: committed,
+      remaining_cost_minor: remaining,
+      forecast_cost_minor: forecast,
+      issue_cost_minor: Math.abs(Number(row.issue_cost_minor || 0)),
+      variance_minor: budget - forecast,
+      forecast_margin_minor: revenue - forecast,
+      margin_percent: revenue ? Math.round(((revenue - forecast) / revenue) * 1000) / 10 : null,
+      over_budget: budget > 0 && forecast > budget,
+    };
+  });
+
+  const sum = (list, key) => list.reduce((total, item) => total + Number(item[key] || 0), 0);
+  const spaces = [...new Map(rows.map((row) => [row.space_name, row.space_name])).keys()].map((space) => {
+    const spaceRows = rows.filter((row) => row.space_name === space);
+    const revenue = sum(spaceRows, "revenue_minor");
+    const forecast = sum(spaceRows, "forecast_cost_minor");
+    return {
+      space_name: space,
+      work_item_count: spaceRows.length,
+      revenue_minor: revenue,
+      budget_cost_minor: sum(spaceRows, "budget_cost_minor"),
+      actual_cost_minor: sum(spaceRows, "actual_cost_minor"),
+      committed_cost_minor: sum(spaceRows, "committed_cost_minor"),
+      remaining_cost_minor: sum(spaceRows, "remaining_cost_minor"),
+      forecast_cost_minor: forecast,
+      forecast_margin_minor: revenue - forecast,
+      margin_percent: revenue ? Math.round(((revenue - forecast) / revenue) * 1000) / 10 : null,
+      over_budget_items: spaceRows.filter((row) => row.over_budget).length,
+    };
+  });
+
+  // İş kalemine bağlanmamış proje giderleri kırılımda kaybolmamalıdır.
+  const unassigned = await one(env.DB.prepare(`SELECT
+      (SELECT COALESCE(SUM(amount_minor),0) FROM financial_transactions WHERE tenant_id=? AND project_id=? AND work_item_id IS NULL AND type='expense' AND status IN ('approved','paid')) AS expense_minor,
+      (SELECT COALESCE(SUM(grand_total_minor),0) FROM purchase_orders WHERE tenant_id=? AND project_id=? AND work_item_id IS NULL AND status NOT IN ('draft','cancelled')) AS committed_minor`)
+    .bind(tenant, projectId, tenant, projectId));
+
+  const contractValue = Number(project.contract_amount_minor || 0);
+  const totalActual = sum(rows, "actual_cost_minor") + Math.abs(Number(unassigned?.expense_minor || 0));
+  const totalCommitted = sum(rows, "committed_cost_minor") + Number(unassigned?.committed_minor || 0);
+  const totalRemaining = sum(rows, "remaining_cost_minor");
+  const totalForecast = totalActual + totalCommitted + totalRemaining;
+
+  return json({
+    data: {
+      project: serializeRow(project, "projects", principal),
+      spaces,
+      workItems: rows,
+      unassigned: {
+        actual_cost_minor: Math.abs(Number(unassigned?.expense_minor || 0)),
+        committed_cost_minor: Number(unassigned?.committed_minor || 0),
+      },
+      totals: {
+        contract_value_minor: contractValue,
+        planned_revenue_minor: sum(rows, "revenue_minor"),
+        budget_cost_minor: sum(rows, "budget_cost_minor"),
+        actual_cost_minor: totalActual,
+        committed_cost_minor: totalCommitted,
+        remaining_cost_minor: totalRemaining,
+        forecast_cost_minor: totalForecast,
+        forecast_margin_minor: contractValue - totalForecast,
+        margin_percent: contractValue ? Math.round(((contractValue - totalForecast) / contractValue) * 1000) / 10 : null,
+        issue_cost_minor: sum(rows, "issue_cost_minor"),
+      },
+    },
+    meta: { work_item_count: rows.length, space_count: spaces.length, over_budget_items: rows.filter((row) => row.over_budget).length },
+  });
+}
+
 async function getProjectCommandCenter(env, principal, projectId) {
   if (!allowed(principal, "projects.read")) return problem(403, "forbidden", "Proje komuta merkezini görüntüleme yetkiniz yok.");
   const project = await workflowRow(env, principal, "projects", projectId);
@@ -933,6 +1067,9 @@ async function createResource(request, env, principal, slug, config) {
     "purchase-requests": new Set([undefined, "draft", "pending"]),
     "purchase-orders": new Set([undefined, "draft"]),
     "material-requirements": new Set([undefined, "draft"]),
+    "supplier-quotations": new Set([undefined, "draft", "received"]),
+    "production-operations": new Set([undefined, "pending"]),
+    "production-issues": new Set([undefined, "open"]),
     leaves: new Set([undefined, "pending"]),
     "financial-transactions": new Set([undefined, "draft", "planned", "pending"]),
     "site-surveys": new Set([undefined, "draft"]),
@@ -974,6 +1111,10 @@ async function createResource(request, env, principal, slug, config) {
   }
   const resourceId = id(`${config.table.slice(0, 3)}_`);
   const timestamp = now();
+  // Sunucunun doldurduğu, istemcinin gönderemeyeceği alanlar.
+  for (const [column, value] of Object.entries(config.serverDefaults?.(principal, timestamp) || {})) {
+    if (normalized.values[column] === undefined) normalized.values[column] = value;
+  }
   const fields = Object.keys(normalized.values);
   const columns = ["id", "tenant_id", ...fields, "created_at", ...(config.table === "audit_logs" ? [] : ["updated_at"] )];
   const values = [resourceId, principal.tenantId, ...fields.map((field) => normalized.values[field]), timestamp, ...(config.table === "audit_logs" ? [] : [timestamp])];
@@ -1305,7 +1446,7 @@ async function loginWithPassword(request, env) {
     return problem(429, "rate_limited", "Çok fazla giriş denemesi yapıldı. Lütfen 10 dakika sonra tekrar deneyin.", { retry_after_seconds: 600 });
   }
 
-  const user = await one(env.DB.prepare("SELECT DISTINCT u.id,u.email,u.full_name,u.phone,u.status,u.password_hash,u.password_salt,u.password_iterations FROM users u JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.phone=? AND u.status IN ('active','invited') AND m.status IN ('active','invited') AND t.status='active' LIMIT 1").bind(phone));
+  const user = await one(env.DB.prepare("SELECT DISTINCT u.id,u.email,u.full_name,u.phone,u.status,u.password_hash,u.password_salt,u.password_iterations,u.must_change_password FROM users u JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.phone=? AND u.status IN ('active','invited') AND m.status IN ('active','invited') AND t.status='active' LIMIT 1").bind(phone));
   const dummySalt = base64Bytes(new TextEncoder().encode("capproje-dummy!"));
   const calculated = await derivePasswordHash(env, password, user?.password_salt || dummySalt, Number(user?.password_iterations || PASSWORD_ITERATIONS));
   const authenticated = Boolean(user?.password_hash) && safeHashEqual(calculated, user.password_hash);
@@ -1369,6 +1510,79 @@ async function changePassword(request, env, principal) {
   } catch (error) { return workflowCommitProblem(env, error); }
   await audit(env, principal, request, "password.change", "users", user.id, {});
   return json({ data: { password_changed_at: timestamp, must_change_password: false } });
+}
+
+// Şifre sıfırlama, teslim kanalı (SMS/e-posta) olmadan güvenli biçimde:
+// kullanıcı talep açar, yetkili kullanıcı kimliği doğrulayıp yeni geçici şifreyi
+// verir. Yanıt, telefonun kayıtlı olup olmadığını ele vermez.
+async function requestPasswordReset(request, env) {
+  if (!passwordAuthReady(env)) return problem(503, "password_auth_unavailable", "Şifreyle giriş yapılandırılmamış.");
+  if (!sameOrigin(request, env)) return problem(403, "origin_forbidden", "İsteğin kaynağı geçersiz.");
+  let body;
+  try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
+  const phone = normalizeTurkishMobile(body?.phone);
+  if (!phone) return problem(422, "invalid_phone", "Türkiye cep telefonu numarasını kontrol edin.");
+
+  const timestamp = now();
+  const windowStart = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const retentionCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const phoneHash = await authHash(env, phone);
+  const ipHash = await authHash(env, clientIp(request) || "unknown");
+  await run(env.DB.prepare("DELETE FROM password_reset_requests WHERE created_at<?").bind(retentionCutoff));
+  await run(env.DB.prepare("UPDATE password_reset_requests SET status='expired' WHERE status='pending' AND expires_at<?").bind(timestamp));
+  const [phoneRate, ipRate] = await Promise.all([
+    one(env.DB.prepare("SELECT COUNT(*) AS count FROM password_reset_requests WHERE phone_hash=? AND created_at>?").bind(phoneHash, windowStart)),
+    one(env.DB.prepare("SELECT COUNT(*) AS count FROM password_reset_requests WHERE ip_hash=? AND created_at>?").bind(ipHash, windowStart)),
+  ]);
+  if (Number(phoneRate?.count || 0) >= 3 || Number(ipRate?.count || 0) >= 10) {
+    return problem(429, "rate_limited", "Çok fazla sıfırlama talebi gönderildi. Lütfen bir saat sonra tekrar deneyin.", { retry_after_seconds: 3600 });
+  }
+
+  const membership = await one(env.DB.prepare("SELECT u.id AS user_id,m.tenant_id FROM users u JOIN memberships m ON m.user_id=u.id JOIN tenants t ON t.id=m.tenant_id WHERE u.phone=? AND u.status IN ('active','invited') AND m.status IN ('active','invited') AND t.status='active' ORDER BY m.created_at LIMIT 1").bind(phone));
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await run(env.DB.prepare("INSERT INTO password_reset_requests (id,tenant_id,user_id,phone_hash,ip_hash,contact_note,status,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?)")
+    .bind(id("prr_"), membership?.tenant_id || null, membership?.user_id || null, phoneHash, ipHash, String(body.note || "").slice(0, 500) || null, membership ? "pending" : "rejected", timestamp, expiresAt));
+  // Kayıt bulunsa da bulunmasa da aynı yanıt döner.
+  return json({ data: { received: true }, meta: { message: "Talebiniz firma yöneticinize iletildi. Yönetici kimliğinizi doğruladıktan sonra size yeni bir geçici şifre verecektir." } }, 202);
+}
+
+async function passwordResetRequestsRoute(request, env, principal) {
+  if (!allowed(principal, "users.reset-password")) return problem(403, "forbidden", "Şifre sıfırlama taleplerini görüntüleme yetkiniz yok.");
+  if (request.method !== "GET") return problem(405, "method_not_allowed", "Bu HTTP yöntemi desteklenmiyor.");
+  const rows = await all(env.DB.prepare(`SELECT r.id,r.user_id,r.contact_note,r.status,r.created_at,r.expires_at,r.handled_at,
+      u.full_name AS user_name,u.email AS user_email,m.id AS membership_id,m.title
+    FROM password_reset_requests r
+    LEFT JOIN users u ON u.id=r.user_id
+    LEFT JOIN memberships m ON m.user_id=r.user_id AND m.tenant_id=r.tenant_id
+    WHERE r.tenant_id=? AND r.status='pending' AND r.expires_at>?
+    ORDER BY r.created_at DESC LIMIT 50`).bind(principal.tenantId, now()));
+  return json({ data: rows.map(decodeRow), meta: { count: rows.length } });
+}
+
+async function resetMemberPassword(request, env, principal, membershipId) {
+  if (!allowed(principal, "users.reset-password")) return problem(403, "forbidden", "Kullanıcıya yeni şifre verme yetkiniz yok.");
+  const membership = await one(env.DB.prepare("SELECT m.id,m.user_id,m.role_id,u.full_name,u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.id=? AND m.tenant_id=?").bind(membershipId, principal.tenantId));
+  if (!membership) return problem(404, "not_found", "Üyelik bulunamadı.");
+  const roleProblem = await privilegedRoleProblem(env, principal, [membership.role_id]);
+  if (roleProblem) return roleProblem;
+  let body;
+  try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
+  const passwordError = passwordProblem(body?.temporary_password, "Geçici şifre");
+  if (passwordError) return problem(422, "weak_password", passwordError);
+
+  const credential = await passwordRecord(env, body.temporary_password);
+  const timestamp = now();
+  try {
+    await commitWorkflow(env, principal, request, [
+      env.DB.prepare("UPDATE users SET password_hash=?,password_salt=?,password_iterations=?,password_changed_at=?,must_change_password=1,updated_at=? WHERE id=?")
+        .bind(credential.hash, credential.salt, credential.iterations, timestamp, timestamp, membership.user_id),
+      // Eski oturumlar kapanır; sıfırlama sonrası yalnız yeni şifreyle girilir.
+      env.DB.prepare("UPDATE phone_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").bind(timestamp, membership.user_id),
+      env.DB.prepare("UPDATE password_reset_requests SET status='fulfilled',handled_by=?,handled_at=? WHERE tenant_id=? AND user_id=? AND status='pending'")
+        .bind(principal.user.id, timestamp, principal.tenantId, membership.user_id),
+    ], "password.reset", "memberships", membershipId, { user_id: membership.user_id });
+  } catch (error) { return workflowCommitProblem(env, error); }
+  return json({ data: { membership_id: membershipId, user_id: membership.user_id, must_change_password: true }, meta: { message: "Geçici şifreyi kullanıcıya güvenli bir kanaldan iletin; ilk girişte değiştirmesi zorunludur." } });
 }
 
 async function sessionRoute(request, env, principal, segments) {
@@ -1596,6 +1810,54 @@ async function transitionProductionOrder(request, env, principal, orderId) {
   return json({ data: serializeRow(updated, "production-orders", principal) });
 }
 
+// Üretim sorunu ve yeniden işlem. Çözüme kapatılan sorunun yeniden işlem ve
+// hurda miktarı üretim emrine işlenir; kayıp kaynağı kârlılıkta görünür kalır.
+async function productionIssueAction(request, env, principal, issueId, action) {
+  const capability = action === "resolve" ? "production-issues.resolve" : "production-issues.write";
+  if (!allowed(principal, capability)) return problem(403, "forbidden", "Bu üretim sorunu işlemi için yetkiniz yok.");
+  const record = await workflowRow(env, principal, "production_issues", issueId);
+  if (!record) return problem(404, "not_found", "Üretim sorunu bulunamadı.");
+  let body;
+  try { body = await optionalJson(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
+  const timestamp = now();
+
+  if (action === "resolve") {
+    if (record.status === "resolved") return json({ data: serializeRow(record, "production-issues", principal), meta: { replayed: true } });
+    if (!["open", "in_progress"].includes(record.status)) return problem(409, "invalid_transition", `${record.status} durumundaki sorun çözüme kapatılamaz.`);
+    const resolution = String(body.resolution || "").trim();
+    if (resolution.length < 3) return problem(422, "validation_error", "Çözüm açıklaması zorunludur.");
+    const rework = body.rework_quantity == null ? Number(record.rework_quantity || 0) : Number(body.rework_quantity);
+    const scrap = body.scrap_quantity == null ? Number(record.scrap_quantity || 0) : Number(body.scrap_quantity);
+    if (!Number.isFinite(rework) || rework < 0 || !Number.isFinite(scrap) || scrap < 0) return problem(422, "validation_error", "Yeniden işlem ve hurda miktarı sıfır veya daha büyük olmalıdır.");
+    const costImpact = body.cost_impact_minor == null ? Number(record.cost_impact_minor || 0) : Number(body.cost_impact_minor);
+    if (!Number.isSafeInteger(costImpact)) return problem(422, "validation_error", "cost_impact_minor kuruş cinsinden tam sayı olmalıdır.");
+    if (costImpact !== Number(record.cost_impact_minor || 0) && !allowed(principal, "cost.view")) return problem(403, "sensitive_field_forbidden", "Maliyet etkisi girmek için cost.view yetkisi gereklidir.");
+
+    const reworkDelta = rework - Number(record.rework_quantity || 0);
+    const scrapDelta = scrap - Number(record.scrap_quantity || 0);
+    try {
+      await commitWorkflow(env, principal, request, [
+        env.DB.prepare("UPDATE production_issues SET status='resolved',resolution=?,root_cause=COALESCE(?,root_cause),rework_quantity=?,scrap_quantity=?,cost_impact_minor=?,delay_days=COALESCE(?,delay_days),resolved_at=?,resolved_by=?,updated_at=? WHERE id=? AND tenant_id=? AND status IN ('open','in_progress')")
+          .bind(resolution, String(body.root_cause || "").trim() || null, rework, scrap, costImpact, body.delay_days == null ? null : Number(body.delay_days), timestamp, principal.user.id, timestamp, issueId, principal.tenantId),
+        env.DB.prepare("UPDATE production_orders SET rework_quantity=MAX(0,rework_quantity+?),scrap_quantity=MAX(0,scrap_quantity+?),updated_at=? WHERE id=? AND tenant_id=?")
+          .bind(reworkDelta, scrapDelta, timestamp, record.production_order_id, principal.tenantId),
+      ], "resolve", "production-issues", issueId, { rework_quantity: rework, scrap_quantity: scrap, cost_impact_minor: costImpact });
+    } catch (error) { return workflowCommitProblem(env, error); }
+    return json({ data: serializeRow(await workflowRow(env, principal, "production_issues", issueId), "production-issues", principal) });
+  }
+
+  const transitions = { open: ["in_progress", "cancelled"], in_progress: ["open", "cancelled"], resolved: [], cancelled: [] };
+  const target = body.status;
+  if (target === record.status) return json({ data: serializeRow(record, "production-issues", principal), meta: { replayed: true } });
+  if (!transitions[record.status]?.includes(target)) return problem(409, "invalid_transition", `${record.status} durumundaki sorun ${target || "boş"} durumuna geçirilemez.`);
+  if (target === "cancelled" && !String(body.reason || "").trim()) return problem(422, "validation_error", "İptal nedeni zorunludur.");
+  try {
+    await commitWorkflow(env, principal, request, [env.DB.prepare("UPDATE production_issues SET status=?,resolution=COALESCE(?,resolution),updated_at=? WHERE id=? AND tenant_id=?")
+      .bind(target, String(body.reason || "").trim() || null, timestamp, issueId, principal.tenantId)], "transition", "production-issues", issueId, { from: record.status, to: target });
+  } catch (error) { return workflowCommitProblem(env, error); }
+  return json({ data: serializeRow(await workflowRow(env, principal, "production_issues", issueId), "production-issues", principal) });
+}
+
 async function reserveMaterialRequirement(request, env, principal, requirementId) {
   if (!allowed(principal, "material-requirements.reserve")) return problem(403, "forbidden", "Malzemeyi stoktan ayırma yetkiniz yok.");
   const requirement = await workflowRow(env, principal, "material_requirements", requirementId);
@@ -1636,6 +1898,128 @@ async function reserveMaterialRequirement(request, env, principal, requirementId
     });
   }
   return json({ data: serializeRow(await workflowRow(env, principal, "material_requirements", requirementId), "material-requirements", principal), meta: { reserved_quantity: quantity, available_quantity: Math.max(0, Number(updatedInventory.on_hand_quantity) - Number(updatedInventory.reserved_quantity)) } });
+}
+
+// Ürün reçetesinden malzeme ihtiyacı üretimi. Reçete satırı × iş kalemi miktarı,
+// fire payı eklenerek malzeme planına yazılır; aynı satır iki kez patlatılmaz.
+async function explodeBom(request, env, principal, workItemId) {
+  if (!allowed(principal, "work-items.explode-bom")) return problem(403, "forbidden", "Ürün reçetesinden malzeme ihtiyacı üretme yetkiniz yok.");
+  const item = await workflowRow(env, principal, "work_items", workItemId);
+  if (!item) return problem(404, "not_found", "İş kalemi bulunamadı.");
+  const lines = await all(env.DB.prepare("SELECT * FROM bom_lines WHERE tenant_id=? AND work_item_id=? ORDER BY sort_order,created_at").bind(principal.tenantId, workItemId));
+  if (!lines.length) return problem(409, "bom_empty", "Bu iş kalemi için tanımlı ürün reçetesi yok.");
+  let body;
+  try { body = await optionalJson(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
+
+  const multiplier = body.quantity == null ? Number(item.quantity || 0) : Number(body.quantity);
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return problem(422, "validation_error", "Patlatma için iş kalemi miktarı sıfırdan büyük olmalıdır.");
+
+  const existing = await all(env.DB.prepare("SELECT id,metadata_json FROM material_requirements WHERE tenant_id=? AND work_item_id=? AND status<>'cancelled'").bind(principal.tenantId, workItemId));
+  const alreadyExploded = new Set();
+  for (const row of existing) {
+    try { const meta = JSON.parse(row.metadata_json || "{}"); if (meta.bom_line_id) alreadyExploded.add(meta.bom_line_id); }
+    catch { /* Bozuk metadata görmezden gelinir. */ }
+  }
+
+  const timestamp = now();
+  const statements = [];
+  const created = [];
+  for (const line of lines) {
+    if (alreadyExploded.has(line.id)) continue;
+    const gross = Number(line.quantity_per_unit) * multiplier * (1 + Number(line.scrap_rate || 0) / 100);
+    const quantity = Math.round(gross * 1000) / 1000;
+    if (!(quantity > 0)) continue;
+    const requirementId = id("mat_");
+    statements.push(env.DB.prepare("INSERT INTO material_requirements (id,tenant_id,project_id,work_item_id,inventory_item_id,preferred_supplier_id,item_code,description,required_quantity,unit,needed_by,status,notes,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'draft',?,?,?,?)")
+      .bind(requirementId, principal.tenantId, item.project_id, workItemId, line.inventory_item_id || null, line.supplier_id || null, line.item_code || null, line.description, quantity, line.unit, body.needed_by || null, line.notes || null, JSON.stringify({ source: "bom", bom_line_id: line.id, work_item_quantity: multiplier, scrap_rate: Number(line.scrap_rate || 0) }), timestamp, timestamp));
+    created.push({ id: requirementId, bom_line_id: line.id, description: line.description, required_quantity: quantity, unit: line.unit });
+  }
+  if (!created.length) return json({ data: [], meta: { replayed: true, skipped_lines: lines.length, message: "Reçetedeki tüm satırlar için malzeme ihtiyacı zaten açılmış." } });
+  try {
+    await commitWorkflow(env, principal, request, statements, "explode-bom", "work-items", workItemId, { line_count: created.length, work_item_quantity: multiplier });
+  } catch (error) { return workflowCommitProblem(env, error); }
+  return json({ data: created, meta: { work_item_id: workItemId, work_item_quantity: multiplier, skipped_lines: lines.length - created.length } }, 201);
+}
+
+// İş merkezi yükü: planlanan operasyon dakikaları ile günlük kapasitenin
+// karşılaştırılması. Darboğazlar üretim planı yapılmadan görünür olur.
+async function workCenterLoad(request, env, principal) {
+  if (!allowed(principal, "work-centers.read")) return problem(403, "forbidden", "İş merkezi yükünü görüntüleme yetkiniz yok.");
+  const url = new URL(request.url);
+  const from = url.searchParams.get("from") || now().slice(0, 10);
+  const to = url.searchParams.get("to") || new Date(Date.now() + 28 * 86400000).toISOString().slice(0, 10);
+  if (Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to))) return problem(422, "validation_error", "from ve to geçerli tarih olmalıdır.");
+  if (from > to) return problem(422, "validation_error", "Başlangıç tarihi bitiş tarihinden sonra olamaz.");
+  const workingDays = Math.max(1, Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1);
+
+  const centers = await all(env.DB.prepare("SELECT * FROM work_centers WHERE tenant_id=? AND status='active' ORDER BY name").bind(principal.tenantId));
+  const load = await all(env.DB.prepare(`SELECT o.work_center_id,
+      COALESCE(SUM(o.planned_minutes),0) AS planned_minutes,
+      COALESCE(SUM(CASE WHEN o.status='completed' THEN o.actual_minutes ELSE 0 END),0) AS actual_minutes,
+      COUNT(*) AS operation_count,
+      COALESCE(SUM(CASE WHEN o.status IN ('pending','in_progress','blocked') THEN o.planned_minutes ELSE 0 END),0) AS open_minutes,
+      COALESCE(SUM(CASE WHEN o.status='blocked' THEN 1 ELSE 0 END),0) AS blocked_count
+    FROM production_operations o
+    WHERE o.tenant_id=? AND o.work_center_id IS NOT NULL
+      AND COALESCE(o.planned_start, date('now')) <= ? AND COALESCE(o.planned_end, o.planned_start, date('now')) >= ?
+    GROUP BY o.work_center_id`).bind(principal.tenantId, to, from));
+  const byCenter = new Map(load.map((row) => [row.work_center_id, row]));
+
+  const data = centers.map((center) => {
+    const row = byCenter.get(center.id) || {};
+    const capacityMinutes = Number(center.daily_capacity_minutes) * workingDays;
+    const plannedMinutes = Number(row.planned_minutes || 0);
+    return {
+      ...serializeRow(center, "work-centers", principal),
+      window: { from, to, working_days: workingDays },
+      capacity_minutes: capacityMinutes,
+      planned_minutes: plannedMinutes,
+      open_minutes: Number(row.open_minutes || 0),
+      actual_minutes: Number(row.actual_minutes || 0),
+      operation_count: Number(row.operation_count || 0),
+      blocked_count: Number(row.blocked_count || 0),
+      load_percent: capacityMinutes ? Math.round((plannedMinutes / capacityMinutes) * 1000) / 10 : null,
+      overloaded: capacityMinutes > 0 && plannedMinutes > capacityMinutes,
+    };
+  });
+  return json({ data, meta: { from, to, working_days: workingDays, bottlenecks: data.filter((item) => item.overloaded).map((item) => item.code) } });
+}
+
+async function transitionProductionOperation(request, env, principal, operationId) {
+  if (!allowed(principal, "production-operations.execute")) return problem(403, "forbidden", "Üretim operasyonu yürütme yetkiniz yok.");
+  const record = await workflowRow(env, principal, "production_operations", operationId);
+  if (!record) return problem(404, "not_found", "Üretim operasyonu bulunamadı.");
+  let body;
+  try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
+  const transitions = { pending: ["in_progress", "blocked", "skipped"], in_progress: ["completed", "blocked"], blocked: ["in_progress", "skipped"], completed: [], skipped: [] };
+  const target = body.status;
+  if (target === record.status) return json({ data: serializeRow(record, "production-operations", principal), meta: { replayed: true } });
+  if (!transitions[record.status]?.includes(target)) return problem(409, "invalid_transition", `${record.status} durumundaki operasyon ${target || "boş"} durumuna geçirilemez.`);
+  if (target === "blocked" && !String(body.reason || "").trim()) return problem(422, "validation_error", "Duraklatma nedeni zorunludur.");
+
+  let actualMinutes = Number(record.actual_minutes || 0);
+  if (body.actual_minutes !== undefined && body.actual_minutes !== null && body.actual_minutes !== "") {
+    const requested = Number(body.actual_minutes);
+    if (!Number.isInteger(requested) || requested < 0) return problem(422, "validation_error", "actual_minutes sıfır veya daha büyük tam sayı olmalıdır.");
+    actualMinutes = requested;
+  } else if (target === "completed" && record.started_at) {
+    // Süre girilmediyse başlangıçtan bu yana geçen süre yazılır.
+    actualMinutes = Math.max(actualMinutes, Math.round((Date.now() - Date.parse(record.started_at)) / 60000));
+  }
+
+  const timestamp = now();
+  try {
+    await commitWorkflow(env, principal, request, [env.DB.prepare(`UPDATE production_operations SET status=?,actual_minutes=?,
+        started_at=CASE WHEN ?='in_progress' AND started_at IS NULL THEN ? ELSE started_at END,
+        completed_at=CASE WHEN ?='completed' THEN ? ELSE completed_at END,
+        notes=COALESCE(?,notes),updated_at=? WHERE id=? AND tenant_id=? AND status=?`)
+      .bind(target, actualMinutes, target, timestamp, target, timestamp, String(body.reason || "").trim() || null, timestamp, operationId, principal.tenantId, record.status)],
+      "transition", "production-operations", operationId, { from: record.status, to: target, actual_minutes: actualMinutes });
+  } catch (error) { return workflowCommitProblem(env, error); }
+  const updated = await workflowRow(env, principal, "production_operations", operationId);
+  if (updated.status !== target) return problem(409, "concurrent_update", "Operasyon başka bir işlem tarafından güncellendi; listeyi yenileyip tekrar deneyin.");
+  const remaining = await one(env.DB.prepare("SELECT COUNT(*) AS count FROM production_operations WHERE tenant_id=? AND production_order_id=? AND status IN ('pending','in_progress','blocked')").bind(principal.tenantId, record.production_order_id));
+  return json({ data: serializeRow(updated, "production-operations", principal), meta: { open_operations: Number(remaining?.count || 0) } });
 }
 
 // Rezervasyonun sonu: malzeme ya üretime verilir (consume) ya da serbest
@@ -1801,6 +2185,82 @@ async function receivePurchaseOrder(request, env, principal, orderId) {
     await commitWorkflow(env, principal, request, statements, "receive", "purchase-orders", orderId, { partial, inventory_item_id: body.inventory_item_id || null, quantity, stock_movement_id: movementId });
   } catch (error) { return workflowCommitProblem(env, error); }
   return json({ data: serializeRow(await workflowRow(env, principal, "purchase_orders", orderId), "purchase-orders", principal), meta: { stock_movement_id: movementId, partial } });
+}
+
+// Tedarikçi teklif toplama ve karşılaştırma. Kazanan teklif seçildiğinde talebe
+// tercih edilen tedarikçi ve tutar yazılır; sipariş açma adımı bunu kullanır.
+async function compareQuotations(env, principal, requestId) {
+  if (!allowed(principal, "supplier-quotations.read")) return problem(403, "forbidden", "Tedarikçi tekliflerini görüntüleme yetkiniz yok.");
+  const record = await workflowRow(env, principal, "purchase_requests", requestId);
+  if (!record) return problem(404, "not_found", "Satın alma talebi bulunamadı.");
+  const rows = await all(env.DB.prepare(`SELECT q.*,s.name AS supplier_name,s.rating AS supplier_rating
+    FROM supplier_quotations q JOIN suppliers s ON s.id=q.supplier_id AND s.tenant_id=q.tenant_id
+    WHERE q.tenant_id=? AND q.purchase_request_id=? AND q.status<>'expired'
+    ORDER BY q.total_minor ASC, q.lead_time_days ASC`).bind(principal.tenantId, requestId));
+  const quotations = rows.map((row) => serializeRow(row, "supplier-quotations", principal));
+  const comparable = quotations.filter((row) => Number(row.total_minor) > 0);
+  const cheapest = comparable[0] || null;
+  const fastest = [...comparable].sort((left, right) => Number(left.lead_time_days ?? Infinity) - Number(right.lead_time_days ?? Infinity))[0] || null;
+  const selected = quotations.find((row) => row.status === "selected") || null;
+  const totals = comparable.map((row) => Number(row.total_minor));
+  return json({
+    data: {
+      request: serializeRow(record, "purchase-requests", principal),
+      quotations,
+      recommendation: {
+        cheapest_quotation_id: cheapest?.id || null,
+        fastest_quotation_id: fastest?.id || null,
+        selected_quotation_id: selected?.id || null,
+        // En ucuz ile seçilen arasındaki fark, kararın gerekçesini görünür kılar.
+        saving_against_highest_minor: totals.length > 1 ? Math.max(...totals) - Math.min(...totals) : 0,
+        spread_percent: totals.length > 1 && Math.min(...totals) > 0 ? Math.round(((Math.max(...totals) - Math.min(...totals)) / Math.min(...totals)) * 1000) / 10 : null,
+      },
+    },
+    meta: { count: quotations.length, comparable_count: comparable.length },
+  });
+}
+
+async function quotationAction(request, env, principal, quotationId, action) {
+  const capability = action === "select" ? "supplier-quotations.select" : "supplier-quotations.write";
+  if (!allowed(principal, capability)) return problem(403, "forbidden", "Bu teklif işlemi için yetkiniz yok.");
+  const record = await workflowRow(env, principal, "supplier_quotations", quotationId);
+  if (!record) return problem(404, "not_found", "Tedarikçi teklifi bulunamadı.");
+  let body;
+  try { body = await optionalJson(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
+  const timestamp = now();
+
+  if (action === "select") {
+    if (record.status === "selected") return json({ data: serializeRow(record, "supplier-quotations", principal), meta: { replayed: true } });
+    if (!["draft", "received"].includes(record.status)) return problem(409, "invalid_transition", `${record.status} durumundaki teklif seçilemez.`);
+    const purchase = await workflowRow(env, principal, "purchase_requests", record.purchase_request_id);
+    if (!purchase) return problem(404, "not_found", "Teklifin bağlı olduğu satın alma talebi bulunamadı.");
+    if (["ordered", "partial", "received", "cancelled"].includes(purchase.status)) return problem(409, "invalid_transition", "Siparişe bağlanmış talepte teklif seçimi değiştirilemez.");
+    const reason = String(body.reason || "").trim();
+    // En ucuz teklif seçilmiyorsa gerekçe zorunludur; karar denetlenebilir kalır.
+    const cheapest = await one(env.DB.prepare("SELECT id,total_minor FROM supplier_quotations WHERE tenant_id=? AND purchase_request_id=? AND status IN ('draft','received') AND total_minor>0 ORDER BY total_minor ASC LIMIT 1").bind(principal.tenantId, record.purchase_request_id));
+    if (cheapest && cheapest.id !== quotationId && reason.length < 10) {
+      return problem(422, "selection_reason_required", "En düşük teklif seçilmediğinde en az 10 karakterlik gerekçe zorunludur.", { cheapest_quotation_id: cheapest.id, cheapest_total_minor: cheapest.total_minor });
+    }
+    try {
+      await commitWorkflow(env, principal, request, [
+        env.DB.prepare("UPDATE supplier_quotations SET status='rejected',updated_at=? WHERE tenant_id=? AND purchase_request_id=? AND id<>? AND status IN ('draft','received','selected')").bind(timestamp, principal.tenantId, record.purchase_request_id, quotationId),
+        env.DB.prepare("UPDATE supplier_quotations SET status='selected',selected_at=?,selected_by=?,rejection_reason=NULL,updated_at=? WHERE id=? AND tenant_id=?").bind(timestamp, principal.user.id, timestamp, quotationId, principal.tenantId),
+        env.DB.prepare("UPDATE purchase_requests SET preferred_supplier_id=?,estimated_amount_minor=?,currency=?,updated_at=? WHERE id=? AND tenant_id=?").bind(record.supplier_id, record.total_minor, record.currency || "TRY", timestamp, record.purchase_request_id, principal.tenantId),
+      ], "select", "supplier-quotations", quotationId, { purchase_request_id: record.purchase_request_id, supplier_id: record.supplier_id, total_minor: record.total_minor, reason: reason || null });
+    } catch (error) { return workflowCommitProblem(env, error); }
+    return json({ data: serializeRow(await workflowRow(env, principal, "supplier_quotations", quotationId), "supplier-quotations", principal) });
+  }
+
+  const transitions = { draft: ["received", "expired"], received: ["rejected", "expired"], selected: [], rejected: ["received"], expired: [] };
+  const target = body.status;
+  if (target === record.status) return json({ data: serializeRow(record, "supplier-quotations", principal), meta: { replayed: true } });
+  if (!transitions[record.status]?.includes(target)) return problem(409, "invalid_transition", `${record.status} durumundaki teklif ${target || "boş"} durumuna geçirilemez.`);
+  if (target === "rejected" && !String(body.reason || "").trim()) return problem(422, "validation_error", "Ret nedeni zorunludur.");
+  try {
+    await commitWorkflow(env, principal, request, [env.DB.prepare("UPDATE supplier_quotations SET status=?,rejection_reason=CASE WHEN ?='rejected' THEN ? ELSE rejection_reason END,updated_at=? WHERE id=? AND tenant_id=?")
+      .bind(target, target, String(body.reason || "").trim() || null, timestamp, quotationId, principal.tenantId)], "transition", "supplier-quotations", quotationId, { from: record.status, to: target });
+  } catch (error) { return workflowCommitProblem(env, error); }
+  return json({ data: serializeRow(await workflowRow(env, principal, "supplier_quotations", quotationId), "supplier-quotations", principal) });
 }
 
 async function decideLeave(request, env, principal, leaveId, decision) {
@@ -2340,12 +2800,21 @@ async function dispatchAuthenticated(request, env, principal, url, segments) {
   if (url.pathname === "/api/v1/memberships/invite" && request.method === "POST") return inviteMember(request, env, principal);
   if (segments.length === 5 && segments[2] === "roles" && segments[4] === "permissions") return rolePermissions(request, env, principal, segments[3]);
   if (segments.length === 5 && segments[2] === "projects" && segments[4] === "command-center" && request.method === "GET" && validId(segments[3])) return getProjectCommandCenter(env, principal, segments[3]);
+  if (segments.length === 5 && segments[2] === "projects" && segments[4] === "cost-breakdown" && request.method === "GET" && validId(segments[3])) return getProjectCostBreakdown(request, env, principal, segments[3]);
+  if (segments.length === 5 && segments[2] === "purchase-requests" && segments[4] === "quotation-comparison" && request.method === "GET" && validId(segments[3])) return compareQuotations(env, principal, segments[3]);
+  if (url.pathname === "/api/v1/work-centers/load" && request.method === "GET") return workCenterLoad(request, env, principal);
+  if (url.pathname === "/api/v1/password-reset-requests") return passwordResetRequestsRoute(request, env, principal);
+  if (segments.length === 5 && segments[2] === "memberships" && segments[4] === "reset-password" && request.method === "POST" && validId(segments[3])) return resetMemberPassword(request, env, principal, segments[3]);
   if (segments[2] === "tokens") return tokenManagement(request, env, principal, segments);
   if (request.method === "POST" && segments.length === 5 && validId(segments[3])) {
     const [resource, resourceId, action] = [segments[2], segments[3], segments[4]];
     if (resource === "offers" && ["accept", "reject", "convert-to-project"].includes(action)) return offerAction(request, env, principal, resourceId, action);
     if (resource === "projects" && action === "transition") return transitionProject(request, env, principal, resourceId);
     if (resource === "work-items" && action === "approve-revision") return approveWorkItemRevision(request, env, principal, resourceId);
+    if (resource === "work-items" && action === "explode-bom") return explodeBom(request, env, principal, resourceId);
+    if (resource === "supplier-quotations" && ["select", "transition"].includes(action)) return quotationAction(request, env, principal, resourceId, action);
+    if (resource === "production-operations" && action === "transition") return transitionProductionOperation(request, env, principal, resourceId);
+    if (resource === "production-issues" && ["resolve", "transition"].includes(action)) return productionIssueAction(request, env, principal, resourceId, action);
     if (resource === "production-orders" && action === "release") return releaseProductionOrder(request, env, principal, resourceId);
     if (resource === "production-orders" && action === "transition") return transitionProductionOrder(request, env, principal, resourceId);
     if (resource === "material-requirements" && action === "reserve") return reserveMaterialRequirement(request, env, principal, resourceId);
@@ -2464,6 +2933,7 @@ async function handleApi(request, env, context) {
   if (url.pathname === "/api/v1/auth/phone/start" && request.method === "POST") return startPhoneAuth(request, env);
   if (url.pathname === "/api/v1/auth/phone/verify" && request.method === "POST") return verifyPhoneAuth(request, env);
   if (url.pathname === "/api/v1/auth/password/login" && request.method === "POST") return loginWithPassword(request, env);
+  if (url.pathname === "/api/v1/auth/password/reset-request" && request.method === "POST") return requestPasswordReset(request, env);
   if (url.pathname === "/api/v1/auth/logout" && request.method === "POST") return logoutPhoneAuth(request, env);
   const principal = await authenticate(request, env);
   if (!principal) return problem(401, "unauthorized", "Oturum bulunamadı.", { accepted: ["phone session", "platform identity", "Bearer token"] });

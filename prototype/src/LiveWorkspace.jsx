@@ -87,6 +87,20 @@ modules.splice(supplierIndex + 1, 0,
   { id: "handoverPunchItems", group: "Operasyon", title: "Teslim Eksikleri", icon: WarningCircle, resource: "handoverPunchItems", singular: "eksik kalemi" },
   { id: "resourceAssignments", group: "Operasyon", title: "Ekip & Kapasite", icon: UsersThree, resource: "resourceAssignments", singular: "kaynak planı" },
 );
+const purchaseOrdersIndex = modules.findIndex((item) => item.id === "purchaseOrders");
+modules.splice(purchaseOrdersIndex, 0,
+  { id: "supplierQuotations", group: "Operasyon", title: "Tedarikçi Teklifleri", icon: ShoppingCart, resource: "supplierQuotations", singular: "tedarikçi teklifi" },
+);
+const productionIndex = modules.findIndex((item) => item.id === "production");
+modules.splice(productionIndex + 1, 0,
+  { id: "bomLines", group: "Operasyon", title: "Ürün Reçeteleri", icon: ClipboardText, resource: "bomLines", singular: "reçete satırı" },
+  { id: "workCenters", group: "Operasyon", title: "İş Merkezleri", icon: Factory, resource: "workCenters", singular: "iş merkezi" },
+  { id: "productionOperations", group: "Operasyon", title: "Üretim Operasyonları", icon: Factory, resource: "productionOperations", singular: "operasyon" },
+  { id: "productionIssues", group: "Operasyon", title: "Üretim Sorunları", icon: WarningCircle, resource: "productionIssues", singular: "sorun kaydı" },
+);
+modules.splice(modules.findIndex((item) => item.id === "workCenters") + 1, 0,
+  { id: "workCenterLoad", group: "Operasyon", title: "İş Merkezi Yükü", icon: ChartLineUp, resource: "workCenters", singular: "kapasite görünümü", readOnly: true },
+);
 const accountsIndex = modules.findIndex((item) => item.id === "accounts");
 modules.splice(accountsIndex + 1, 0,
   { id: "progressPayments", group: "Finans", title: "Hakedişler", icon: CurrencyCircleDollar, resource: "progressPayments", singular: "hakediş" },
@@ -360,6 +374,90 @@ Object.assign(configs, {
 
 configs.projects.fields.push(field("photoConsent", "Proje fotoğraf kullanım izni", "select", { options: ["not_requested", "denied", "internal_only", "marketing_allowed"] }));
 
+Object.assign(configs, {
+  supplierQuotations: {
+    description: "Aynı talep için toplanan tedarikçi teklifleri; fiyat, termin ve kaliteyi yan yana karşılaştırın",
+    columns: [["supplierName", "Tedarikçi"], ["quotationNumber", "Teklif No"], ["quantity", "Miktar"], ["unitPrice", "Birim Fiyat", "money"], ["total", "Toplam", "money"], ["leadTimeDays", "Termin (gün)"], ["status", "Durum", "status"]],
+    fields: [
+      field("purchaseRequestId", "Satın alma talebi", "text", { required: true }),
+      field("supplierId", "Tedarikçi", "text", { required: true }),
+      field("quotationNumber", "Teklif numarası"), field("quotationDate", "Teklif tarihi", "date"), field("validUntil", "Geçerlilik", "date"),
+      field("quantity", "Miktar", "number", { min: 0 }), field("unit", "Birim"),
+      field("unitPrice", "Birim fiyat", "number", { permission: { resource: "cost", action: "view" } }),
+      field("total", "Toplam tutar", "number", { permission: { resource: "cost", action: "view" } }),
+      field("currency", "Para birimi", "select", { options: ["TRY", "USD", "EUR"] }),
+      field("leadTimeDays", "Termin süresi (gün)", "number", { min: 0 }),
+      field("paymentTerms", "Ödeme koşulu"),
+      field("status", "Durum", "select", { options: ["draft", "received"] }),
+      field("qualityNote", "Kalite / kapsam notu", "textarea", { wide: true }),
+      field("notes", "Notlar", "textarea", { wide: true }),
+    ],
+  },
+  workCenters: {
+    description: "Atölye ve dış imalat iş merkezleri, günlük kapasite ve saatlik maliyet",
+    columns: [["code", "Kod"], ["name", "İş Merkezi"], ["category", "Kategori"], ["dailyCapacityMinutes", "Günlük Kapasite (dk)"], ["isOutsourced", "Dış İmalat"], ["status", "Durum", "status"]],
+    fields: [
+      field("code", "İş merkezi kodu", "text", { required: true, placeholder: "CNC-01" }),
+      field("name", "İş merkezi adı", "text", { required: true }),
+      field("category", "Kategori", "select", { options: ["Kesim", "CNC", "Kenar Bantlama", "Montaj", "Cila", "Metal", "Cam", "Döşeme", "Diğer"] }),
+      field("dailyCapacityMinutes", "Günlük kapasite (dakika)", "number", { min: 1, defaultValue: 480 }),
+      field("hourlyCost", "Saatlik maliyet", "number", { permission: { resource: "cost", action: "view" } }),
+      field("isOutsourced", "Dış imalat mı?", "select", { options: [{ value: "0", label: "Hayır, kendi atölyemiz" }, { value: "1", label: "Evet, dış imalat" }] }),
+      field("status", "Durum", "select", { options: ["active", "passive"] }),
+      field("notes", "Notlar", "textarea", { wide: true }),
+    ],
+  },
+  bomLines: {
+    description: "İş kaleminin bir adedi için gereken malzemeler; fire payıyla malzeme planına dönüşür",
+    columns: [["itemCode", "Kod"], ["description", "Malzeme"], ["quantityPerUnit", "Adet Başına"], ["unit", "Birim"], ["scrapRate", "Fire (%)"], ["unitCost", "Birim Maliyet", "money"]],
+    fields: [
+      field("workItemId", "İş kalemi", "text", { required: true }),
+      field("inventoryItemId", "Stok kartı"),
+      field("itemCode", "Malzeme kodu"),
+      field("description", "Malzeme açıklaması", "text", { required: true }),
+      field("quantityPerUnit", "Adet başına miktar", "number", { required: true, min: 0 }),
+      field("unit", "Birim", "text", { required: true }),
+      field("scrapRate", "Fire payı (%)", "number", { min: 0, max: 99 }),
+      field("unitCost", "Birim maliyet", "number", { permission: { resource: "cost", action: "view" } }),
+      field("supplierId", "Tercih edilen tedarikçi"),
+      field("sortOrder", "Sıra", "number"),
+      field("notes", "Notlar", "textarea", { wide: true }),
+    ],
+  },
+  productionOperations: {
+    description: "Üretim emrinin operasyon sırası, iş merkezi ve süre planı",
+    columns: [["sequence", "Sıra"], ["name", "Operasyon"], ["workCenterId", "İş Merkezi"], ["plannedMinutes", "Planlanan dk"], ["actualMinutes", "Gerçekleşen dk"], ["plannedEnd", "Bitiş", "date"], ["status", "Durum", "status"]],
+    fields: [
+      field("productionOrderId", "Üretim emri", "text", { required: true }),
+      field("sequence", "Sıra numarası", "number", { min: 0, defaultValue: 10 }),
+      field("name", "Operasyon adı", "text", { required: true, placeholder: "Kesim, CNC, kenar bantlama…" }),
+      field("workCenterId", "İş merkezi"),
+      field("assigneeUserId", "Sorumlu kullanıcı ID"),
+      field("plannedMinutes", "Planlanan süre (dakika)", "number", { min: 0 }),
+      field("plannedStart", "Planlanan başlangıç", "date"), field("plannedEnd", "Planlanan bitiş", "date"),
+      field("status", "Durum", "select", { options: ["pending"] }),
+      field("description", "Operasyon talimatı", "textarea", { wide: true }),
+    ],
+  },
+  productionIssues: {
+    description: "Üretimde çıkan sorunlar, yeniden işlem ve hurda kaydı; kâr kaybının kaynağını gösterir",
+    columns: [["issueNumber", "Kayıt No"], ["issueType", "Tür"], ["severity", "Önem"], ["description", "Sorun"], ["reworkQuantity", "Yeniden İşlem"], ["costImpact", "Maliyet Etkisi", "money"], ["status", "Durum", "status"]],
+    fields: [
+      field("productionOrderId", "Üretim emri", "text", { required: true }),
+      field("productionOperationId", "Operasyon"),
+      field("projectId", "Proje ID"), field("workItemId", "İş kalemi ID"),
+      field("issueNumber", "Kayıt numarası"),
+      field("issueType", "Sorun türü", "select", { required: true, options: ["material", "quality", "machine", "drawing", "manpower", "supplier", "other"] }),
+      field("severity", "Önem derecesi", "select", { options: ["low", "normal", "high", "critical"] }),
+      field("description", "Sorun açıklaması", "textarea", { required: true, wide: true }),
+      field("responsibleUserId", "Sorumlu kullanıcı ID"),
+      field("delayDays", "Gecikme (gün)", "number", { min: 0 }),
+      field("status", "Durum", "select", { options: ["open"] }),
+      field("rootCause", "Kök neden", "textarea", { wide: true }),
+    ],
+  },
+});
+
 // İş akışı yönetilen kaynaklarda durum yalnızca oluştururken ve yalnızca
 // sunucunun kabul ettiği başlangıç değerleriyle seçilebilir. Sonraki aşamalar
 // listedeki iş akışı düğmeleriyle değişir; önceden forma konan seçenekler
@@ -381,6 +479,9 @@ const workflowStatusOptions = {
   qualityInspections: ["draft"],
   handovers: ["draft"],
   materialRequirements: ["draft"],
+  supplierQuotations: ["draft", "received"],
+  productionOperations: ["pending"],
+  productionIssues: ["open"],
 };
 
 // Ham kayıt kimliği yazmak yerine arayarak seçim. Alan adı → kaynak eşlemesi.
@@ -397,6 +498,7 @@ const referenceResources = {
   installationId: "installations", productionOrderId: "production",
   accountId: "accounts", supersedesId: "designRevisions", designRevisionId: "designRevisions",
   qualityInspectionId: "qualityInspections",
+  productionOperationId: "productionOperations", workCenterId: "workCenters",
 };
 const memberReferenceFields = new Set([
   "projectManager", "assigneeUserId", "surveyorUserId", "ownerUserId",
@@ -440,6 +542,7 @@ const protectFields = (config, names, resource, action = "read") => {
 protectFields(configs.hr, ["emergencyContact", "address"], "hr.sensitive");
 protectFields(configs.accounts, ["iban", "openingBalance", "currentBalance"], "finance.sensitive");
 protectFields(configs.purchaseOrders, ["subtotal", "taxTotal", "grandTotal"], "cost", "view");
+protectFields(configs.productionIssues, ["costImpact"], "cost", "view");
 configs.finance.createDefaults = {};
 configs.accounting.createDefaults = { official: true };
 
@@ -698,6 +801,30 @@ function workflowActions(module, row, session) {
       actions.push({ key: "release", label: "Rezervasyonu bırak", title: "Ayrılan stoğu serbest bırak", message: "Stok başka projeler için tekrar kullanılabilir hale gelir.", inputKey: "quantity", inputLabel: "Serbest bırakılacak miktar (isteğe bağlı)", inputType: "number" });
     }
     return actions;
+  }
+  if (module.id === "supplierQuotations") {
+    const actions = [];
+    if (["draft", "received"].includes(status) && hasCapability(session, "supplier-quotations.select")) {
+      actions.push({ key: "select", label: "Bu teklifi seç", title: "Kazanan teklifi belirle", message: "Diğer teklifler reddedilir, talep bu tedarikçi ve tutarla güncellenir. En düşük teklif seçilmiyorsa gerekçe zorunludur.", tone: "success" });
+    }
+    const next = { draft: ["received", "expired"], received: ["rejected", "expired"], rejected: ["received"] };
+    return [...actions, ...transition(next[status] || [], "supplier-quotations.write", "Teklif durumunu değiştir")];
+  }
+  if (module.id === "bomLines" && hasCapability(session, "work-items.explode-bom") && row.workItemId) {
+    return [{ key: "explode-bom", label: "Reçeteyi patlat", title: "Reçeteden malzeme ihtiyacı üret", message: "İş kalemi miktarı ve fire payı kullanılarak malzeme planı satırları açılır. Daha önce patlatılmış satırlar tekrarlanmaz.", targetResource: "workItems", targetId: row.workItemId, inputKey: "needed_by", inputLabel: "İhtiyaç tarihi (isteğe bağlı)", inputType: "date", tone: "success" }];
+  }
+  if (module.id === "productionOperations" && hasCapability(session, "production-operations.execute")) {
+    const next = { pending: ["in_progress", "blocked", "skipped"], in_progress: ["completed", "blocked"], blocked: ["in_progress", "skipped"] };
+    if (!(next[status] || []).length) return [];
+    return [{ key: "transition", label: "Operasyonu ilerlet", title: "Operasyon durumunu değiştir", message: "Tamamlarken gerçekleşen süreyi girin; boş bırakılırsa başlangıçtan bu yana geçen süre yazılır.", options: (next[status] || []).map((value) => ({ value, label: localizedEnum(value) })), inputKey: "actual_minutes", inputLabel: "Gerçekleşen süre (dakika)", inputType: "number" }];
+  }
+  if (module.id === "productionIssues") {
+    const actions = [];
+    if (["open", "in_progress"].includes(status) && hasCapability(session, "production-issues.resolve")) {
+      actions.push({ key: "resolve", label: "Çözüme kapat", title: "Üretim sorununu kapat", message: "Yeniden işlem ve hurda miktarı üretim emrine işlenir; maliyet etkisi proje kârlılığında görünür.", inputKey: "rework_quantity", inputLabel: "Yeniden işlem miktarı", inputType: "number", secondaryInputKey: "scrap_quantity", secondaryInputLabel: "Hurda miktarı", secondaryInputType: "number", reasonKey: "resolution", reasonRequired: true, tone: "success" });
+    }
+    const next = { open: ["in_progress", "cancelled"], in_progress: ["open", "cancelled"] };
+    return [...actions, ...transition(next[status] || [], "production-issues.write", "Sorun durumunu değiştir")];
   }
   if (module.id === "projectMeetings") {
     const next = { draft: ["published"], published: ["closed"] };
@@ -1010,8 +1137,10 @@ function WorkflowConfirmModal({ workflow, saving, error, onClose, onConfirm }) {
   // önceden gövdeye hiç eklenmiyordu; supersede, invoice ve paid bu yüzden
   // her seferinde sunucudan hata alıyordu.
   const buildBody = () => {
+    // Bazı işlemler gerekçeyi farklı bir alan adıyla bekler (ör. resolution).
+    const reasonKey = action.reasonKey || "reason";
     const body = {
-      reason: reason.trim() || undefined,
+      [reasonKey]: reason.trim() || undefined,
       status: targetStatus || undefined,
       note: gateBlocked ? undefined : reason.trim() || undefined,
       override_reason: gateBlocked ? reason.trim() : undefined,
@@ -1031,7 +1160,137 @@ function WorkflowConfirmModal({ workflow, saving, error, onClose, onConfirm }) {
   return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}><section className="live-modal compact live-confirm-modal" role="alertdialog" aria-modal="true"><header><div><small>İŞ AKIŞI ONAYI</small><h2>{action.title}</h2></div><button className="live-icon-button" disabled={saving} onClick={onClose}><X /></button></header><div className="live-confirm-body"><p>{action.message}</p><div className="live-record-reference"><b>{workflow.row.name || workflow.row.referenceNo || workflow.row.code || workflow.row.number || workflow.row.documentNo || workflow.row.id}</b><small>{workflow.row.status || workflow.row.revisionStatus || "Kayıt"}</small></div>{action.options && <label><span>Yeni aşama</span><select value={targetStatus} onChange={(event) => setTargetStatus(event.target.value)}>{action.options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>}{action.inputKey && extraInput(action.inputKey, action.inputLabel || action.inputKey, action.inputType, action.inputResource, inputValue, setInputValue, action.inputRequired)}{action.secondaryInputKey && extraInput(action.secondaryInputKey, action.secondaryInputLabel || action.secondaryInputKey, action.secondaryInputType, action.secondaryInputResource, secondaryValue, setSecondaryValue, action.secondaryInputRequired)}{gateBlocked && <div className="live-gate-blockers"><b>Bu geçişi durduran eksikler</b>{blockers.map((item) => <span key={item.id}><WarningCircle />{item.label}</span>)}</div>}{(action.reasonRequired || action.key === "transition") && <label><span>{gateBlocked ? "Yönetici istisna gerekçesi *" : action.reasonRequired ? "Neden / açıklama *" : "Geçiş notu"}</span><textarea rows="3" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={gateBlocked ? "Neden eksikler tamamlanmadan devam edildiğini yazın (en az 10 karakter)" : action.reasonRequired ? "En az 3 karakter girin" : "İsteğe bağlı"} /></label>}{error && <div className="live-form-alert"><WarningCircle />{error.message}</div>}<footer><button className="live-button secondary" disabled={saving} onClick={onClose}>Vazgeç</button><button className={`live-button primary ${action.tone || ""}`} disabled={disabled} onClick={() => onConfirm(buildBody())}>{saving ? <><span className="live-spinner small" /> İşleniyor</> : gateBlocked ? "İstisna ile devam et" : "İşlemi onayla"}</button></footer></div></section></div>;
 }
 
-function ProjectCommandCenterModal({ record, onClose, onNavigate }) {
+// Aynı talebe gelen teklifleri yan yana koyar. En ucuz ve en hızlı ayrı ayrı
+// işaretlenir; karar bilinçli verilsin diye fark yüzdesi de gösterilir.
+function QuotationComparisonModal({ record, session, online, onClose, onChanged }) {
+  const [state, setState] = useState({ loading: true, data: null, error: null, working: false });
+  const load = () => {
+    setState((current) => ({ ...current, loading: true, error: null }));
+    api.quotationComparison(record.id).then((data) => setState({ loading: false, data, error: null, working: false })).catch((error) => setState({ loading: false, data: null, error, working: false }));
+  };
+  useEffect(load, [record.id]);
+
+  const select = async (quotationId, reason) => {
+    setState((current) => ({ ...current, working: true, error: null }));
+    try {
+      await api.workflow("supplierQuotations", quotationId, "select", reason ? { reason } : {});
+      load();
+      onChanged?.();
+    } catch (error) {
+      if (error.code === "selection_reason_required") {
+        const given = window.prompt("En düşük teklif seçilmiyor. Gerekçenizi yazın (en az 10 karakter):");
+        if (given && given.trim().length >= 10) return select(quotationId, given.trim());
+      }
+      setState((current) => ({ ...current, working: false, error }));
+    }
+  };
+
+  const data = state.data;
+  const canSelect = online && hasCapability(session, "supplier-quotations.select");
+  const recommendation = data?.recommendation || {};
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>TEKLİF KARŞILAŞTIRMA</small><h2>{record.number || record.id}</h2><p>{record.itemName || record.description || "Satın alma talebi"}</p></div><button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : !data?.quotations?.length ? <div className="live-view-empty"><WarningCircle /><b>Henüz teklif girilmemiş</b><small>Tedarikçi Teklifleri ekranından bu talebe teklif ekleyin.</small></div> : <div className="live-comparison">
+    <div className="live-comparison-summary">
+      <article><small>Teklif sayısı</small><strong>{data.quotations.length}</strong></article>
+      <article><small>En düşük–en yüksek farkı</small><strong>{money.format(Number(recommendation.saving_against_highest_minor || 0) / 100)}</strong></article>
+      <article><small>Fiyat aralığı</small><strong>{recommendation.spread_percent == null ? "—" : `%${recommendation.spread_percent}`}</strong></article>
+    </div>
+    <div className="live-table-wrap"><table className="live-table"><thead><tr><th>Tedarikçi</th><th>Toplam</th><th>Birim</th><th>Termin</th><th>Ödeme</th><th>Durum</th><th /></tr></thead><tbody>
+      {data.quotations.map((row) => {
+        const flags = [];
+        if (row.id === recommendation.cheapest_quotation_id) flags.push("En düşük fiyat");
+        if (row.id === recommendation.fastest_quotation_id) flags.push("En kısa termin");
+        return <tr key={row.id} className={row.status === "selected" ? "selected" : ""}>
+          <td><b>{row.supplier_name || row.supplier_id}</b>{flags.length > 0 && <small className="live-comparison-flags">{flags.join(" · ")}</small>}{row.quality_note && <small>{row.quality_note}</small>}</td>
+          <td>{row.total_minor == null ? "—" : money.format(Number(row.total_minor) / 100)}</td>
+          <td>{row.unit_price_minor == null ? "—" : `${money.format(Number(row.unit_price_minor) / 100)} / ${row.unit || "birim"}`}</td>
+          <td>{row.lead_time_days == null ? "—" : `${row.lead_time_days} gün`}</td>
+          <td>{row.payment_terms || "—"}</td>
+          <td><Status>{localizedEnum(row.status)}</Status></td>
+          <td>{canSelect && ["draft", "received"].includes(row.status) && <button className="live-workflow-button success" disabled={state.working} onClick={() => select(row.id)}>Seç</button>}</td>
+        </tr>;
+      })}
+    </tbody></table></div>
+    {state.error && <div className="live-form-alert"><WarningCircle />{state.error.message}</div>}
+  </div>}</section></div>;
+}
+
+// Mahal ve iş kalemi kırılımında bütçe, gerçekleşen, taahhüt ve kalan tahmin.
+function CostBreakdownModal({ record, onClose }) {
+  const [state, setState] = useState({ loading: true, data: null, error: null });
+  const [expanded, setExpanded] = useState(null);
+  const load = () => {
+    setState({ loading: true, data: null, error: null });
+    api.projectCostBreakdown(record.id).then((data) => setState({ loading: false, data, error: null })).catch((error) => setState({ loading: false, data: null, error }));
+  };
+  useEffect(load, [record.id]);
+  const data = state.data;
+  const cash = (value) => money.format(Number(value || 0) / 100);
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>MALİYET KIRILIMI</small><h2>{record.code} · {record.name}</h2><p>Bütçe, gerçekleşen, taahhüt ve kalan tahmini maliyet ayrı ayrı izlenir.</p></div><button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-cost-body">
+    <div className="live-comparison-summary">
+      <article><small>Sözleşme bedeli</small><strong>{cash(data.totals.contract_value_minor)}</strong></article>
+      <article><small>Gerçekleşen maliyet</small><strong>{cash(data.totals.actual_cost_minor)}</strong></article>
+      <article><small>Açık taahhüt</small><strong>{cash(data.totals.committed_cost_minor)}</strong></article>
+      <article><small>Kalan tahmin</small><strong>{cash(data.totals.remaining_cost_minor)}</strong></article>
+      <article><small>Bitiş maliyeti tahmini</small><strong>{cash(data.totals.forecast_cost_minor)}</strong></article>
+      <article className={Number(data.totals.forecast_margin_minor) < 0 ? "danger" : ""}><small>Tahmini kâr</small><strong>{cash(data.totals.forecast_margin_minor)}{data.totals.margin_percent != null && <em> · %{data.totals.margin_percent}</em>}</strong></article>
+    </div>
+    {Number(data.totals.issue_cost_minor) > 0 && <div className="live-field-note warning"><WarningCircle />Üretim sorunlarından doğan kayıp: {cash(data.totals.issue_cost_minor)}</div>}
+    {(Number(data.unassigned.actual_cost_minor) > 0 || Number(data.unassigned.committed_cost_minor) > 0) && <div className="live-field-note"><WarningCircle />İş kalemine bağlanmamış maliyet: gerçekleşen {cash(data.unassigned.actual_cost_minor)}, taahhüt {cash(data.unassigned.committed_cost_minor)}. Gider ve siparişleri iş kalemine bağlarsanız kırılım tamamlanır.</div>}
+    <div className="live-table-wrap"><table className="live-table"><thead><tr><th>Mahal</th><th>Kalem</th><th>Bütçe</th><th>Gerçekleşen</th><th>Taahhüt</th><th>Kalan</th><th>Bitiş tahmini</th><th>Sapma</th></tr></thead><tbody>
+      {data.spaces.map((space) => <>
+        <tr key={space.space_name} className="live-cost-space" onClick={() => setExpanded(expanded === space.space_name ? null : space.space_name)}>
+          <td><b>{space.space_name}</b></td>
+          <td>{space.work_item_count} kalem{space.over_budget_items > 0 && <small className="live-cost-over">{space.over_budget_items} kalem bütçe aşımında</small>}</td>
+          <td>{cash(space.budget_cost_minor)}</td>
+          <td>{cash(space.actual_cost_minor)}</td>
+          <td>{cash(space.committed_cost_minor)}</td>
+          <td>{cash(space.remaining_cost_minor)}</td>
+          <td>{cash(space.forecast_cost_minor)}</td>
+          <td className={space.forecast_margin_minor < 0 ? "live-cost-over" : ""}>{space.margin_percent == null ? "—" : `%${space.margin_percent}`}</td>
+        </tr>
+        {expanded === space.space_name && data.workItems.filter((item) => item.space_name === space.space_name).map((item) => <tr key={item.id} className="live-cost-item">
+          <td />
+          <td>{item.item_code ? `${item.item_code} · ` : ""}{item.description}{item.rework_quantity > 0 && <small className="live-cost-over">{item.rework_quantity} adet yeniden işlem</small>}</td>
+          <td>{cash(item.budget_cost_minor)}</td>
+          <td>{cash(item.actual_cost_minor)}</td>
+          <td>{cash(item.committed_cost_minor)}</td>
+          <td>{cash(item.remaining_cost_minor)}</td>
+          <td>{cash(item.forecast_cost_minor)}</td>
+          <td className={item.over_budget ? "live-cost-over" : ""}>{cash(item.variance_minor)}</td>
+        </tr>)}
+      </>)}
+    </tbody></table></div>
+    <footer className="live-table-footer"><span>{data.workItems.length} iş kalemi · {data.spaces.length} mahal</span><small>Mahal satırına tıklayarak kalem kırılımını açın</small></footer>
+  </div>}</section></div>;
+}
+
+// İş merkezi yükü: planlanan dakika ile kapasitenin karşılaştırılması.
+function WorkCenterLoadView({ online }) {
+  const [range, setRange] = useState(() => ({ from: new Date().toISOString().slice(0, 10), to: new Date(Date.now() + 28 * 86400000).toISOString().slice(0, 10) }));
+  const [state, setState] = useState({ loading: true, rows: [], meta: null, error: null });
+  const load = () => {
+    setState((current) => ({ ...current, loading: true, error: null }));
+    api.workCenterLoad(range).then(({ data, meta }) => setState({ loading: false, rows: data, meta, error: null })).catch((error) => setState({ loading: false, rows: [], meta: null, error }));
+  };
+  useEffect(load, [range.from, range.to]);
+  return <section className="live-panel"><header className="live-toolbar"><div><small>KAPASİTE</small><h2>İş Merkezi Yükü</h2><p>Planlanan operasyon süreleri ile günlük kapasiteyi karşılaştırır; darboğazları üretim planı yapılmadan gösterir.</p></div><div className="live-toolbar-actions"><label className="live-inline-field"><span>Başlangıç</span><input type="date" value={range.from} onChange={(event) => setRange({ ...range, from: event.target.value })} /></label><label className="live-inline-field"><span>Bitiş</span><input type="date" value={range.to} onChange={(event) => setRange({ ...range, to: event.target.value })} /></label><button className="live-button secondary" onClick={load} disabled={!online}><ArrowClockwise /> Yenile</button></div></header>
+    {state.loading ? <LoadingState /> : state.error?.status === 403 ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={load} /> : !state.rows.length ? <div className="live-view-empty"><Factory /><b>Tanımlı iş merkezi yok</b><small>İş Merkezleri ekranından atölye ve dış imalat merkezlerini tanımlayın.</small></div> : <>
+      {state.meta?.bottlenecks?.length > 0 && <div className="live-field-note warning"><WarningCircle />Kapasite aşımı: {state.meta.bottlenecks.join(", ")}</div>}
+      <div className="live-table-wrap"><table className="live-table"><thead><tr><th>İş Merkezi</th><th>Kapasite (dk)</th><th>Planlanan (dk)</th><th>Açık iş (dk)</th><th>Doluluk</th><th>Operasyon</th></tr></thead><tbody>
+        {state.rows.map((row) => <tr key={row.id} className={row.overloaded ? "live-cost-over" : ""}>
+          <td><b>{row.code}</b><small>{row.name}{row.is_outsourced ? " · dış imalat" : ""}</small></td>
+          <td>{row.capacity_minutes}</td>
+          <td>{row.planned_minutes}</td>
+          <td>{row.open_minutes}</td>
+          <td><div className="live-load-bar"><i style={{ width: `${Math.min(100, row.load_percent || 0)}%` }} className={row.overloaded ? "over" : ""} /><span>{row.load_percent == null ? "—" : `%${row.load_percent}`}</span></div></td>
+          <td>{row.operation_count}{row.blocked_count > 0 && <small className="live-cost-over">{row.blocked_count} duraklatıldı</small>}</td>
+        </tr>)}
+      </tbody></table></div>
+    </>}
+  </section>;
+}
+
+function ProjectCommandCenterModal({ record, onClose, onNavigate, onCostBreakdown }) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
   const load = () => {
     setState({ loading: true, data: null, error: null });
@@ -1040,7 +1299,7 @@ function ProjectCommandCenterModal({ record, onClose, onNavigate }) {
   useEffect(() => { load(); }, [record.id]);
   const data = state.data;
   const jump = (moduleId) => { onClose(); onNavigate?.(moduleId); };
-  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal live-project-center" role="dialog" aria-modal="true"><header><div><small>PROJE KOMUTA MERKEZİ</small><h2>{data?.project?.name || record.name}</h2><p>{data?.project?.code || record.code} · {projectStageLabels[data?.project?.status] || data?.project?.status || record.status}</p></div><button className="live-icon-button" onClick={onClose}><X /></button></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-project-center-body"><div className="live-project-stage-rail" aria-label="Proje aşamaları">{data.stages.map((stage, index) => <div className={stage.state} key={stage.status}><i>{stage.state === "complete" ? <Check /> : index + 1}</i><span><b>{stage.label}</b><small>{stage.state === "complete" ? "Tamamlandı" : stage.state === "current" ? "Aktif aşama" : stage.score ? `%${stage.score} hazır` : "Bekliyor"}</small></span></div>)}</div><section className="live-project-summary"><article className="readiness"><small>SONRAKİ AŞAMAYA HAZIRLIK</small><strong>%{data.readiness}</strong><span><i style={{ width: `${data.readiness}%` }} /></span><p>{data.nextStatus ? `${projectStageLabels[data.nextStatus] || data.nextStatus} aşaması için` : "Proje süreci tamamlandı"}</p></article><article><small>AÇIK GÖREV</small><strong>{data.facts.openTasks || 0}</strong><p>{data.facts.overdueTasks ? `${data.facts.overdueTasks} gecikmiş görev` : "Gecikmiş görev yok"}</p><button onClick={() => jump("projectTasks")}>Görevlere git</button></article><article><small>PROJE DOSYASI</small><strong>{data.facts.fileTotal || 0}</strong><p>Fotoğraf, çizim ve belgeler</p><button onClick={() => jump("files")}>Dosyaları aç</button></article><article><small>TAHMİNİ KÂR</small><strong>{money.format((data.finance.estimatedProfitMinor || 0) / 100)}</strong><p>{data.finance.marginPercent == null ? "Sözleşme bedeli bekleniyor" : `%${data.finance.marginPercent} tahmini marj`}</p><button onClick={() => jump("finance")}>Finansı aç</button></article></section><div className="live-project-columns"><section><header><div><small>SIRADAKİ DOĞRU İŞLER</small><h3>Projenin ilerlemesi için</h3></div></header><div className="live-next-actions">{data.nextActions.length ? data.nextActions.map((item, index) => <article key={`${item.module}-${index}`} className={item.priority}><span>{index + 1}</span><div><b>{item.title}</b><small>{item.priority === "high" ? "Zorunlu koşul" : "Önerilen kontrol"}</small></div><button onClick={() => jump(item.module)}>Aç</button></article>) : <div className="live-compact-empty">Bu proje için bekleyen işlem bulunmuyor.</div>}</div></section><section><header><div><small>AŞAMA KAPILARI</small><h3>Kontrol sonucu</h3></div></header><div className="live-gate-list">{[...data.blockers, ...data.warnings].length ? [...data.blockers, ...data.warnings].map((item) => <button key={item.id} className={item.severity} onClick={() => jump(item.module)}><span>{item.severity === "blocker" ? <WarningCircle /> : "!"}</span><div><b>{item.label}</b><small>{item.severity === "blocker" ? "Tamamlanmadan geçiş engellenir" : "Geçişte kullanıcı uyarılır"}</small></div></button>) : <div className="live-project-ready"><Check /><span><b>Geçişe hazır</b><small>Sonraki aşama için zorunlu eksik yok.</small></span></div>}</div></section></div><section className="live-project-operational"><header><div><small>OPERASYON BAĞLANTILARI</small><h3>Tek projede birleşen kayıtlar</h3></div></header><div><button onClick={() => jump("siteSurveys")}><strong>{data.facts.surveyApproved || 0}</strong><span>Onaylı keşif</span></button><button onClick={() => jump("designRevisions")}><strong>{data.facts.designApproved || 0}</strong><span>Onaylı tasarım</span></button><button onClick={() => jump("production")}><strong>{data.facts.productionDone || 0}/{data.facts.productionTotal || 0}</strong><span>Üretim tamamlanma</span></button><button onClick={() => jump("qualityInspections")}><strong>{data.facts.finalQualityPass || 0}</strong><span>Final kalite geçişi</span></button><button onClick={() => jump("installations")}><strong>{data.facts.installationDone || 0}/{data.facts.installationTotal || 0}</strong><span>Montaj tamamlanma</span></button><button onClick={() => jump("handovers")}><strong>{data.facts.handoverAccepted || 0}</strong><span>Müşteri kabulü</span></button></div></section></div>}</section></div>;
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal live-project-center" role="dialog" aria-modal="true"><header><div><small>PROJE KOMUTA MERKEZİ</small><h2>{data?.project?.name || record.name}</h2><p>{data?.project?.code || record.code} · {projectStageLabels[data?.project?.status] || data?.project?.status || record.status}</p></div><button className="live-icon-button" onClick={onClose}><X /></button></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-project-center-body"><div className="live-project-stage-rail" aria-label="Proje aşamaları">{data.stages.map((stage, index) => <div className={stage.state} key={stage.status}><i>{stage.state === "complete" ? <Check /> : index + 1}</i><span><b>{stage.label}</b><small>{stage.state === "complete" ? "Tamamlandı" : stage.state === "current" ? "Aktif aşama" : stage.score ? `%${stage.score} hazır` : "Bekliyor"}</small></span></div>)}</div><section className="live-project-summary"><article className="readiness"><small>SONRAKİ AŞAMAYA HAZIRLIK</small><strong>%{data.readiness}</strong><span><i style={{ width: `${data.readiness}%` }} /></span><p>{data.nextStatus ? `${projectStageLabels[data.nextStatus] || data.nextStatus} aşaması için` : "Proje süreci tamamlandı"}</p></article><article><small>AÇIK GÖREV</small><strong>{data.facts.openTasks || 0}</strong><p>{data.facts.overdueTasks ? `${data.facts.overdueTasks} gecikmiş görev` : "Gecikmiş görev yok"}</p><button onClick={() => jump("projectTasks")}>Görevlere git</button></article><article><small>PROJE DOSYASI</small><strong>{data.facts.fileTotal || 0}</strong><p>Fotoğraf, çizim ve belgeler</p><button onClick={() => jump("files")}>Dosyaları aç</button></article><article><small>TAHMİNİ KÂR</small><strong>{money.format((data.finance.estimatedProfitMinor || 0) / 100)}</strong><p>{data.finance.marginPercent == null ? "Sözleşme bedeli bekleniyor" : `%${data.finance.marginPercent} tahmini marj`}</p><div className="live-summary-actions"><button onClick={() => jump("finance")}>Finansı aç</button>{onCostBreakdown && <button onClick={onCostBreakdown}>Maliyet kırılımı</button>}</div></article></section><div className="live-project-columns"><section><header><div><small>SIRADAKİ DOĞRU İŞLER</small><h3>Projenin ilerlemesi için</h3></div></header><div className="live-next-actions">{data.nextActions.length ? data.nextActions.map((item, index) => <article key={`${item.module}-${index}`} className={item.priority}><span>{index + 1}</span><div><b>{item.title}</b><small>{item.priority === "high" ? "Zorunlu koşul" : "Önerilen kontrol"}</small></div><button onClick={() => jump(item.module)}>Aç</button></article>) : <div className="live-compact-empty">Bu proje için bekleyen işlem bulunmuyor.</div>}</div></section><section><header><div><small>AŞAMA KAPILARI</small><h3>Kontrol sonucu</h3></div></header><div className="live-gate-list">{[...data.blockers, ...data.warnings].length ? [...data.blockers, ...data.warnings].map((item) => <button key={item.id} className={item.severity} onClick={() => jump(item.module)}><span>{item.severity === "blocker" ? <WarningCircle /> : "!"}</span><div><b>{item.label}</b><small>{item.severity === "blocker" ? "Tamamlanmadan geçiş engellenir" : "Geçişte kullanıcı uyarılır"}</small></div></button>) : <div className="live-project-ready"><Check /><span><b>Geçişe hazır</b><small>Sonraki aşama için zorunlu eksik yok.</small></span></div>}</div></section></div><section className="live-project-operational"><header><div><small>OPERASYON BAĞLANTILARI</small><h3>Tek projede birleşen kayıtlar</h3></div></header><div><button onClick={() => jump("siteSurveys")}><strong>{data.facts.surveyApproved || 0}</strong><span>Onaylı keşif</span></button><button onClick={() => jump("designRevisions")}><strong>{data.facts.designApproved || 0}</strong><span>Onaylı tasarım</span></button><button onClick={() => jump("production")}><strong>{data.facts.productionDone || 0}/{data.facts.productionTotal || 0}</strong><span>Üretim tamamlanma</span></button><button onClick={() => jump("qualityInspections")}><strong>{data.facts.finalQualityPass || 0}</strong><span>Final kalite geçişi</span></button><button onClick={() => jump("installations")}><strong>{data.facts.installationDone || 0}/{data.facts.installationTotal || 0}</strong><span>Montaj tamamlanma</span></button><button onClick={() => jump("handovers")}><strong>{data.facts.handoverAccepted || 0}</strong><span>Müşteri kabulü</span></button></div></section></div>}</section></div>;
 }
 
 function RecordDetailModal({ module, record, session, onClose }) {
@@ -1349,6 +1608,7 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
   const [deleteRecord, setDeleteRecord] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [costProject, setCostProject] = useState(null);
   const [deleteError, setDeleteError] = useState(null);
   const offlineCreateAllowed = api.canQueueOffline(module.resource);
   const canCreate = !module.readOnly && (online || offlineCreateAllowed) && permissionAllows(session, "create", module.resource) && (module.id !== "accounting" || canViewOfficial);
@@ -1433,7 +1693,9 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
     setWorkflowSaving(true);
     setWorkflowError(null);
     try {
-      await api.workflow(module.resource, workflow.row.id, workflow.action.key, body);
+      // Bazı işlemler satırın kendisini değil bağlı bir kaydı hedefler
+      // (ör. reçete satırından iş kalemini patlatmak).
+      await api.workflow(workflow.action.targetResource || module.resource, workflow.action.targetId || workflow.row.id, workflow.action.key, body);
       setWorkflow(null);
       await load();
       onDataChanged?.();
@@ -1467,7 +1729,7 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
     }
   }
 
-  return <><section className="live-panel"><header className="live-toolbar"><div><small>{module.id === "projects" ? "PROJE PORTFÖYÜ" : "CANLI KAYITLAR"}</small><h2>{module.title}</h2><p>{module.id === "projects" ? "Talep, keşif, teklif, sözleşme, üretim ve teslim aşamalarını tek zincirde yönetin." : config.description}</p></div><div className="live-toolbar-actions">{canExport && <button className="live-button secondary" onClick={exportCsv} disabled={exporting}>{exporting ? "Hazırlanıyor…" : <><CloudArrowUp /> CSV indir</>}</button>}{canCreate && <button className="live-button primary" onClick={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })}><Plus /> Yeni {module.singular}</button>}</div></header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button className="live-search-submit">Ara</button>{availableViews.length > 1 && <ViewSwitcher available={availableViews} value={activeView} onChange={setView} />}</form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><ResourceDataView view={activeView} rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>{module.id === "projects" ? "Detay düğmesi proje komuta merkezini açar" : "Tenant kapsamındaki güncel veriler"}</small></footer></> : <EmptyState title={module.title} canCreate={canCreate} onCreate={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && (module.id === "projects" ? <ProjectCommandCenterModal record={detailRecord} onClose={() => setDetailRecord(null)} onNavigate={onNavigate} /> : <RecordDetailModal module={module} record={detailRecord} session={session} onClose={() => setDetailRecord(null)} />)}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
+  return <><section className="live-panel"><header className="live-toolbar"><div><small>{module.id === "projects" ? "PROJE PORTFÖYÜ" : "CANLI KAYITLAR"}</small><h2>{module.title}</h2><p>{module.id === "projects" ? "Talep, keşif, teklif, sözleşme, üretim ve teslim aşamalarını tek zincirde yönetin." : config.description}</p></div><div className="live-toolbar-actions">{canExport && <button className="live-button secondary" onClick={exportCsv} disabled={exporting}>{exporting ? "Hazırlanıyor…" : <><CloudArrowUp /> CSV indir</>}</button>}{canCreate && <button className="live-button primary" onClick={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })}><Plus /> Yeni {module.singular}</button>}</div></header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button className="live-search-submit">Ara</button>{availableViews.length > 1 && <ViewSwitcher available={availableViews} value={activeView} onChange={setView} />}</form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><ResourceDataView view={activeView} rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>{module.id === "projects" ? "Detay düğmesi proje komuta merkezini açar" : "Tenant kapsamındaki güncel veriler"}</small></footer></> : <EmptyState title={module.title} canCreate={canCreate} onCreate={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && (module.id === "projects" ? <ProjectCommandCenterModal record={detailRecord} onClose={() => setDetailRecord(null)} onNavigate={onNavigate} onCostBreakdown={() => { setCostProject(detailRecord); setDetailRecord(null); }} /> : module.id === "purchases" ? <QuotationComparisonModal record={detailRecord} session={session} online={online} onClose={() => setDetailRecord(null)} onChanged={() => { load(); onDataChanged?.(); }} /> : <RecordDetailModal module={module} record={detailRecord} session={session} onClose={() => setDetailRecord(null)} />)}{costProject && <CostBreakdownModal record={costProject} onClose={() => setCostProject(null)} />}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
 }
 
 function Login({ error, loading, onSubmit, onPasswordLogin }) {
@@ -1476,6 +1738,9 @@ function Login({ error, loading, onSubmit, onPasswordLogin }) {
   const [password, setPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+  const [resetNote, setResetNote] = useState("");
 
   async function submitPassword(event) {
     event.preventDefault();
@@ -1484,8 +1749,76 @@ function Login({ error, loading, onSubmit, onPasswordLogin }) {
     catch (nextError) { setAuthError(nextError); setAuthLoading(false); }
   }
 
+  // Sifresini unutan kullanici talep acar; teslim kanali olmadigi icin yeni
+  // gecici sifreyi yetkili kullanici verir.
+  async function submitReset(event) {
+    event.preventDefault();
+    setAuthLoading(true); setAuthError(null);
+    try {
+      await api.requestPasswordReset({ phone, note: resetNote });
+      setResetSent(true);
+    } catch (nextError) { setAuthError(nextError); }
+    finally { setAuthLoading(false); }
+  }
+
   const visibleError = authError || error;
-  return <main className="live-login"><section><div className="live-login-brand"><span><Buildings /></span><div><b>Capproje</b><small>Orman Ürünleri Yönetimi</small></div></div><div><small>GÜVENLİ ÇALIŞMA ALANI</small><h1>Projelerinizi tek yerden yönetin.</h1><p>Teklif, üretim, satın alma, montaj ve proje finansı aynı operasyon zincirinde.</p></div></section>{demoAuthEnabled ? <form onSubmit={(event) => { event.preventDefault(); onSubmit(values); }}><header><small>GELİŞTİRİCİ OTURUMU</small><h2>Demo kullanıcıyla devam et</h2></header><label><span>E-posta</span><input required type="email" autoComplete="username" value={values.email} onChange={(event) => setValues({ ...values, email: event.target.value })} /></label><label><span>Firma / tenant ID</span><input required value={values.tenantId} onChange={(event) => setValues({ ...values, tenantId: event.target.value })} /></label>{visibleError && <div className="live-form-alert"><WarningCircle />{visibleError.message}</div>}<button className="live-button primary" disabled={loading}>{loading ? <><span className="live-spinner small" /> Bağlanıyor</> : "Demo oturumu aç"}</button></form> : <form onSubmit={submitPassword}><header><small>TELEFON VE ŞİFREYLE GİRİŞ</small><h2>Çalışma alanınıza giriş yapın</h2><p>Firma tarafından tanımlanan telefon numaranızı ve şifrenizi kullanın.</p></header><label><span>Cep telefonu</span><input required type="tel" inputMode="tel" autoComplete="username" placeholder="05xx xxx xx xx" value={phone} onChange={(event) => setPhone(event.target.value)} /></label><label><span>Şifre</span><input required type="password" minLength={8} maxLength={128} autoComplete="current-password" placeholder="Şifreniz" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{visibleError && <div className="live-form-alert"><WarningCircle />{visibleError.message}</div>}<button className="live-button primary" disabled={authLoading}>{authLoading ? <><span className="live-spinner small" /> Giriş yapılıyor</> : "Giriş yap"}</button></form>}</main>;
+  if (resetOpen) {
+    return <main className="live-login"><section><div className="live-login-brand"><span><Buildings /></span><div><b>Capproje</b><small>Orman Ürünleri Yönetimi</small></div></div><div><small>ŞİFRE SIFIRLAMA</small><h1>Şifrenizi mi unuttunuz?</h1><p>Talebiniz firma yöneticinize iletilir. Yönetici kimliğinizi doğruladıktan sonra size yeni bir geçici şifre verir; ilk girişte kendi şifrenizi belirlersiniz.</p></div></section>{resetSent
+      ? <form onSubmit={(event) => { event.preventDefault(); setResetOpen(false); setResetSent(false); }}><header><small>TALEP ALINDI</small><h2>Yöneticinize iletildi</h2><p>Numaranız kayıtlıysa firma yöneticiniz talebinizi görecek. Güvenlik gereği numaranın kayıtlı olup olmadığı burada belirtilmez.</p></header><button className="live-button primary">Giriş ekranına dön</button></form>
+      : <form onSubmit={submitReset}><header><small>ŞİFRE SIFIRLAMA TALEBİ</small><h2>Yöneticinize talep gönderin</h2></header><label><span>Cep telefonu</span><input required type="tel" inputMode="tel" placeholder="05xx xxx xx xx" value={phone} onChange={(event) => setPhone(event.target.value)} /></label><label><span>Yöneticiye not (isteğe bağlı)</span><input maxLength={200} placeholder="Adınız veya sizi tanıyacağı bir bilgi" value={resetNote} onChange={(event) => setResetNote(event.target.value)} /></label>{visibleError && <div className="live-form-alert"><WarningCircle />{visibleError.message}</div>}<button className="live-button primary" disabled={authLoading}>{authLoading ? "Gönderiliyor…" : "Talebi gönder"}</button><button type="button" className="live-link-button" onClick={() => { setResetOpen(false); setAuthError(null); }}>Giriş ekranına dön</button></form>}</main>;
+  }
+  return <main className="live-login"><section><div className="live-login-brand"><span><Buildings /></span><div><b>Capproje</b><small>Orman Ürünleri Yönetimi</small></div></div><div><small>GÜVENLİ ÇALIŞMA ALANI</small><h1>Projelerinizi tek yerden yönetin.</h1><p>Teklif, üretim, satın alma, montaj ve proje finansı aynı operasyon zincirinde.</p></div></section>{demoAuthEnabled ? <form onSubmit={(event) => { event.preventDefault(); onSubmit(values); }}><header><small>GELİŞTİRİCİ OTURUMU</small><h2>Demo kullanıcıyla devam et</h2></header><label><span>E-posta</span><input required type="email" autoComplete="username" value={values.email} onChange={(event) => setValues({ ...values, email: event.target.value })} /></label><label><span>Firma / tenant ID</span><input required value={values.tenantId} onChange={(event) => setValues({ ...values, tenantId: event.target.value })} /></label>{visibleError && <div className="live-form-alert"><WarningCircle />{visibleError.message}</div>}<button className="live-button primary" disabled={loading}>{loading ? <><span className="live-spinner small" /> Bağlanıyor</> : "Demo oturumu aç"}</button></form> : <form onSubmit={submitPassword}><header><small>TELEFON VE ŞİFREYLE GİRİŞ</small><h2>Çalışma alanınıza giriş yapın</h2><p>Firma tarafından tanımlanan telefon numaranızı ve şifrenizi kullanın.</p></header><label><span>Cep telefonu</span><input required type="tel" inputMode="tel" autoComplete="username" placeholder="05xx xxx xx xx" value={phone} onChange={(event) => setPhone(event.target.value)} /></label><label><span>Şifre</span><input required type="password" minLength={8} maxLength={128} autoComplete="current-password" placeholder="Şifreniz" value={password} onChange={(event) => setPassword(event.target.value)} /></label>{visibleError && <div className="live-form-alert"><WarningCircle />{visibleError.message}</div>}<button className="live-button primary" disabled={authLoading}>{authLoading ? <><span className="live-spinner small" /> Giriş yapılıyor</> : "Giriş yap"}</button><button type="button" className="live-link-button" onClick={() => { setResetOpen(true); setAuthError(null); }}>Şifremi unuttum</button></form>}</main>;
+}
+
+// Bekleyen şifre sıfırlama talepleri ve yeni geçici şifre verme. Teslim kanalı
+// olmadığı için şifre yöneticiye gösterilir, kullanıcıya güvenli kanaldan iletilir.
+function PasswordResetPanel({ online, onChanged }) {
+  const [state, setState] = useState({ loading: true, rows: [], error: null });
+  const [target, setTarget] = useState(null);
+  const [temporary, setTemporary] = useState("");
+  const [working, setWorking] = useState(false);
+  const [issued, setIssued] = useState(null);
+
+  const load = () => {
+    setState((current) => ({ ...current, loading: true, error: null }));
+    api.passwordResetRequests().then((rows) => setState({ loading: false, rows, error: null })).catch((error) => setState({ loading: false, rows: [], error }));
+  };
+  useEffect(load, []);
+
+  const localError = temporary ? passwordHint(temporary) : null;
+  const submit = async (event) => {
+    event.preventDefault();
+    if (localError || !target?.membershipId) return;
+    setWorking(true);
+    try {
+      await api.resetMemberPassword(target.membershipId, temporary);
+      setIssued({ name: target.userName || target.userEmail, password: temporary });
+      setTarget(null);
+      setTemporary("");
+      load();
+      onChanged?.();
+    } catch (error) {
+      setState((current) => ({ ...current, error }));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  if (state.loading) return <LoadingState />;
+  if (state.error?.status === 403) return null;
+  return <section className="live-panel"><header className="live-toolbar"><div><small>HESAP GÜVENLİĞİ</small><h2>Şifre Sıfırlama Talepleri</h2><p>Kullanıcı kimliğini doğruladıktan sonra yeni geçici şifreyi verin. Kullanıcı ilk girişte kendi şifresini belirlemek zorundadır.</p></div><button className="live-button secondary" onClick={load} disabled={!online}><ArrowClockwise /> Yenile</button></header>
+    {issued && <div className="live-secret"><div><b>{issued.name} için geçici şifre</b><code>{issued.password}</code><small>Bu şifreyi kullanıcıya güvenli bir kanaldan iletin. Ekranı kapattığınızda tekrar gösterilmez.</small></div><button className="live-icon-button" onClick={() => setIssued(null)}><X /></button></div>}
+    {state.error && <div className="live-form-alert"><WarningCircle />{state.error.message}</div>}
+    {!state.rows.length ? <div className="live-view-empty"><Check /><b>Bekleyen talep yok</b><small>Kullanıcılar giriş ekranındaki "Şifremi unuttum" bağlantısıyla talep açabilir.</small></div> : <div className="live-table-wrap"><table className="live-table"><thead><tr><th>Kullanıcı</th><th>Not</th><th>Talep Tarihi</th><th /></tr></thead><tbody>
+      {state.rows.map((row) => <tr key={row.id}>
+        <td><b>{row.userName || "Eşleşmeyen kullanıcı"}</b><small>{row.userEmail || "—"}{row.title ? ` · ${row.title}` : ""}</small></td>
+        <td>{row.contactNote || "—"}</td>
+        <td>{formatValue(row.createdAt, "date", row)}</td>
+        <td>{row.membershipId && <button className="live-workflow-button" disabled={!online} onClick={() => { setTarget({ membershipId: row.membershipId, userName: row.userName, userEmail: row.userEmail }); setTemporary(""); }}>Yeni şifre ver</button>}</td>
+      </tr>)}
+    </tbody></table></div>}
+    {target && <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setTarget(null)}><section className="live-modal compact" role="dialog" aria-modal="true"><header><div><small>GEÇİCİ ŞİFRE</small><h2>{target.userName || target.userEmail}</h2><p>Kullanıcının kimliğini telefonla veya yüz yüze doğruladığınızdan emin olun.</p></div><button className="live-icon-button" onClick={() => setTarget(null)}><X /></button></header><form onSubmit={submit}><div className="live-form-grid"><label className="wide"><span>Yeni geçici şifre <em>*</em></span><input required minLength={8} maxLength={128} value={temporary} onChange={(event) => setTemporary(event.target.value)} /><small className="live-field-help">En az 8 karakter, en az bir harf ve bir rakam.</small></label></div>{localError && <div className="live-form-alert"><WarningCircle />{localError}</div>}<footer><button type="button" className="live-button secondary" onClick={() => setTarget(null)}>Vazgeç</button><button className="live-button primary" disabled={working || Boolean(localError) || !temporary}>{working ? "Veriliyor…" : "Geçici şifreyi ver"}</button></footer></form></section></div>}
+  </section>;
 }
 
 function TenantSelector({ session, onChange }) {
@@ -1644,7 +1977,7 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
   });
   const selectedModule = visibleModules.some((item) => item.id === active.id) ? active : visibleModules[0];
   const navGroups = visibleModules.reduce((groups, item) => ({ ...groups, [item.group]: [...(groups[item.group] || []), item] }), {});
-  return <div className="live-shell"><LiveStyles />{!online && <div className="live-offline"><WarningCircle /> Çevrimdışısınız. Uygun yeni saha kayıtları kuyruğa alınır; onay, silme ve dosya işlemleri bağlantı bekler.</div>}<aside className="live-sidebar"><div className="live-brand"><span><Buildings /></span><div><b>Capproje</b><small>Yönetim Platformu</small></div></div><TenantSelector session={session} onChange={changeTenant} /><nav aria-label="Ana menü">{Object.entries(navGroups).map(([group, items], groupIndex) => { const expanded = openNavGroup === group; const panelId = `live-nav-group-${groupIndex}`; return <section className={`live-nav-group ${expanded ? "open" : ""}`} key={group}><button type="button" className="live-nav-group-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpenNavGroup((current) => current === group ? null : group)}><span>{group}</span><CaretDown /></button><div id={panelId} className="live-nav-group-items" hidden={!expanded}>{items.map((item) => <button type="button" key={item.id} className={`live-nav-item ${item.id === selectedModule?.id ? "active" : ""}`} onClick={() => { setActiveId(item.id); setOpenNavGroup(group); }}><item.icon /><span>{item.title}</span></button>)}</div></section>; })}</nav><div className="live-user"><UserCircle /><span><b>{session?.user?.name || session?.user?.full_name || `${session?.user?.firstName || ""} ${session?.user?.lastName || ""}`.trim() || session?.user?.email}</b><small>{session?.role?.name || session?.user?.role || "Kullanıcı"}</small></span><button onClick={() => setSecurityOpen(true)} title="Şifre ve oturumlar"><UserCircle /></button><button onClick={logout} title="Çıkış yap"><SignOut /></button></div></aside><main className="live-main"><header className="live-topbar"><div><small>{session?.tenant?.name || "Firma"}</small><h1>{selectedModule?.title || "Çalışma alanı"}</h1></div><GlobalSearch onNavigate={setActiveId} /><div className="live-top-actions">{onBackToPrototype && <button className="live-button secondary" onClick={onBackToPrototype}>Prototipe dön</button>}<OfflineQueueControl state={queueState} online={online} onSynced={() => setDataVersion((value) => value + 1)} /><button className="live-top-icon" onClick={() => setActiveId("notifications")} title="Bildirimler"><Bell /></button><span className="live-connection"><i /> {online ? "Canlı" : "Çevrimdışı"}</span></div></header><div className="live-content">{!selectedModule ? <PermissionDeniedState /> : selectedModule.id === "fieldMode" ? <FieldMode session={session} online={online} queueState={queueState} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} /> : selectedModule.id === "dashboard" ? <Dashboard session={session} onNavigate={setActiveId} refreshKey={dataVersion} /> : selectedModule.id === "notifications" ? <NotificationsView onNavigate={setActiveId} /> : selectedModule.id === "backups" ? <BackupView online={online} /> : selectedModule.id === "tokens" ? <TokenView online={online} /> : <ResourceView module={selectedModule} session={session} online={online} refreshKey={dataVersion} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} />}</div></main>{securityOpen && <SecuritySettingsModal onClose={() => setSecurityOpen(false)} />}</div>;
+  return <div className="live-shell"><LiveStyles />{!online && <div className="live-offline"><WarningCircle /> Çevrimdışısınız. Uygun yeni saha kayıtları kuyruğa alınır; onay, silme ve dosya işlemleri bağlantı bekler.</div>}<aside className="live-sidebar"><div className="live-brand"><span><Buildings /></span><div><b>Capproje</b><small>Yönetim Platformu</small></div></div><TenantSelector session={session} onChange={changeTenant} /><nav aria-label="Ana menü">{Object.entries(navGroups).map(([group, items], groupIndex) => { const expanded = openNavGroup === group; const panelId = `live-nav-group-${groupIndex}`; return <section className={`live-nav-group ${expanded ? "open" : ""}`} key={group}><button type="button" className="live-nav-group-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpenNavGroup((current) => current === group ? null : group)}><span>{group}</span><CaretDown /></button><div id={panelId} className="live-nav-group-items" hidden={!expanded}>{items.map((item) => <button type="button" key={item.id} className={`live-nav-item ${item.id === selectedModule?.id ? "active" : ""}`} onClick={() => { setActiveId(item.id); setOpenNavGroup(group); }}><item.icon /><span>{item.title}</span></button>)}</div></section>; })}</nav><div className="live-user"><UserCircle /><span><b>{session?.user?.name || session?.user?.full_name || `${session?.user?.firstName || ""} ${session?.user?.lastName || ""}`.trim() || session?.user?.email}</b><small>{session?.role?.name || session?.user?.role || "Kullanıcı"}</small></span><button onClick={() => setSecurityOpen(true)} title="Şifre ve oturumlar"><UserCircle /></button><button onClick={logout} title="Çıkış yap"><SignOut /></button></div></aside><main className="live-main"><header className="live-topbar"><div><small>{session?.tenant?.name || "Firma"}</small><h1>{selectedModule?.title || "Çalışma alanı"}</h1></div><GlobalSearch onNavigate={setActiveId} /><div className="live-top-actions">{onBackToPrototype && <button className="live-button secondary" onClick={onBackToPrototype}>Prototipe dön</button>}<OfflineQueueControl state={queueState} online={online} onSynced={() => setDataVersion((value) => value + 1)} /><button className="live-top-icon" onClick={() => setActiveId("notifications")} title="Bildirimler"><Bell /></button><span className="live-connection"><i /> {online ? "Canlı" : "Çevrimdışı"}</span></div></header><div className="live-content">{!selectedModule ? <PermissionDeniedState /> : selectedModule.id === "fieldMode" ? <FieldMode session={session} online={online} queueState={queueState} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} /> : selectedModule.id === "dashboard" ? <Dashboard session={session} onNavigate={setActiveId} refreshKey={dataVersion} /> : selectedModule.id === "notifications" ? <NotificationsView onNavigate={setActiveId} /> : selectedModule.id === "backups" ? <BackupView online={online} /> : selectedModule.id === "tokens" ? <TokenView online={online} /> : selectedModule.id === "workCenterLoad" ? <WorkCenterLoadView online={online} /> : <>{selectedModule.id === "memberships" && hasCapability(session, "users.reset-password") && <PasswordResetPanel online={online} onChanged={() => setDataVersion((value) => value + 1)} />}<ResourceView module={selectedModule} session={session} online={online} refreshKey={dataVersion} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} /></>}</div></main>{securityOpen && <SecuritySettingsModal onClose={() => setSecurityOpen(false)} />}</div>;
 }
 
 export default LiveWorkspace;
@@ -1669,6 +2002,30 @@ function LiveStyles() {
     .live-session-list article{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--live-line);border-radius:9px;padding:10px 12px;margin-bottom:7px}
     .live-session-list b{font-size:11px}
     .live-session-list small{display:block;font-size:9px;color:var(--live-muted);margin-top:2px}
+    .live-link-button{border:0;background:transparent;color:var(--live-green);font:inherit;font-size:11px;font-weight:700;text-decoration:underline;cursor:pointer;margin-top:10px;padding:4px}
+    .live-inline-field{display:flex;flex-direction:column;gap:3px}
+    .live-inline-field>span{font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--live-muted)}
+    .live-inline-field>input{border:1px solid #ced3cf;border-radius:8px;padding:7px 9px;font:inherit;font-size:11px}
+    .live-comparison,.live-cost-body{padding:20px 24px}
+    .live-comparison-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px;margin-bottom:16px}
+    .live-comparison-summary article{border:1px solid var(--live-line);border-radius:10px;padding:11px 12px;background:#fafaf8}
+    .live-comparison-summary small{display:block;font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--live-muted)}
+    .live-comparison-summary strong{display:block;margin-top:5px;font-size:15px}
+    .live-comparison-summary em{font-style:normal;font-size:11px;color:var(--live-muted)}
+    .live-comparison-summary article.danger{border-color:#ebcbc7;background:#fdf4f3}
+    .live-comparison-summary article.danger strong{color:var(--live-danger)}
+    .live-comparison-flags{display:block;font-size:9px;font-weight:800;color:var(--live-success);margin-top:2px}
+    .live-table tr.selected{background:#eef5f0}
+    .live-cost-space{cursor:pointer}
+    .live-cost-space:hover{background:#f3f5f2}
+    .live-cost-item td{font-size:10px;color:var(--live-muted);background:#fbfbf9}
+    .live-cost-over{color:var(--live-danger)}
+    .live-cost-over small{display:block;font-size:9px}
+    .live-load-bar{position:relative;height:18px;border-radius:9px;background:#eceee9;overflow:hidden;min-width:90px}
+    .live-load-bar>i{position:absolute;inset:0 auto 0 0;background:var(--live-success);opacity:.55}
+    .live-load-bar>i.over{background:var(--live-danger);opacity:.5}
+    .live-load-bar>span{position:relative;display:block;text-align:center;line-height:18px;font-size:9px;font-weight:800}
+    .live-summary-actions{display:flex;gap:6px;flex-wrap:wrap}
     :root{--live-ink:#30261f;--live-muted:#786b62;--live-green:#6b432b;--live-green-2:#8a5a38;--live-paper:#f7f2eb;--live-line:#e2d7cc;--live-white:#fff;--live-danger:#a1433d;--live-warning:#9a6728;--live-success:#6f6a43}
     .live-topbar{gap:20px}.live-top-icon{width:35px;height:35px;border:1px solid var(--live-line);border-radius:50%;background:#fff;color:var(--live-green);display:grid;place-items:center;cursor:pointer}.live-global-search{width:min(460px,38vw);height:40px;border:1px solid var(--live-line);border-radius:10px;display:flex;align-items:center;gap:8px;padding:0 11px;position:relative;color:var(--live-muted)}.live-global-search>input{border:0;outline:0;min-width:0;flex:1;font:inherit;font-size:11px}.live-global-search>button{border:0;background:transparent;color:var(--live-muted);display:grid;place-items:center;cursor:pointer}.live-global-results{position:absolute;top:46px;left:0;right:0;background:#fff;border:1px solid var(--live-line);border-radius:11px;box-shadow:0 16px 36px #15271f26;max-height:420px;overflow:auto;padding:6px;z-index:30}.live-global-results>button{width:100%;border:0;border-radius:8px;background:#fff;padding:10px;display:flex;justify-content:space-between;gap:12px;text-align:left;cursor:pointer}.live-global-results>button:hover{background:#f0f5f2}.live-global-results span{display:flex;flex-direction:column;gap:3px;min-width:0}.live-global-results b{font-size:11px;overflow:hidden;text-overflow:ellipsis}.live-global-results small{font-size:9px;color:var(--live-muted);overflow:hidden;text-overflow:ellipsis}.live-global-results em{font-size:8px;font-style:normal;color:var(--live-green);white-space:nowrap}.live-search-message{padding:15px;font-size:10px;color:var(--live-muted);display:flex;align-items:center;gap:7px}.live-search-message.danger{color:var(--live-danger)}
     .live-notification-list article{min-height:92px;padding:15px 20px;border-bottom:1px solid var(--live-line);display:grid;grid-template-columns:36px 1fr auto;align-items:center;gap:12px}.live-notification-list article:last-child{border-bottom:0}.live-notification-list article.unread{background:#f1f6f3}.live-notification-list article>span{width:34px;height:34px;border-radius:50%;background:#e6eee9;color:var(--live-green);display:grid;place-items:center}.live-notification-list article>button:not(.live-dismiss){border:0;background:transparent;text-align:left;display:flex;flex-direction:column;gap:4px;cursor:pointer}.live-notification-list b{font-size:12px}.live-notification-list p{margin:0;color:var(--live-muted);font-size:10px}.live-notification-list small{font-size:8px;color:var(--live-muted)}.live-dismiss{border:1px solid var(--live-line);background:#fff;border-radius:7px;padding:6px 8px;color:var(--live-muted);font-size:9px;cursor:pointer}.live-sidebar nav{scrollbar-width:none}.live-sidebar nav::-webkit-scrollbar{display:none}

@@ -45,9 +45,15 @@ Nginx, uygulamaya `Host` ve `X-Forwarded-Proto` başlıklarını iletmelidir. Uy
 yazma isteklerinde kaynak alan adını doğrular; ön yüz farklı bir alan adından
 sunuluyorsa `ALLOWED_ORIGINS` ile bu alan adı tanımlanmalıdır.
 
-`DATABASE_PROVIDER=turso` kullanılıyorsa migration'lar uygulama başlarken
-otomatik uygulanmaz; her dağıtımdan sonra `npm run db:turso:migrate`
-çalıştırılmalıdır. Yerel SQLite modunda migration'lar açılışta uygulanır.
+Varsayılan veri katmanı sunucunun kendi diskindeki SQLite'tır
+(`DATABASE_PROVIDER=sqlite`); migration'lar uygulama açılışında otomatik
+uygulanır, ayrı bir komut gerekmez. `CAPPROJE_DATA_DIR` kalıcı bir diske
+bağlanmalıdır — Coolify/Docker kullanılıyorsa bu dizin bir volume olmalıdır,
+aksi hâlde her dağıtımda veritabanı, yüklenen dosyalar ve yedekler silinir.
+
+Turso yalnızca bulut önizlemesi için bir seçenektir ve zorunlu değildir.
+Kullanılırsa migration'lar otomatik uygulanmaz; her dağıtımdan sonra
+`npm run db:turso:migrate` çalıştırılmalıdır.
 
 ### Yedek doğrulama
 
