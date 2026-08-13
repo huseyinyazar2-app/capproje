@@ -94,7 +94,25 @@ const fileEntityContexts = {
   handovers: ["handovers", "project_id"],
   employees: ["employees", null],
 };
+// HTTPS üzerinde en sıkı biçim olan __Host- öneki ve Secure kullanılır. Site
+// düz HTTP'den servis ediliyorsa (ya da ters vekil X-Forwarded-Proto başlığını
+// iletmiyorsa) tarayıcı böyle bir çerezi sessizce atar ve kullanıcı giriş
+// yaptıktan sonra kendini yine giriş ekranında bulur. Bu yüzden çerezin adı ve
+// Secure bayrağı isteğin şemasına göre belirlenir; okurken iki ad da kabul edilir.
 const PHONE_SESSION_COOKIE = "__Host-capproje_session";
+const PHONE_SESSION_COOKIE_INSECURE = "capproje_session";
+
+function requestIsSecure(request) {
+  try { return new URL(request.url).protocol === "https:"; } catch { return false; }
+}
+
+function sessionCookieName(request) {
+  return requestIsSecure(request) ? PHONE_SESSION_COOKIE : PHONE_SESSION_COOKIE_INSECURE;
+}
+
+function readSessionToken(request) {
+  return cookieValue(request, PHONE_SESSION_COOKIE) || cookieValue(request, PHONE_SESSION_COOKIE_INSECURE);
+}
 const PHONE_SESSION_SECONDS = 12 * 60 * 60;
 // Oturum, kullanıldıkça kayan pencereyle uzar; vardiya ortasında düşmemesi için.
 const PHONE_SESSION_RENEW_THRESHOLD_SECONDS = 60 * 60;
@@ -239,9 +257,18 @@ function cookieValue(request, name) {
   return null;
 }
 
-function phoneSessionCookie(token, maxAge = PHONE_SESSION_SECONDS) {
+function phoneSessionCookie(request, token, maxAge = PHONE_SESSION_SECONDS) {
   const value = token ? encodeURIComponent(token) : "";
-  return `${PHONE_SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+  const secure = requestIsSecure(request);
+  return `${sessionCookieName(request)}=${value}; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+// Çıkışta iki adın da temizlenmesi gerekir; şema değişmiş olabilir.
+function clearedSessionCookies(request) {
+  return [
+    `${PHONE_SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
+    `${PHONE_SESSION_COOKIE_INSECURE}=; Path=/; HttpOnly; ${requestIsSecure(request) ? "Secure; " : ""}SameSite=Lax; Max-Age=0`,
+  ];
 }
 
 // Origin karşılaştırması host üzerinden yapılır. Ters vekil sunucu
@@ -399,7 +426,7 @@ async function authenticate(request, env) {
     user = await one(env.DB.prepare("SELECT u.id, u.email, u.full_name, u.phone, u.status, u.must_change_password FROM api_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>?) AND u.status='active'").bind(tokenHash, now()));
     if (user) await run(env.DB.prepare("UPDATE api_tokens SET last_used_at=? WHERE token_hash=?").bind(now(), tokenHash));
   } else {
-    const sessionToken = cookieValue(request, PHONE_SESSION_COOKIE);
+    const sessionToken = readSessionToken(request);
     if (sessionToken) {
       const tokenHash = await sha256(sessionToken);
       const timestamp = now();
@@ -1427,7 +1454,7 @@ async function verifyPhoneAuth(request, env) {
   ];
   if (typeof env.DB.batch === "function") await env.DB.batch(statements);
   else for (const statement of statements) await run(statement);
-  return json({ data: { authenticated: true, expires_at: expiresAt } }, 200, { "set-cookie": phoneSessionCookie(rawToken) });
+  return json({ data: { authenticated: true, expires_at: expiresAt } }, 200, { "set-cookie": phoneSessionCookie(request, rawToken) });
 }
 
 // Geçerli bir pepper tanımlamak, şifreyle girişi açmak demektir. Ayrıca bir
@@ -1487,7 +1514,7 @@ async function loginWithPassword(request, env) {
   ];
   if (typeof env.DB.batch === "function") await env.DB.batch(statements);
   else for (const statement of statements) await run(statement);
-  return json({ data: { authenticated: true, expires_at: expiresAt, must_change_password: Boolean(user.must_change_password) } }, 200, { "set-cookie": phoneSessionCookie(rawToken) });
+  return json({ data: { authenticated: true, expires_at: expiresAt, must_change_password: Boolean(user.must_change_password) } }, 200, { "set-cookie": phoneSessionCookie(request, rawToken) });
 }
 
 function passwordProblem(value, field = "Şifre") {
@@ -1512,7 +1539,7 @@ async function changePassword(request, env, principal) {
 
   const credential = await passwordRecord(env, body.new_password);
   const timestamp = now();
-  const currentToken = cookieValue(request, PHONE_SESSION_COOKIE);
+  const currentToken = readSessionToken(request);
   const currentHash = currentToken ? await sha256(currentToken) : null;
   const statements = [
     env.DB.prepare("UPDATE users SET password_hash=?,password_salt=?,password_iterations=?,password_changed_at=?,must_change_password=0,updated_at=? WHERE id=?")
@@ -1624,9 +1651,17 @@ async function sessionRoute(request, env, principal, segments) {
 
 async function logoutPhoneAuth(request, env) {
   if (!sameOrigin(request, env)) return problem(403, "origin_forbidden", "Çıkış isteğinin kaynağı geçersiz.");
-  const token = cookieValue(request, PHONE_SESSION_COOKIE);
+  const token = readSessionToken(request);
   if (token) await run(env.DB.prepare("UPDATE phone_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL").bind(now(), await sha256(token)));
-  return json({ data: { authenticated: false } }, 200, { "set-cookie": phoneSessionCookie(null, 0) });
+  return new Response(JSON.stringify({ data: { authenticated: false } }), {
+    status: 200,
+    headers: [
+      ["content-type", "application/json; charset=utf-8"],
+      ["cache-control", "no-store"],
+      ["x-content-type-options", "nosniff"],
+      ...clearedSessionCookies(request).map((cookie) => ["set-cookie", cookie]),
+    ],
+  });
 }
 
 async function workflowRow(env, principal, table, resourceId) {
@@ -2957,6 +2992,10 @@ async function handleApi(request, env, context) {
         // giriş ekranında sebebi anlaşılmayan hatalarla uğraşıyor.
         password_auth: passwordAuthReady(env),
         bootstrap_ready: Boolean(env.BOOTSTRAP_SECRET),
+        // Uygulamanın isteği güvenli görüp görmediği. Tarayıcı HTTPS'te olduğu
+        // hâlde burası false ise ters vekil X-Forwarded-Proto iletmiyordur.
+        secure_request: requestIsSecure(request),
+        session_cookie: sessionCookieName(request),
         // Kalıcı disk bağlı değilse yeniden dağıtımda veri kaybı olur; sağlık
         // çıktısında görünür olsun ki kurulum sessizce yanlış kalmasın.
         ...(env.STORAGE_STATE ? { persistent_storage: env.STORAGE_STATE.persistent, boot_count: env.STORAGE_STATE.boot_count } : {}),

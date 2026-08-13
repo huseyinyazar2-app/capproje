@@ -167,9 +167,12 @@ test("self-host runtime bootstraps and authenticates through the real HTTP bridg
   });
   assert.equal(loginResponse.status, 200);
   const cookie = loginResponse.headers.get("set-cookie");
-  assert.match(cookie, /__Host-capproje_session=/);
+  // Bu köprü düz HTTP üzerinden çalışıyor. Secure çerez tarayıcıda saklanmayacağı
+  // için ad ve bayrak şemaya göre değişir; HTTPS'te __Host- öneki kullanılır.
+  assert.match(cookie, /^capproje_session=/);
   assert.match(cookie, /HttpOnly/);
-  assert.match(cookie, /Secure/);
+  assert.match(cookie, /SameSite=Lax/);
+  assert.doesNotMatch(cookie, /Secure/);
   const sessionResponse = await fetch(`${baseUrl}/api/v1/session`, { headers: { cookie: cookie.split(";")[0] } });
   assert.equal(sessionResponse.status, 200);
   assert.equal((await sessionResponse.json()).data.tenant.name, "Capproje");

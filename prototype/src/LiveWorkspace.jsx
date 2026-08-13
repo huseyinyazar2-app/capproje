@@ -1980,6 +1980,15 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
 
   async function loginWithPassword(values) {
     await api.loginWithPassword(values);
+    const session = await api.session().catch(() => null);
+    // Giriş başarılı olduğu hâlde oturum okunamıyorsa çerez tarayıcıya
+    // kaydedilmemiştir. Sessizce giriş ekranına dönmek yerine sebebi söylüyoruz.
+    if (!session) {
+      throw new ApiError(
+        "Giriş doğrulandı ancak oturum çerezi tarayıcıya kaydedilemedi. Sitenin HTTPS üzerinden açıldığından ve tarayıcınızın çerezleri engellemediğinden emin olun.",
+        { code: "SESSION_COOKIE_BLOCKED", status: 401 },
+      );
+    }
     await bootstrap();
   }
 

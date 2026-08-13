@@ -508,3 +508,49 @@ test("password login is enabled by a valid pepper alone and health reports confi
   assert.equal(data.bootstrap_ready, true);
   assert.equal(data.setup_required, false, "kurulum yapilmis tenant varken false olmali");
 });
+
+test("the session cookie adapts to the request scheme so plain-HTTP deployments still work", async () => {
+  const { database, env } = await setup();
+  env.PASSWORD_AUTH_PEPPER = "test-pepper-at-least-16-characters";
+  await worker.fetch(request("/api/v1/memberships/invite", {
+    body: { email: "saha@a.test", full_name: "Saha", phone: "05321112233", temporary_password: "gecici123", role_ids: ["role-owner"] },
+  }), env);
+  database.prepare("UPDATE users SET status='active' WHERE email='saha@a.test'").run();
+  database.prepare("UPDATE memberships SET status='active' WHERE user_id=(SELECT id FROM users WHERE email='saha@a.test')").run();
+
+  const login = (origin) => worker.fetch(new Request(`${origin}/api/v1/auth/password/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin },
+    body: JSON.stringify({ phone: "05321112233", password: "gecici123" }),
+  }), env);
+
+  const secure = await login("https://cap.example");
+  assert.equal(secure.status, 200);
+  const secureCookie = secure.headers.getSetCookie()[0];
+  assert.match(secureCookie, /^__Host-capproje_session=/);
+  assert.match(secureCookie, /Secure/);
+
+  // Düz HTTP'de Secure çerez tarayıcıda saklanmaz; bu yüzden ad ve bayrak değişir.
+  const plain = await login("http://cap.example");
+  assert.equal(plain.status, 200);
+  const plainCookie = plain.headers.getSetCookie()[0];
+  assert.match(plainCookie, /^capproje_session=/);
+  assert.doesNotMatch(plainCookie, /Secure/);
+  assert.match(plainCookie, /HttpOnly/);
+  assert.match(plainCookie, /SameSite=Lax/);
+
+  // Her iki çerez adı da kimlik doğrulamada kabul edilmelidir.
+  const token = decodeURIComponent(plainCookie.split(";")[0].split("=")[1]);
+  for (const name of ["capproje_session", "__Host-capproje_session"]) {
+    const session = await worker.fetch(new Request("http://cap.example/api/v1/session", { headers: { cookie: `${name}=${token}` } }), env);
+    assert.equal(session.status, 200, `${name} ile oturum okunabilmeli`);
+  }
+
+  // Çıkışta iki ad da temizlenir.
+  const logout = await worker.fetch(new Request("http://cap.example/api/v1/auth/logout", { method: "POST", headers: { origin: "http://cap.example", cookie: `capproje_session=${token}` } }), env);
+  const cleared = logout.headers.getSetCookie();
+  assert.equal(cleared.length, 2);
+  assert.ok(cleared.every((cookie) => /Max-Age=0/.test(cookie)));
+  const afterLogout = await worker.fetch(new Request("http://cap.example/api/v1/session", { headers: { cookie: `capproje_session=${token}` } }), env);
+  assert.equal(afterLogout.status, 401, "cikis sonrasi oturum gecersiz olmali");
+});
