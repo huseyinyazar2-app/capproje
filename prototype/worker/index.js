@@ -1430,8 +1430,12 @@ async function verifyPhoneAuth(request, env) {
   return json({ data: { authenticated: true, expires_at: expiresAt } }, 200, { "set-cookie": phoneSessionCookie(rawToken) });
 }
 
+// Geçerli bir pepper tanımlamak, şifreyle girişi açmak demektir. Ayrıca bir
+// PASSWORD_AUTH_ENABLED beklemek, kurulumu sessizce "giriş yapılamaz" durumda
+// bırakan bir tuzaktı. Açıkça "false" yazılarak yine kapatılabilir.
 function passwordAuthReady(env) {
-  return env.PASSWORD_AUTH_ENABLED === "true" && String(env.PASSWORD_AUTH_PEPPER || "").length >= 16;
+  if (String(env.PASSWORD_AUTH_ENABLED || "").toLowerCase() === "false") return false;
+  return String(env.PASSWORD_AUTH_PEPPER || "").length >= 16;
 }
 
 async function loginWithPassword(request, env) {
@@ -2949,6 +2953,10 @@ async function handleApi(request, env, context) {
         database: "ok",
         storage: env.FILES ? "ok" : "unavailable",
         ...(setupRequired === null ? {} : { setup_required: setupRequired }),
+        // Yapılandırma eksikleri buradan görülebilsin; aksi hâlde kullanıcı
+        // giriş ekranında sebebi anlaşılmayan hatalarla uğraşıyor.
+        password_auth: passwordAuthReady(env),
+        bootstrap_ready: Boolean(env.BOOTSTRAP_SECRET),
         // Kalıcı disk bağlı değilse yeniden dağıtımda veri kaybı olur; sağlık
         // çıktısında görünür olsun ki kurulum sessizce yanlış kalmasın.
         ...(env.STORAGE_STATE ? { persistent_storage: env.STORAGE_STATE.persistent, boot_count: env.STORAGE_STATE.boot_count } : {}),

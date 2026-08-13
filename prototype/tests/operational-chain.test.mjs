@@ -485,3 +485,26 @@ test("every migration statement survives the Turso splitter and applies in isola
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM permissions").get().count > 60, true);
   database.close();
 });
+
+test("password login is enabled by a valid pepper alone and health reports configuration gaps", async () => {
+  const { env } = await setup();
+  const health = async (extra) => (await (await worker.fetch(new Request("https://example.test/api/v1/health"), { ...env, ...extra })).json()).data;
+
+  // Yalnızca pepper tanımlıyken giriş açılmalı; ayrı bir bayrak beklemek
+  // kurulumu sessizce "giriş yapılamaz" durumda bırakıyordu.
+  let data = await health({ PASSWORD_AUTH_PEPPER: "yeterince-uzun-bir-pepper" });
+  assert.equal(data.password_auth, true);
+  assert.equal(data.bootstrap_ready, false);
+
+  // Kısa pepper yeterli değildir.
+  data = await health({ PASSWORD_AUTH_PEPPER: "kisa" });
+  assert.equal(data.password_auth, false);
+
+  // Açıkça kapatılabilir.
+  data = await health({ PASSWORD_AUTH_PEPPER: "yeterince-uzun-bir-pepper", PASSWORD_AUTH_ENABLED: "false" });
+  assert.equal(data.password_auth, false);
+
+  data = await health({ PASSWORD_AUTH_PEPPER: "yeterince-uzun-bir-pepper", BOOTSTRAP_SECRET: "s3cret" });
+  assert.equal(data.bootstrap_ready, true);
+  assert.equal(data.setup_required, false, "kurulum yapilmis tenant varken false olmali");
+});
