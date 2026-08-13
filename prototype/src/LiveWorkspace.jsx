@@ -360,6 +360,79 @@ Object.assign(configs, {
 
 configs.projects.fields.push(field("photoConsent", "Proje fotoğraf kullanım izni", "select", { options: ["not_requested", "denied", "internal_only", "marketing_allowed"] }));
 
+// İş akışı yönetilen kaynaklarda durum yalnızca oluştururken ve yalnızca
+// sunucunun kabul ettiği başlangıç değerleriyle seçilebilir. Sonraki aşamalar
+// listedeki iş akışı düğmeleriyle değişir; önceden forma konan seçenekler
+// sunucudan 409 dönüyordu.
+const workflowStatusOptions = {
+  projects: ["Potansiyel"],
+  offers: ["Taslak", "Sunuldu", "Onay bekliyor"],
+  purchases: ["Taslak", "Onay bekliyor"],
+  purchaseOrders: ["draft"],
+  production: ["Taslak", "Planlandı"],
+  finance: ["Taslak", "Planlandı", "Onay bekliyor"],
+  leaves: ["pending"],
+  siteSurveys: ["draft"],
+  contracts: ["draft"],
+  designRevisions: ["draft"],
+  progressPayments: ["draft"],
+  stockMovements: ["draft"],
+  projectMeetings: ["draft"],
+  qualityInspections: ["draft"],
+  handovers: ["draft"],
+  materialRequirements: ["draft"],
+};
+
+// Ham kayıt kimliği yazmak yerine arayarak seçim. Alan adı → kaynak eşlemesi.
+const referenceResources = {
+  customerName: "customers", customerId: "customers",
+  projectName: "projects", projectId: "projects",
+  supplierName: "suppliers", supplierId: "suppliers", preferredSupplierId: "suppliers",
+  offerId: "offers", contractId: "contracts", invoiceId: "accounting",
+  workItemId: "workItems", taskId: "projectTasks",
+  siteSurveyId: "siteSurveys", inventoryItemId: "inventoryItems",
+  employeeId: "hr", handoverId: "handovers", meetingId: "projectMeetings",
+  requestId: "purchases", purchaseRequestId: "purchases",
+  fileId: "files", customerSignatureFileId: "files",
+  installationId: "installations", productionOrderId: "production",
+  accountId: "accounts", supersedesId: "designRevisions", designRevisionId: "designRevisions",
+  qualityInspectionId: "qualityInspections",
+};
+const memberReferenceFields = new Set([
+  "projectManager", "assigneeUserId", "surveyorUserId", "ownerUserId",
+  "inspectorUserId", "facilitatorUserId", "responsibleUserId", "teamLeadUserId",
+]);
+const referenceLabels = {
+  customers: "Müşteri", projects: "Proje", suppliers: "Tedarikçi", offers: "Teklif",
+  contracts: "Sözleşme", accounting: "Fatura", workItems: "İş kalemi", projectTasks: "Proje görevi",
+  siteSurveys: "Keşif", inventoryItems: "Stok kartı", hr: "Personel", handovers: "Teslim kaydı",
+  projectMeetings: "Toplantı", purchases: "Satın alma talebi", files: "Dosya",
+  installations: "Montaj", production: "Üretim emri", accounts: "Hesap",
+  designRevisions: "Tasarım revizyonu", qualityInspections: "Kalite kontrolü", memberships: "Kullanıcı",
+};
+
+for (const [moduleId, config] of Object.entries(configs)) {
+  const statusOptions = workflowStatusOptions[moduleId];
+  config.fields = config.fields.map((item) => {
+    if (item.name === "status" && statusOptions) {
+      return { ...item, options: statusOptions, createOnly: true, help: "Sonraki aşamalar kayıt listesindeki iş akışı düğmeleriyle değiştirilir." };
+    }
+    if (item.type !== "text" && item.type !== undefined) return item;
+    if (memberReferenceFields.has(item.name)) {
+      return { ...item, type: "reference", referenceResource: "memberships", label: item.label.replace(/\s*kullanıcı ID$/i, "").replace(/\s*ID$/i, "") };
+    }
+    const resource = referenceResources[item.name];
+    if (resource && resource !== moduleId) {
+      return { ...item, type: "reference", referenceResource: resource, label: item.label.replace(/\s*(kayıt\s*)?ID('leri)?$/i, "").trim() || referenceLabels[resource] };
+    }
+    return item;
+  });
+}
+// "Üretim emrindeki iş kalemi" alanı adı gereği eşleşmiyor; elle bağlanır.
+configs.production.fields = configs.production.fields.map((item) => item.name === "itemName"
+  ? { ...item, type: "reference", referenceResource: "workItems", label: "İş kalemi" }
+  : item);
+
 const protectFields = (config, names, resource, action = "read") => {
   const protectedNames = new Set(names);
   config.fields = config.fields.map((item) => protectedNames.has(item.name) ? { ...item, permission: { resource, action } } : item);
@@ -486,12 +559,24 @@ function localizedEnum(value) {
   return enumLabels[String(value)] || projectStatusLabels?.[String(value)] || value;
 }
 
+// Sunucudaki üst yetki eşlemesinin arayüz karşılığı; rol editöründe ayrıntılı
+// kod yerine üst yetki verildiğinde düğmelerin kaybolmaması için.
+const capabilityParents = {
+  "files.read": ["files.manage"], "files.write": ["files.manage"], "files.delete": ["files.manage"],
+  "memberships.read": ["users.manage"], "memberships.write": ["users.manage"], "memberships.delete": ["users.manage"],
+  "roles.read": ["roles.manage"], "roles.write": ["roles.manage"], "roles.delete": ["roles.manage"],
+  "backups.read": ["backups.manage"], "backups.write": ["backups.manage"],
+};
+
 function hasCapability(session, capability) {
-  const role = String(session?.role?.code || session?.user?.role?.code || session?.user?.role || "").toLowerCase();
-  if (["owner", "admin", "super_admin"].includes(role)) return true;
-  return (session?.permissions || session?.user?.permissions || []).some((item) =>
-    (typeof item === "string" ? item : item?.code || item?.permission_code) === capability,
-  );
+  const roles = Array.isArray(session?.roles) ? session.roles : [];
+  const roleCodes = [String(session?.role?.code || session?.user?.role?.code || session?.user?.role || ""), ...roles.map((item) => String(item?.code || ""))];
+  if (roleCodes.some((code) => ["owner", "admin", "super_admin"].includes(code.toLowerCase()))) return true;
+  const granted = (session?.permissions || session?.user?.permissions || []).map((item) => (typeof item === "string" ? item : item?.code || item?.permission_code));
+  if (granted.includes("*")) return true;
+  if (granted.includes(capability)) return true;
+  if (capability.endsWith(".approve") && granted.includes("approve")) return true;
+  return (capabilityParents[capability] || []).some((parent) => granted.includes(parent));
 }
 
 const projectTransitions = {
@@ -522,8 +607,49 @@ function coreWorkflowActions(module, row, session) {
     return options.length ? [{ key: "transition", label: "Aşamayı değiştir", title: "Proje aşamasını değiştir", message: "Yalnız izin verilen sıradaki aşamalar seçilebilir.", options }] : [];
   }
   if (module.id === "workItems" && ["draft", "review", "changes_requested"].includes(row.revisionStatus) && hasCapability(session, "work-items.revision.approve")) return [{ key: "approve-revision", label: "Revizyonu onayla", title: "Üretim revizyonunu onayla", message: "Bu revizyon üretime salınabilir hale gelecek.", tone: "success" }];
-  if (module.id === "production" && row.workItemId && ["draft", "planned", "Planlandı"].includes(status) && hasCapability(session, "production-orders.release")) return [{ key: "release", label: "Üretime sal", title: "Üretim emrini serbest bırak", message: "Güncel iş kalemi revizyonu kontrol edilerek üretim başlatılacak.", tone: "success" }];
-  if (module.id === "purchases" && ["draft", "pending", "Taslak", "Onay bekliyor"].includes(status) && hasCapability(session, "purchase-requests.approve")) return [{ key: "approve", label: "Onayla", title: "Satın alma talebini onayla", message: "Talep sipariş sürecine hazır hale gelecek.", tone: "success" }];
+  if (module.id === "production") {
+    const actions = [];
+    if (row.workItemId && ["draft", "planned"].includes(status) && hasCapability(session, "production-orders.release")) {
+      actions.push({ key: "release", label: "Üretime sal", title: "Üretim emrini serbest bırak", message: "Güncel iş kalemi revizyonu kontrol edilerek üretim başlatılacak.", tone: "success" });
+    }
+    // Salımdan sonraki aşamalar. Bu akış olmadan üretim emri tamamlanamıyor,
+    // dolayısıyla proje montaj aşamasına geçemiyordu.
+    const next = {
+      released: ["waiting_material", "in_progress", "cancelled"],
+      waiting_material: ["in_progress", "paused", "cancelled"],
+      in_progress: ["quality_control", "completed", "paused", "cancelled"],
+      quality_control: ["completed", "in_progress", "cancelled"],
+      paused: ["in_progress", "waiting_material", "cancelled"],
+      draft: ["cancelled"],
+      planned: ["cancelled"],
+    };
+    if ((next[status] || []).length && hasCapability(session, "production-orders.complete")) {
+      actions.push({
+        key: "transition",
+        label: "Üretim durumunu değiştir",
+        title: "Üretim emrini ilerlet",
+        message: "Tamamlarken üretilen miktarı girin; boş bırakılırsa planlanan miktarın tamamı üretilmiş sayılır.",
+        options: next[status].map((value) => ({ value, label: localizedEnum(value) })),
+        inputKey: "completed_quantity",
+        inputLabel: "Üretilen miktar (isteğe bağlı)",
+        inputType: "number",
+      });
+    }
+    return actions;
+  }
+  if (module.id === "purchases") {
+    const actions = [];
+    if (["draft", "pending"].includes(status) && hasCapability(session, "purchase-requests.approve")) {
+      actions.push({ key: "approve", label: "Onayla", title: "Satın alma talebini onayla", message: "Talep sipariş sürecine hazır hale gelecek.", tone: "success" });
+    }
+    if (status === "approved" && hasCapability(session, "purchase-requests.order")) {
+      actions.push({ key: "create-order", label: "Sipariş oluştur", title: "Onaylı talepten sipariş aç", message: "Talep, seçilen tedarikçiye sipariş olarak açılacak. Boş bırakırsanız talepteki önerilen tedarikçi kullanılır.", inputKey: "supplier_id", inputLabel: "Tedarikçi (isteğe bağlı)", inputResource: "suppliers", tone: "success" });
+    }
+    return actions;
+  }
+  if (module.id === "purchaseOrders" && ["ordered", "partial"].includes(status) && hasCapability(session, "purchase-orders.receive")) {
+    return [{ key: "receive", label: "Mal kabul", title: "Siparişte mal kabulü yap", message: "Stok kartı ve miktar girerseniz stok girişi de yazılır ve bağlı malzeme ihtiyacının teslim alınan miktarı güncellenir.", inputKey: "inventory_item_id", inputLabel: "Stok kartı (isteğe bağlı)", inputResource: "inventoryItems", secondaryInputKey: "quantity", secondaryInputLabel: "Teslim alınan miktar", secondaryInputType: "number", tone: "success" }];
+  }
   if (module.id === "leaves" && status === "pending" && hasCapability(session, "leaves.approve")) return [{ key: "approve", label: "Onayla", title: "İzin talebini onayla", message: "Personelin izin talebi onaylanacak.", tone: "success" }, { key: "reject", label: "Reddet", title: "İzin talebini reddet", message: "Ret nedeni personele ait karar kaydında tutulacak.", reasonRequired: true, tone: "danger" }];
   if (module.id === "finance") {
     if (["draft", "planned", "pending", "Planlandı", "Onay bekliyor"].includes(status) && hasCapability(session, "financial-transactions.approve")) return [{ key: "approve", label: "Onayla", title: "Finans hareketini onayla", message: "Onaylanan finans kaydı değiştirilemez; düzeltme ters kayıtla yapılır.", tone: "success" }];
@@ -549,20 +675,28 @@ function workflowActions(module, row, session) {
     const actions = [];
     if (["draft", "internal_review", "rejected"].includes(status) && hasCapability(session, "design-revisions.write")) actions.push({ key: "submit", label: "Müşteriye sun", title: "Revizyonu müşteriye sun", message: "Çizim müşteri incelemesine gönderilecek." });
     if (status === "client_review" && hasCapability(session, "design-revisions.approve")) actions.push({ key: "approve", label: "Onayla", title: "Tasarımı onayla", message: "Müşteri tasarım kararı onaylı kaydedilecek.", tone: "success" }, { key: "reject", label: "Reddet", title: "Tasarımı reddet", message: "Müşterinin değişiklik nedeni kaydedilecek.", reasonRequired: true, tone: "danger" });
-    if (status === "approved" && hasCapability(session, "design-revisions.approve")) actions.push({ key: "supersede", label: "Yeni revizyonla değiştir", title: "Revizyonu geçersiz kıl", message: "Yeni revizyon kayıt ID'sini girin.", inputKey: "replacement_revision_id", inputLabel: "Yeni revizyon ID", reasonRequired: true });
+    if (status === "approved" && hasCapability(session, "design-revisions.approve")) actions.push({ key: "supersede", label: "Yeni revizyonla değiştir", title: "Revizyonu geçersiz kıl", message: "Bu revizyonun yerine geçecek, aynı proje ve çizim türündeki revizyonu seçin.", inputKey: "replacement_revision_id", inputLabel: "Yerine geçen revizyon", inputResource: "designRevisions", inputRequired: true });
     return actions;
   }
   if (module.id === "progressPayments") {
     if (["draft", "rejected"].includes(status) && hasCapability(session, "progress-payments.write")) return [{ key: "submit", label: "Onaya gönder", title: "Hakedişi onaya gönder", message: "Hakediş tutarları kontrol için kilitlenecek." }];
     if (status === "pending" && hasCapability(session, "progress-payments.approve")) return [{ key: "approve", label: "Onayla", title: "Hakedişi onayla", message: "Hakediş onaylanacak.", tone: "success" }, { key: "reject", label: "Reddet", title: "Hakedişi reddet", message: "Ret nedeni kaydedilecek.", reasonRequired: true, tone: "danger" }];
-    if (status === "approved" && hasCapability(session, "progress-payments.approve")) return [{ key: "invoice", label: "Faturalandı", title: "Hakedişi faturaya bağla", message: "Fatura kayıt ID'sini girin.", inputKey: "invoice_id", inputLabel: "Fatura ID", reasonRequired: true }];
-    if (status === "invoiced" && hasCapability(session, "progress-payments.approve")) return [{ key: "paid", label: "Ödendi", title: "Hakediş ödemesini kaydet", message: "Onaylı finans hareketi ID'sini girin.", inputKey: "payment_transaction_id", inputLabel: "Finans hareketi ID", reasonRequired: true, tone: "success" }];
+    if (status === "approved" && hasCapability(session, "progress-payments.approve")) return [{ key: "invoice", label: "Faturalandı", title: "Hakedişi faturaya bağla", message: "Hakedişin projesine ait faturayı seçin.", inputKey: "invoice_id", inputLabel: "Fatura", inputResource: "accounting", inputRequired: true }];
+    if (status === "invoiced" && hasCapability(session, "progress-payments.approve")) return [{ key: "paid", label: "Ödendi", title: "Hakediş ödemesini kaydet", message: "Hakedişin projesine ait onaylı finans hareketini seçin.", inputKey: "payment_transaction_id", inputLabel: "Finans hareketi", inputResource: "finance", inputRequired: true, tone: "success" }];
   }
   if (module.id === "stockMovements" && status === "draft" && hasCapability(session, "stock-movements.post")) return [{ key: "post", label: "Kesinleştir", title: "Stok hareketini kesinleştir", message: "Stok miktarı kalıcı olarak güncellenecek.", tone: "success" }];
-  if (module.id === "materialRequirements" && !["covered", "consumed", "cancelled"].includes(status)) {
+  if (module.id === "materialRequirements" && status !== "cancelled") {
     const actions = [];
-    if (row.inventoryItemId && hasCapability(session, "material-requirements.reserve")) actions.push({ key: "reserve", label: "Stoktan ayır", title: "Malzemeyi proje için ayır", message: "Mevcut stok, kalan ihtiyaç kadar projeye rezerve edilecek.", tone: "success" });
-    if (hasCapability(session, "material-requirements.purchase")) actions.push({ key: "create-purchase-request", label: "Satın alma talebi aç", title: "Eksik miktarı satın almaya gönder", message: "Rezervasyondan sonra kalan miktar için onay bekleyen satın alma talebi oluşturulacak." });
+    if (!["covered", "consumed"].includes(status)) {
+      if (row.inventoryItemId && hasCapability(session, "material-requirements.reserve")) actions.push({ key: "reserve", label: "Stoktan ayır", title: "Malzemeyi proje için ayır", message: "Mevcut stok, kalan ihtiyaç kadar projeye rezerve edilecek.", tone: "success" });
+      if (hasCapability(session, "material-requirements.purchase")) actions.push({ key: "create-purchase-request", label: "Satın alma talebi aç", title: "Eksik miktarı satın almaya gönder", message: "Rezervasyondan sonra kalan miktar için onay bekleyen satın alma talebi oluşturulacak." });
+    }
+    // Rezervasyonun kapanışı: üretime verilir ya da serbest bırakılır. Bu adım
+    // olmadan ayrılan stok kalıcı olarak bloke kalıyordu.
+    if (status !== "consumed" && Number(row.reservedQuantity || 0) > 0 && hasCapability(session, "material-requirements.consume")) {
+      actions.push({ key: "consume", label: "Üretime ver", title: "Ayrılan malzemeyi üretime ver", message: "Rezervasyon kapatılır ve stok miktarı düşülür. Boş bırakırsanız ayrılan miktarın tamamı kullanılır.", inputKey: "quantity", inputLabel: "Kullanılan miktar (isteğe bağlı)", inputType: "number", tone: "success" });
+      actions.push({ key: "release", label: "Rezervasyonu bırak", title: "Ayrılan stoğu serbest bırak", message: "Stok başka projeler için tekrar kullanılabilir hale gelir.", inputKey: "quantity", inputLabel: "Serbest bırakılacak miktar (isteğe bağlı)", inputType: "number" });
+    }
     return actions;
   }
   if (module.id === "projectMeetings") {
@@ -688,12 +822,82 @@ function ResourceDataView({ view, rows, config, canEdit, onEdit, onDetail, canDe
   return <Table rows={rows} config={config} canEdit={canEdit} onEdit={onEdit} onDetail={onDetail} canDelete={canDelete} onDelete={onDelete} onPermissions={onPermissions} getWorkflowActions={getWorkflowActions} onWorkflow={onWorkflow} />;
 }
 
+function referenceOptionLabel(resource, row) {
+  if (resource === "memberships") return [row.userName || row.userEmail || row.userId, row.title].filter(Boolean).join(" · ");
+  const primary = row.name || row.title || row.description || row.fileName || row.code;
+  const secondary = row.code && row.code !== primary ? row.code : row.orderNumber || row.requestNumber || row.offerNumber || row.contractNumber || row.surveyNumber || row.sku || row.itemCode || row.employeeNo;
+  return [primary, secondary].filter(Boolean).join(" · ") || row.id;
+}
+
+// Ham UUID yazmak yerine arayıp seçmek için. Seçilen kaydın kimliği saklanır,
+// kullanıcıya okunabilir etiketi gösterilir.
+function ReferenceField({ item, value, invalid, onChange }) {
+  const resource = item.referenceResource;
+  const [search, setSearch] = useState("");
+  const [state, setState] = useState({ rows: [], loading: false, error: null });
+  const [open, setOpen] = useState(false);
+  const [selectedLabel, setSelectedLabel] = useState("");
+
+  useEffect(() => {
+    if (!value || selectedLabel) return undefined;
+    let active = true;
+    api.get(resource === "memberships" ? "memberships" : resource, value)
+      .then((row) => { if (active && row) setSelectedLabel(referenceOptionLabel(resource, row)); })
+      .catch(() => { if (active) setSelectedLabel(""); });
+    return () => { active = false; };
+  }, [value, resource, selectedLabel]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    let active = true;
+    setState((current) => ({ ...current, loading: true, error: null }));
+    const timer = window.setTimeout(() => {
+      api.referenceOptions(resource, { search })
+        .then((rows) => { if (active) setState({ rows, loading: false, error: null }); })
+        .catch((error) => { if (active) setState({ rows: [], loading: false, error }); });
+    }, search ? 250 : 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [open, search, resource]);
+
+  const pick = (row) => {
+    const id = resource === "memberships" ? row.userId || row.id : row.id;
+    onChange(id);
+    setSelectedLabel(referenceOptionLabel(resource, row));
+    setOpen(false);
+    setSearch("");
+  };
+
+  return <div className="live-reference">
+    {value && !open
+      ? <div className="live-reference-selected">
+          <span>{selectedLabel || value}</span>
+          <button type="button" className="live-icon-button" aria-label="Seçimi değiştir" onClick={() => setOpen(true)}><MagnifyingGlass /></button>
+          <button type="button" className="live-icon-button" aria-label="Seçimi temizle" onClick={() => { onChange(""); setSelectedLabel(""); }}><X /></button>
+        </div>
+      : <input
+          type="text"
+          value={search}
+          placeholder={item.placeholder || `${referenceLabels[resource] || "Kayıt"} arayın…`}
+          aria-invalid={invalid || undefined}
+          onFocus={() => setOpen(true)}
+          onChange={(event) => { setSearch(event.target.value); setOpen(true); }}
+          onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+        />}
+    {open && <div className="live-reference-results" role="listbox">
+      {state.loading ? <small>Aranıyor…</small>
+        : state.error ? <small className="live-field-error">{state.error.message}</small>
+          : state.rows.length ? state.rows.map((row) => <button type="button" key={row.id} role="option" onMouseDown={(event) => { event.preventDefault(); pick(row); }}>{referenceOptionLabel(resource, row)}</button>)
+            : <small>Kayıt bulunamadı.</small>}
+    </div>}
+  </div>;
+}
+
 function RecordModal({ module, record, defaults = {}, session, saving, serverError, onClose, onSave }) {
   const config = configs[module.id];
   const canViewCost = permissionAllows(session, "view_cost", "cost");
   const canViewSalary = permissionAllows(session, "view_salary", "salary");
   const visibleFields = config.fields.filter((item) => !item.permission || permissionAllows(session, item.permission.action, item.permission.resource));
-  const renderFields = visibleFields.filter((item) => !(record && ["projects", "offers", "purchases", "production", "leaves", "finance"].includes(module.id) && item.name === "status"));
+  const renderFields = visibleFields.filter((item) => !(record && item.createOnly));
   const [values, setValues] = useState(() => Object.fromEntries(visibleFields.map((item) => [item.name, record?.[item.name] ?? defaults[item.name] ?? item.defaultValue ?? (item.type === "multiselect" ? [] : "")])));
   const [errors, setErrors] = useState({});
   const [remoteOptions, setRemoteOptions] = useState({});
@@ -736,7 +940,8 @@ function RecordModal({ module, record, defaults = {}, session, saving, serverErr
     const FieldWrapper = item.type === "multiselect" ? "div" : "label";
     return <FieldWrapper className={item.wide ? "wide" : ""} key={item.name}>
       <span>{item.label}{item.required && <em>*</em>}</span>
-      {item.type === "select" ? <select value={values[item.name]} onChange={(event) => setValues({ ...values, [item.name]: event.target.value })}><option value="">Seçiniz</option>{optionsFor(item).map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select>
+      {item.type === "reference" ? <ReferenceField item={item} value={values[item.name]} invalid={Boolean(errors[item.name])} onChange={(next) => setValues({ ...values, [item.name]: next })} />
+        : item.type === "select" ? <select value={values[item.name]} onChange={(event) => setValues({ ...values, [item.name]: event.target.value })}><option value="">Seçiniz</option>{optionsFor(item).map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select>
         : item.type === "multiselect" ? <div className="live-multi-select" role="group" aria-label={item.label}>{optionsFor(item).length ? optionsFor(item).map((option) => <label key={option.value}><input type="checkbox" checked={(values[item.name] || []).includes(option.value)} onChange={() => toggleMulti(item.name, option.value)} /><span><b>{option.label}</b>{option.description && <small>{option.description}</small>}</span></label>) : <small>Roller yükleniyor…</small>}</div>
           : item.type === "textarea" ? <textarea rows="3" value={values[item.name]} placeholder={item.placeholder} onChange={(event) => setValues({ ...values, [item.name]: event.target.value })} />
             : <input type={item.type} value={values[item.name]} placeholder={item.placeholder} min={item.min} max={item.max} onChange={(event) => setValues({ ...values, [item.name]: event.target.value })} />}
@@ -787,12 +992,43 @@ function QuickPhotoModal({ projectId, saving, serverError, onClose, onSave }) {
 }
 
 function WorkflowConfirmModal({ workflow, saving, error, onClose, onConfirm }) {
+  const action = workflow.action;
   const [reason, setReason] = useState("");
-  const [targetStatus, setTargetStatus] = useState(workflow.action.options?.[0]?.value || "");
+  const [targetStatus, setTargetStatus] = useState(action.options?.[0]?.value || "");
+  const [inputValue, setInputValue] = useState("");
+  const [secondaryValue, setSecondaryValue] = useState("");
   const gateBlocked = error?.code === "project_gate_blocked" || error?.code === "override_reason_required";
   const blockers = Array.isArray(error?.details?.blockers) ? error.details.blockers : [];
-  const disabled = saving || (workflow.action.reasonRequired && reason.trim().length < 3) || (workflow.action.options && !targetStatus) || (gateBlocked && reason.trim().length < 10);
-  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}><section className="live-modal compact live-confirm-modal" role="alertdialog" aria-modal="true"><header><div><small>İŞ AKIŞI ONAYI</small><h2>{workflow.action.title}</h2></div><button className="live-icon-button" disabled={saving} onClick={onClose}><X /></button></header><div className="live-confirm-body"><p>{workflow.action.message}</p><div className="live-record-reference"><b>{workflow.row.name || workflow.row.referenceNo || workflow.row.code || workflow.row.number || workflow.row.documentNo || workflow.row.id}</b><small>{workflow.row.status || workflow.row.revisionStatus || "Kayıt"}</small></div>{workflow.action.options && <label><span>Yeni aşama</span><select value={targetStatus} onChange={(event) => setTargetStatus(event.target.value)}>{workflow.action.options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>}{gateBlocked && <div className="live-gate-blockers"><b>Bu geçişi durduran eksikler</b>{blockers.map((item) => <span key={item.id}><WarningCircle />{item.label}</span>)}</div>}{(workflow.action.reasonRequired || workflow.action.key === "transition") && <label><span>{gateBlocked ? "Yönetici istisna gerekçesi *" : workflow.action.reasonRequired ? "Neden / açıklama *" : "Geçiş notu"}</span><textarea rows="3" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={gateBlocked ? "Neden eksikler tamamlanmadan devam edildiğini yazın (en az 10 karakter)" : workflow.action.reasonRequired ? "En az 3 karakter girin" : "İsteğe bağlı"} /></label>}{error && <div className="live-form-alert"><WarningCircle />{error.message}</div>}<footer><button className="live-button secondary" disabled={saving} onClick={onClose}>Vazgeç</button><button className={`live-button primary ${workflow.action.tone || ""}`} disabled={disabled} onClick={() => onConfirm({ reason: reason.trim() || undefined, status: targetStatus || undefined, note: gateBlocked ? undefined : reason.trim() || undefined, override_reason: gateBlocked ? reason.trim() : undefined })}>{saving ? <><span className="live-spinner small" /> İşleniyor</> : gateBlocked ? "İstisna ile devam et" : "İşlemi onayla"}</button></footer></div></section></div>;
+  const disabled = saving
+    || (action.reasonRequired && reason.trim().length < 3)
+    || (action.options && !targetStatus)
+    || (action.inputRequired && !String(inputValue).trim())
+    || (action.secondaryInputRequired && !String(secondaryValue).trim())
+    || (gateBlocked && reason.trim().length < 10);
+
+  // İş akışı gövdesi: aşama, gerekçe ve işleme özgü ek alanlar. Ek alanlar
+  // önceden gövdeye hiç eklenmiyordu; supersede, invoice ve paid bu yüzden
+  // her seferinde sunucudan hata alıyordu.
+  const buildBody = () => {
+    const body = {
+      reason: reason.trim() || undefined,
+      status: targetStatus || undefined,
+      note: gateBlocked ? undefined : reason.trim() || undefined,
+      override_reason: gateBlocked ? reason.trim() : undefined,
+    };
+    if (action.inputKey && String(inputValue).trim()) body[action.inputKey] = action.inputType === "number" ? Number(inputValue) : String(inputValue).trim();
+    if (action.secondaryInputKey && String(secondaryValue).trim()) body[action.secondaryInputKey] = action.secondaryInputType === "number" ? Number(secondaryValue) : String(secondaryValue).trim();
+    return body;
+  };
+
+  const extraInput = (key, label, type, resource, value, setValue, required) => <label key={key}>
+    <span>{label}{required && <em> *</em>}</span>
+    {resource
+      ? <ReferenceField item={{ name: key, referenceResource: resource }} value={value} onChange={setValue} />
+      : <input type={type === "number" ? "number" : "text"} value={value} onChange={(event) => setValue(event.target.value)} />}
+  </label>;
+
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}><section className="live-modal compact live-confirm-modal" role="alertdialog" aria-modal="true"><header><div><small>İŞ AKIŞI ONAYI</small><h2>{action.title}</h2></div><button className="live-icon-button" disabled={saving} onClick={onClose}><X /></button></header><div className="live-confirm-body"><p>{action.message}</p><div className="live-record-reference"><b>{workflow.row.name || workflow.row.referenceNo || workflow.row.code || workflow.row.number || workflow.row.documentNo || workflow.row.id}</b><small>{workflow.row.status || workflow.row.revisionStatus || "Kayıt"}</small></div>{action.options && <label><span>Yeni aşama</span><select value={targetStatus} onChange={(event) => setTargetStatus(event.target.value)}>{action.options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>}{action.inputKey && extraInput(action.inputKey, action.inputLabel || action.inputKey, action.inputType, action.inputResource, inputValue, setInputValue, action.inputRequired)}{action.secondaryInputKey && extraInput(action.secondaryInputKey, action.secondaryInputLabel || action.secondaryInputKey, action.secondaryInputType, action.secondaryInputResource, secondaryValue, setSecondaryValue, action.secondaryInputRequired)}{gateBlocked && <div className="live-gate-blockers"><b>Bu geçişi durduran eksikler</b>{blockers.map((item) => <span key={item.id}><WarningCircle />{item.label}</span>)}</div>}{(action.reasonRequired || action.key === "transition") && <label><span>{gateBlocked ? "Yönetici istisna gerekçesi *" : action.reasonRequired ? "Neden / açıklama *" : "Geçiş notu"}</span><textarea rows="3" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={gateBlocked ? "Neden eksikler tamamlanmadan devam edildiğini yazın (en az 10 karakter)" : action.reasonRequired ? "En az 3 karakter girin" : "İsteğe bağlı"} /></label>}{error && <div className="live-form-alert"><WarningCircle />{error.message}</div>}<footer><button className="live-button secondary" disabled={saving} onClick={onClose}>Vazgeç</button><button className={`live-button primary ${action.tone || ""}`} disabled={disabled} onClick={() => onConfirm(buildBody())}>{saving ? <><span className="live-spinner small" /> İşleniyor</> : gateBlocked ? "İstisna ile devam et" : "İşlemi onayla"}</button></footer></div></section></div>;
 }
 
 function ProjectCommandCenterModal({ record, onClose, onNavigate }) {
@@ -832,52 +1068,48 @@ function DeleteConfirmModal({ module, record, saving, error, onClose, onConfirm 
   return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}><section className="live-modal compact" role="alertdialog" aria-modal="true"><header><div><small>GERİ ALINAMAZ İŞLEM</small><h2>{module.singular} kaydını sil</h2></div><button className="live-icon-button" disabled={saving} onClick={onClose}><X /></button></header><div className="live-confirm-body"><p>Bu kayıt kalıcı olarak silinecek. İlişkili başka kayıtlarda kullanılıyorsa sistem silme işlemini güvenle reddeder.</p><div className="live-record-reference"><b>{record.name || record.referenceNo || record.code || record.number || record.documentNo || record.fileName || record.id}</b><small>{record.status || module.title}</small></div>{error && <div className="live-form-alert"><WarningCircle />{error.message}</div>}<footer><button className="live-button secondary" disabled={saving} onClick={onClose}>Vazgeç</button><button className="live-button danger-action" disabled={saving} onClick={onConfirm}>{saving ? "Siliniyor…" : "Kaydı sil"}</button></footer></div></section></div>;
 }
 
-const permissionCatalog = [
-  ["dashboard.read", "Ana sayfayı görüntüleme"],
-  ...[
-    ["customers", "Müşteri"], ["suppliers", "Tedarikçi"], ["projects", "Proje"], ["offers", "Teklif"],
-    ["offer-items", "Teklif kalemi"], ["project-tasks", "Proje görevi"], ["work-items", "İş kalemi"],
-    ["purchase-requests", "Satın alma talebi"], ["purchase-orders", "Satın alma siparişi"],
-    ["production-orders", "Üretim emri"], ["installations", "Montaj"], ["accounts", "Kasa/banka hesabı"],
-    ["financial-transactions", "Finans hareketi"], ["invoices", "Fatura"], ["employees", "Personel"],
-    ["attendance", "Puantaj"], ["leaves", "İzin"], ["payroll-inputs", "Bordro girdisi"],
-    ["files", "Dosya"], ["memberships", "Ekip üyeliği"], ["roles", "Rol"],
-  ].flatMap(([resource, label]) => [
-    [`${resource}.read`, `${label} görüntüleme`], [`${resource}.write`, `${label} ekleme ve düzenleme`], [`${resource}.delete`, `${label} silme`],
-  ]),
-  ["audit-logs.read", "Denetim kayıtlarını görüntüleme"], ["backups.read", "Yedekleri görüntüleme"], ["backups.write", "Yedek oluşturma"],
-  ["cost.view", "Maliyet ve kârlılık alanlarını görme"], ["salary.view", "Maaş ve bordro tutarlarını görme"],
-  ["hr.sensitive.read", "Hassas personel alanlarını görme"], ["finance.sensitive.read", "IBAN ve finans ayrıntılarını görme"],
-  ["export", "Dışa aktarma"], ["approve", "Genel onay işlemleri"], ["users.manage", "Kullanıcı yönetimi"],
-  ["roles.manage", "Rol ve yetki yönetimi"], ["backups.manage", "Yedek yönetimi"], ["files.manage", "Dosya yönetimi"], ["tokens.manage", "API anahtarı yönetimi"],
-  ["offers.approve", "Teklif kabul/ret"], ["offers.convert", "Teklifi projeye dönüştürme"], ["projects.transition", "Proje aşaması değiştirme"],
-  ["work-items.revision.approve", "İş kalemi revizyon onayı"], ["production-orders.release", "Üretime salım"],
-  ["purchase-requests.approve", "Satın alma talebi onayı"], ["leaves.approve", "İzin kararı"],
-  ["financial-transactions.approve", "Finans hareketi onayı"], ["financial-transactions.reverse", "Finans ters kayıt"],
+// Yetki kataloğu sunucudan gelir; sabit liste veritabanıyla sürekli birbirinden
+// uzaklaşıyor ve rol editöründe karşılığı olmayan kutular gösteriyordu.
+const permissionGroupLabels = [
+  ["dashboard", "Genel"], ["customers", "Müşteri"], ["suppliers", "Tedarikçi"], ["projects", "Proje"],
+  ["offers", "Teklif"], ["offer-items", "Teklif kalemi"], ["site-surveys", "Keşif"], ["survey-measurements", "Metraj"],
+  ["contracts", "Sözleşme"], ["design-revisions", "Tasarım"], ["project-tasks", "Görev"], ["work-items", "İş kalemi"],
+  ["purchase-requests", "Satın alma"], ["purchase-orders", "Sipariş"], ["inventory-items", "Stok"],
+  ["stock-movements", "Stok hareketi"], ["material-requirements", "Malzeme planı"], ["production-orders", "Üretim"],
+  ["quality-inspections", "Kalite"], ["installations", "Montaj"], ["handovers", "Teslim"],
+  ["handover-punch-items", "Teslim eksiği"], ["project-meetings", "Toplantı"], ["meeting-actions", "Aksiyon"],
+  ["project-communications", "İletişim"], ["resource-assignments", "Kapasite"], ["progress-payments", "Hakediş"],
+  ["accounts", "Kasa/banka"], ["financial-transactions", "Finans"], ["invoices", "Fatura"],
+  ["employees", "Personel"], ["attendance", "Puantaj"], ["leaves", "İzin"], ["payroll-inputs", "Bordro"],
+  ["files", "Dosya"], ["memberships", "Ekip"], ["roles", "Rol"], ["audit-logs", "Denetim"], ["backups", "Yedek"],
 ];
 
-permissionCatalog.push(
-  ...[
-    ["site-surveys", "Keşif"], ["survey-measurements", "Metraj satırı"], ["contracts", "Sözleşme"],
-    ["design-revisions", "Tasarım revizyonu"], ["progress-payments", "Hakediş"], ["inventory-items", "Stok kartı"],
-    ["stock-movements", "Stok hareketi"], ["project-meetings", "Proje toplantısı"], ["meeting-actions", "Toplantı aksiyonu"],
-    ["quality-inspections", "Kalite kontrolü"], ["handovers", "Teslim ve kabul"], ["handover-punch-items", "Eksik kalemi"],
-    ["material-requirements", "Malzeme ihtiyacı"],
-  ].flatMap(([resource, label]) => [
-    [`${resource}.read`, `${label} görüntüleme`], [`${resource}.write`, `${label} ekleme ve düzenleme`], [`${resource}.delete`, `${label} silme`],
-  ]),
-  ["site-surveys.approve", "Keşif tamamlama ve onayı"], ["contracts.transition", "Sözleşme yaşam döngüsü"],
-  ["design-revisions.approve", "Tasarım müşteri kararı"], ["progress-payments.approve", "Hakediş yaşam döngüsü"],
-  ["stock-movements.post", "Stok hareketini kesinleştirme"], ["project-meetings.publish", "Toplantıyı yayımlama"],
-  ["quality-inspections.complete", "Kalite kontrolünü sonuçlandırma"], ["handovers.transition", "Teslim kabul yaşam döngüsü"],
-  ["material-requirements.reserve", "Malzemeyi stoktan projeye ayırma"], ["material-requirements.purchase", "Malzemeyi satın alma talebine bağlama"],
-);
+function permissionGroup(code) {
+  const match = permissionGroupLabels.find(([prefix]) => code === prefix || code.startsWith(`${prefix}.`));
+  return match ? match[1] : "Çapraz yetkiler";
+}
 
 function RolePermissionsModal({ role, online, onClose }) {
-  const [state, setState] = useState({ loading: true, permissions: [], error: null, saving: false });
+  const [state, setState] = useState({ loading: true, permissions: [], catalog: [], implied: {}, error: null, saving: false });
   useEffect(() => {
-    api.getRolePermissions(role.id).then((data) => setState({ loading: false, permissions: data.permissions || [], error: null, saving: false })).catch((error) => setState({ loading: false, permissions: [], error, saving: false }));
+    Promise.all([api.getRolePermissions(role.id), api.permissionCatalog()])
+      .then(([data, catalog]) => setState({ loading: false, permissions: data.permissions || [], catalog: catalog.data, implied: catalog.meta?.implied || {}, error: null, saving: false }))
+      .catch((error) => setState({ loading: false, permissions: [], catalog: [], implied: {}, error, saving: false }));
   }, [role.id]);
+  const grouped = useMemo(() => {
+    const groups = new Map();
+    for (const item of state.catalog) {
+      const group = permissionGroup(item.code);
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push(item);
+    }
+    return [...groups.entries()];
+  }, [state.catalog]);
+  const impliedBySelection = useMemo(() => {
+    const covered = new Set();
+    for (const code of state.permissions) for (const child of state.implied[code] || []) covered.add(child);
+    return covered;
+  }, [state.permissions, state.implied]);
   const toggle = (code) => setState((current) => ({ ...current, permissions: current.permissions.includes(code) ? current.permissions.filter((item) => item !== code) : [...current.permissions, code] }));
   const save = async () => {
     if (!online) {
@@ -888,7 +1120,7 @@ function RolePermissionsModal({ role, online, onClose }) {
     try { await api.updateRolePermissions(role.id, state.permissions); onClose(); }
     catch (error) { setState((current) => ({ ...current, saving: false, error })); }
   };
-  return <div className="live-modal-backdrop" role="presentation"><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>ROL YETKİLERİ</small><h2>{role.name || role.code}</h2></div><button className="live-icon-button" onClick={onClose}><X /></button></header>{state.loading ? <LoadingState /> : <div className="live-permission-body"><p>Bu rolün kullanabileceği işlemleri seçin. Hassas maliyet ve ücret izinleri ayrıca işaretlenmelidir.</p><div className="live-permission-grid">{permissionCatalog.map(([code, label]) => <label key={code}><input type="checkbox" disabled={!online} checked={state.permissions.includes(code)} onChange={() => toggle(code)} /><span><b>{label}</b><small>{code}</small></span></label>)}</div>{state.error && <div className="live-form-alert"><WarningCircle />{state.error.message}</div>}<footer><button className="live-button secondary" onClick={onClose}>Vazgeç</button><button className="live-button primary" onClick={save} disabled={state.saving || !online}>{state.saving ? "Kaydediliyor…" : "Yetkileri kaydet"}</button></footer></div>}</section></div>;
+  return <div className="live-modal-backdrop" role="presentation"><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>ROL YETKİLERİ</small><h2>{role.name || role.code}</h2></div><button className="live-icon-button" onClick={onClose}><X /></button></header>{state.loading ? <LoadingState /> : <div className="live-permission-body"><p>Bu rolün kullanabileceği işlemleri seçin. Hassas maliyet ve ücret izinleri ayrıca işaretlenmelidir.</p>{grouped.map(([group, items]) => <section key={group} className="live-permission-group"><h3>{group}</h3><div className="live-permission-grid">{items.map((item) => { const inherited = impliedBySelection.has(item.code) && !state.permissions.includes(item.code); return <label key={item.code} className={inherited ? "inherited" : ""}><input type="checkbox" disabled={!online || inherited} checked={state.permissions.includes(item.code) || inherited} onChange={() => toggle(item.code)} /><span><b>{item.description || item.code}</b><small>{item.code}{inherited ? " · üst yetkiden geliyor" : ""}</small></span></label>; })}</div></section>)}{state.error && <div className="live-form-alert"><WarningCircle />{state.error.message}</div>}<footer><button className="live-button secondary" onClick={onClose}>Vazgeç</button><button className="live-button primary" onClick={save} disabled={state.saving || !online}>{state.saving ? "Kaydediliyor…" : "Yetkileri kaydet"}</button></footer></div>}</section></div>;
 }
 
 function BackupView({ online }) {
@@ -1116,11 +1348,13 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
   const [detailRecord, setDetailRecord] = useState(null);
   const [deleteRecord, setDeleteRecord] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
   const offlineCreateAllowed = api.canQueueOffline(module.resource);
   const canCreate = !module.readOnly && (online || offlineCreateAllowed) && permissionAllows(session, "create", module.resource) && (module.id !== "accounting" || canViewOfficial);
   const canEdit = online && !module.readOnly && !module.noEdit && permissionAllows(session, "update", module.resource);
   const canDelete = online && !module.readOnly && permissionAllows(session, "delete", module.resource);
+  const canExport = online && config.columns?.length > 0 && hasCapability(session, "export") && permissionAllows(session, "read", module.resource);
   const canManagePermissions = online && module.id === "roles" && permissionAllows(session, "manage", "roles");
   const availableViews = config.views || ["list"];
   const activeView = availableViews.includes(view) ? view : "list";
@@ -1142,6 +1376,27 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
     setState((current) => ({ ...current, rows: current.rows.filter((row) => !row._offlineQueued || activeQueueIds.has(row._offlineQueueId)) }));
   }), []);
 
+  // Sunucu tarafında `export` yetkisiyle korunan CSV çıktısı.
+  async function exportCsv() {
+    if (!online || exporting) return;
+    setExporting(true);
+    try {
+      const csv = await api.exportCsv(module.resource, config.officialScope && officialFilter !== "all" ? { official: officialFilter === "official" ? "1" : "0" } : {});
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${module.id}-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setSaveError(error);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function save(values) {
     if (!online && (modal?.id || module.id === "files" || !offlineCreateAllowed)) {
       setSaveError(new ApiError("Bu işlem çevrimdışıyken güvenli kuyruğa alınamaz.", { code: "OFFLINE" }));
@@ -1155,7 +1410,9 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
       else {
         const payload = { ...values, ...(config.createDefaults && canViewOfficial ? config.createDefaults : {}) };
         if (modal?.id) savedRecord = await api.update(module.resource, modal.id, payload);
-        else savedRecord = await api.create(module.resource, payload);
+        // Anahtar form açılışında üretilir; çift tıklama veya yeniden gönderim
+        // ikinci bir kayıt yaratmaz.
+        else savedRecord = await api.create(module.resource, payload, { idempotencyKey: modal?._idempotencyKey });
       }
       setModal(null);
       if (savedRecord?._offlineQueued) {
@@ -1210,7 +1467,7 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
     }
   }
 
-  return <><section className="live-panel"><header className="live-toolbar"><div><small>{module.id === "projects" ? "PROJE PORTFÖYÜ" : "CANLI KAYITLAR"}</small><h2>{module.title}</h2><p>{module.id === "projects" ? "Talep, keşif, teklif, sözleşme, üretim ve teslim aşamalarını tek zincirde yönetin." : config.description}</p></div>{canCreate && <button className="live-button primary" onClick={() => setModal({})}><Plus /> Yeni {module.singular}</button>}</header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button className="live-search-submit">Ara</button>{availableViews.length > 1 && <ViewSwitcher available={availableViews} value={activeView} onChange={setView} />}</form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><ResourceDataView view={activeView} rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>{module.id === "projects" ? "Detay düğmesi proje komuta merkezini açar" : "Tenant kapsamındaki güncel veriler"}</small></footer></> : <EmptyState title={module.title} canCreate={canCreate} onCreate={() => setModal({})} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && (module.id === "projects" ? <ProjectCommandCenterModal record={detailRecord} onClose={() => setDetailRecord(null)} onNavigate={onNavigate} /> : <RecordDetailModal module={module} record={detailRecord} session={session} onClose={() => setDetailRecord(null)} />)}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
+  return <><section className="live-panel"><header className="live-toolbar"><div><small>{module.id === "projects" ? "PROJE PORTFÖYÜ" : "CANLI KAYITLAR"}</small><h2>{module.title}</h2><p>{module.id === "projects" ? "Talep, keşif, teklif, sözleşme, üretim ve teslim aşamalarını tek zincirde yönetin." : config.description}</p></div><div className="live-toolbar-actions">{canExport && <button className="live-button secondary" onClick={exportCsv} disabled={exporting}>{exporting ? "Hazırlanıyor…" : <><CloudArrowUp /> CSV indir</>}</button>}{canCreate && <button className="live-button primary" onClick={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })}><Plus /> Yeni {module.singular}</button>}</div></header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button className="live-search-submit">Ara</button>{availableViews.length > 1 && <ViewSwitcher available={availableViews} value={activeView} onChange={setView} />}</form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><ResourceDataView view={activeView} rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>{module.id === "projects" ? "Detay düğmesi proje komuta merkezini açar" : "Tenant kapsamındaki güncel veriler"}</small></footer></> : <EmptyState title={module.title} canCreate={canCreate} onCreate={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && (module.id === "projects" ? <ProjectCommandCenterModal record={detailRecord} onClose={() => setDetailRecord(null)} onNavigate={onNavigate} /> : <RecordDetailModal module={module} record={detailRecord} session={session} onClose={() => setDetailRecord(null)} />)}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
 }
 
 function Login({ error, loading, onSubmit, onPasswordLogin }) {
@@ -1237,6 +1494,67 @@ function TenantSelector({ session, onChange }) {
   return <label className="live-tenant selectable"><Buildings /><span><small>AKTİF FİRMA</small><select value={session?.tenant?.id || ""} onChange={(event) => onChange(event.target.value)}>{tenants.map((tenant) => <option value={tenant.id} key={tenant.id}>{tenant.name}</option>)}</select></span><CaretDown /></label>;
 }
 
+function passwordHint(value) {
+  if (String(value).length < 8) return "Şifre en az 8 karakter olmalıdır.";
+  if (!/[A-Za-zÇĞİÖŞÜçğıöşü]/.test(value) || !/\d/.test(value)) return "Şifre en az bir harf ve bir rakam içermelidir.";
+  return null;
+}
+
+function ForcedPasswordChange({ onDone, onLogout }) {
+  const [values, setValues] = useState({ current: "", next: "", repeat: "" });
+  const [state, setState] = useState({ saving: false, error: null });
+  const localError = values.next && values.next !== values.repeat ? "Yeni şifreler birbiriyle eşleşmiyor." : values.next ? passwordHint(values.next) : null;
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (localError) return;
+    setState({ saving: true, error: null });
+    try {
+      await api.changePassword({ currentPassword: values.current, newPassword: values.next });
+      await onDone();
+    } catch (error) {
+      setState({ saving: false, error });
+    }
+  };
+
+  return <div className="live-full-state"><section className="live-modal compact"><header><div><small>GÜVENLİK</small><h2>Geçici şifrenizi değiştirin</h2><p>Yönetici tarafından verilen şifreyle giriş yaptınız. Devam etmek için kendi şifrenizi belirleyin.</p></div></header><form onSubmit={submit}><div className="live-form-grid"><label className="wide"><span>Mevcut (geçici) şifre <em>*</em></span><input type="password" required autoComplete="current-password" value={values.current} onChange={(event) => setValues({ ...values, current: event.target.value })} /></label><label className="wide"><span>Yeni şifre <em>*</em></span><input type="password" required autoComplete="new-password" value={values.next} onChange={(event) => setValues({ ...values, next: event.target.value })} /><small className="live-field-help">En az 8 karakter, en az bir harf ve bir rakam.</small></label><label className="wide"><span>Yeni şifre (tekrar) <em>*</em></span><input type="password" required autoComplete="new-password" value={values.repeat} onChange={(event) => setValues({ ...values, repeat: event.target.value })} /></label></div>{localError && <div className="live-form-alert"><WarningCircle />{localError}</div>}{state.error && <div className="live-form-alert"><WarningCircle />{state.error.message}</div>}<footer><button type="button" className="live-button secondary" onClick={onLogout}>Çıkış yap</button><button className="live-button primary" disabled={state.saving || Boolean(localError) || !values.current || !values.next}>{state.saving ? "Kaydediliyor…" : "Şifremi değiştir"}</button></footer></form></section></div>;
+}
+
+function SecuritySettingsModal({ onClose }) {
+  const [values, setValues] = useState({ current: "", next: "", repeat: "" });
+  const [state, setState] = useState({ saving: false, error: null, notice: null, sessions: [], loadingSessions: true });
+  const localError = values.next && values.next !== values.repeat ? "Yeni şifreler birbiriyle eşleşmiyor." : values.next ? passwordHint(values.next) : null;
+
+  const loadSessions = () => {
+    setState((current) => ({ ...current, loadingSessions: true }));
+    api.listSessions()
+      .then((sessions) => setState((current) => ({ ...current, sessions, loadingSessions: false })))
+      .catch(() => setState((current) => ({ ...current, sessions: [], loadingSessions: false })));
+  };
+  useEffect(loadSessions, []);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (localError) return;
+    setState((current) => ({ ...current, saving: true, error: null, notice: null }));
+    try {
+      await api.changePassword({ currentPassword: values.current, newPassword: values.next });
+      setValues({ current: "", next: "", repeat: "" });
+      setState((current) => ({ ...current, saving: false, notice: "Şifreniz değiştirildi. Diğer cihazlardaki oturumlar kapatıldı." }));
+      loadSessions();
+    } catch (error) {
+      setState((current) => ({ ...current, saving: false, error }));
+    }
+  };
+
+  const revoke = async (sessionId) => {
+    try { await api.revokeSession(sessionId); loadSessions(); }
+    catch (error) { setState((current) => ({ ...current, error })); }
+  };
+
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>HESAP GÜVENLİĞİ</small><h2>Şifre ve oturumlar</h2></div><button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></header><form onSubmit={submit}><div className="live-form-grid"><label className="wide"><span>Mevcut şifre <em>*</em></span><input type="password" required autoComplete="current-password" value={values.current} onChange={(event) => setValues({ ...values, current: event.target.value })} /></label><label><span>Yeni şifre <em>*</em></span><input type="password" required autoComplete="new-password" value={values.next} onChange={(event) => setValues({ ...values, next: event.target.value })} /></label><label><span>Yeni şifre (tekrar) <em>*</em></span><input type="password" required autoComplete="new-password" value={values.repeat} onChange={(event) => setValues({ ...values, repeat: event.target.value })} /></label></div>{localError && <div className="live-form-alert"><WarningCircle />{localError}</div>}{state.notice && <div className="live-field-note success"><Check />{state.notice}</div>}{state.error && <div className="live-form-alert"><WarningCircle />{state.error.message}</div>}<footer><button className="live-button primary" disabled={state.saving || Boolean(localError) || !values.current || !values.next}>{state.saving ? "Kaydediliyor…" : "Şifremi değiştir"}</button></footer></form><div className="live-session-list"><h3>Açık oturumlar</h3>{state.loadingSessions ? <LoadingState /> : state.sessions.length ? <>{state.sessions.map((item) => <article key={item.id}><div><b>{item.current ? "Bu cihaz" : "Diğer cihaz"}</b><small>Son kullanım {formatValue(item.lastSeenAt, "date", item)} · {item.authMethod === "password" ? "Şifreyle" : "SMS ile"} giriş</small></div>{!item.current && <button className="live-workflow-button danger" onClick={() => revoke(item.id)}>Kapat</button>}</article>)}{state.sessions.length > 1 && <button className="live-button secondary" onClick={() => revoke("others")}>Diğer tüm oturumları kapat</button>}</> : <small>Açık oturum bulunamadı.</small>}</div></section></div>;
+}
+
 export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }) {
   const [sessionState, setSessionState] = useState({ loading: true, session: null, error: null, needsLogin: false });
   const [activeId, setActiveId] = useState(initialModule);
@@ -1244,6 +1562,7 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
   const [online, setOnline] = useState(() => navigator.onLine);
   const [dataVersion, setDataVersion] = useState(0);
   const [queueState, setQueueState] = useState({ items: [], pending: 0, failed: 0, syncing: false });
+  const [securityOpen, setSecurityOpen] = useState(false);
   const active = useMemo(() => modules.find((item) => item.id === activeId) || modules[0], [activeId]);
 
   async function syncQueuedRecords() {
@@ -1309,6 +1628,9 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
   if (sessionState.loading && !sessionState.session) return <><LiveStyles /><div className="live-full-state"><LoadingState /></div></>;
   if (sessionState.needsLogin) return <><LiveStyles /><Login error={sessionState.error} loading={sessionState.loading} onSubmit={login} onPasswordLogin={loginWithPassword} /></>;
   if (sessionState.error) return <><LiveStyles /><div className="live-full-state"><ErrorState error={sessionState.error} retry={bootstrap} /></div></>;
+  // Davetle verilen geçici şifre değiştirilmeden veri yazılamaz; sunucu da bunu
+  // zorunlu kılıyor, arayüz bunu anlaşılır bir adıma çeviriyor.
+  if (sessionState.session?.mustChangePassword) return <><LiveStyles /><ForcedPasswordChange onDone={bootstrap} onLogout={logout} /></>;
 
   const session = sessionState.session;
   const roleCode = String(session?.role?.code || session?.user?.role || "").toLowerCase();
@@ -1322,13 +1644,31 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
   });
   const selectedModule = visibleModules.some((item) => item.id === active.id) ? active : visibleModules[0];
   const navGroups = visibleModules.reduce((groups, item) => ({ ...groups, [item.group]: [...(groups[item.group] || []), item] }), {});
-  return <div className="live-shell"><LiveStyles />{!online && <div className="live-offline"><WarningCircle /> Çevrimdışısınız. Uygun yeni saha kayıtları kuyruğa alınır; onay, silme ve dosya işlemleri bağlantı bekler.</div>}<aside className="live-sidebar"><div className="live-brand"><span><Buildings /></span><div><b>Capproje</b><small>Yönetim Platformu</small></div></div><TenantSelector session={session} onChange={changeTenant} /><nav aria-label="Ana menü">{Object.entries(navGroups).map(([group, items], groupIndex) => { const expanded = openNavGroup === group; const panelId = `live-nav-group-${groupIndex}`; return <section className={`live-nav-group ${expanded ? "open" : ""}`} key={group}><button type="button" className="live-nav-group-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpenNavGroup((current) => current === group ? null : group)}><span>{group}</span><CaretDown /></button><div id={panelId} className="live-nav-group-items" hidden={!expanded}>{items.map((item) => <button type="button" key={item.id} className={`live-nav-item ${item.id === selectedModule?.id ? "active" : ""}`} onClick={() => { setActiveId(item.id); setOpenNavGroup(group); }}><item.icon /><span>{item.title}</span></button>)}</div></section>; })}</nav><div className="live-user"><UserCircle /><span><b>{session?.user?.name || session?.user?.full_name || `${session?.user?.firstName || ""} ${session?.user?.lastName || ""}`.trim() || session?.user?.email}</b><small>{session?.role?.name || session?.user?.role || "Kullanıcı"}</small></span><button onClick={logout} title="Çıkış yap"><SignOut /></button></div></aside><main className="live-main"><header className="live-topbar"><div><small>{session?.tenant?.name || "Firma"}</small><h1>{selectedModule?.title || "Çalışma alanı"}</h1></div><GlobalSearch onNavigate={setActiveId} /><div className="live-top-actions">{onBackToPrototype && <button className="live-button secondary" onClick={onBackToPrototype}>Prototipe dön</button>}<OfflineQueueControl state={queueState} online={online} onSynced={() => setDataVersion((value) => value + 1)} /><button className="live-top-icon" onClick={() => setActiveId("notifications")} title="Bildirimler"><Bell /></button><span className="live-connection"><i /> {online ? "Canlı" : "Çevrimdışı"}</span></div></header><div className="live-content">{!selectedModule ? <PermissionDeniedState /> : selectedModule.id === "fieldMode" ? <FieldMode session={session} online={online} queueState={queueState} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} /> : selectedModule.id === "dashboard" ? <Dashboard session={session} onNavigate={setActiveId} refreshKey={dataVersion} /> : selectedModule.id === "notifications" ? <NotificationsView onNavigate={setActiveId} /> : selectedModule.id === "backups" ? <BackupView online={online} /> : selectedModule.id === "tokens" ? <TokenView online={online} /> : <ResourceView module={selectedModule} session={session} online={online} refreshKey={dataVersion} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} />}</div></main></div>;
+  return <div className="live-shell"><LiveStyles />{!online && <div className="live-offline"><WarningCircle /> Çevrimdışısınız. Uygun yeni saha kayıtları kuyruğa alınır; onay, silme ve dosya işlemleri bağlantı bekler.</div>}<aside className="live-sidebar"><div className="live-brand"><span><Buildings /></span><div><b>Capproje</b><small>Yönetim Platformu</small></div></div><TenantSelector session={session} onChange={changeTenant} /><nav aria-label="Ana menü">{Object.entries(navGroups).map(([group, items], groupIndex) => { const expanded = openNavGroup === group; const panelId = `live-nav-group-${groupIndex}`; return <section className={`live-nav-group ${expanded ? "open" : ""}`} key={group}><button type="button" className="live-nav-group-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpenNavGroup((current) => current === group ? null : group)}><span>{group}</span><CaretDown /></button><div id={panelId} className="live-nav-group-items" hidden={!expanded}>{items.map((item) => <button type="button" key={item.id} className={`live-nav-item ${item.id === selectedModule?.id ? "active" : ""}`} onClick={() => { setActiveId(item.id); setOpenNavGroup(group); }}><item.icon /><span>{item.title}</span></button>)}</div></section>; })}</nav><div className="live-user"><UserCircle /><span><b>{session?.user?.name || session?.user?.full_name || `${session?.user?.firstName || ""} ${session?.user?.lastName || ""}`.trim() || session?.user?.email}</b><small>{session?.role?.name || session?.user?.role || "Kullanıcı"}</small></span><button onClick={() => setSecurityOpen(true)} title="Şifre ve oturumlar"><UserCircle /></button><button onClick={logout} title="Çıkış yap"><SignOut /></button></div></aside><main className="live-main"><header className="live-topbar"><div><small>{session?.tenant?.name || "Firma"}</small><h1>{selectedModule?.title || "Çalışma alanı"}</h1></div><GlobalSearch onNavigate={setActiveId} /><div className="live-top-actions">{onBackToPrototype && <button className="live-button secondary" onClick={onBackToPrototype}>Prototipe dön</button>}<OfflineQueueControl state={queueState} online={online} onSynced={() => setDataVersion((value) => value + 1)} /><button className="live-top-icon" onClick={() => setActiveId("notifications")} title="Bildirimler"><Bell /></button><span className="live-connection"><i /> {online ? "Canlı" : "Çevrimdışı"}</span></div></header><div className="live-content">{!selectedModule ? <PermissionDeniedState /> : selectedModule.id === "fieldMode" ? <FieldMode session={session} online={online} queueState={queueState} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} /> : selectedModule.id === "dashboard" ? <Dashboard session={session} onNavigate={setActiveId} refreshKey={dataVersion} /> : selectedModule.id === "notifications" ? <NotificationsView onNavigate={setActiveId} /> : selectedModule.id === "backups" ? <BackupView online={online} /> : selectedModule.id === "tokens" ? <TokenView online={online} /> : <ResourceView module={selectedModule} session={session} online={online} refreshKey={dataVersion} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} />}</div></main>{securityOpen && <SecuritySettingsModal onClose={() => setSecurityOpen(false)} />}</div>;
 }
 
 export default LiveWorkspace;
 
 function LiveStyles() {
   return <style>{`
+    .live-toolbar-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+    .live-reference{position:relative;display:flex;flex-direction:column;gap:5px}
+    .live-reference>input{width:100%}
+    .live-reference-selected{display:flex;align-items:center;gap:7px;border:1px solid #ced3cf;border-radius:8px;padding:8px 9px;background:#fafaf8;min-height:38px}
+    .live-reference-selected>span{flex:1;min-width:0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .live-reference-selected .live-icon-button{width:26px;height:26px;flex:none}
+    .live-reference-results{position:absolute;top:100%;left:0;right:0;z-index:40;margin-top:4px;background:#fff;border:1px solid var(--live-line);border-radius:10px;box-shadow:0 14px 30px #15271f26;max-height:230px;overflow:auto;padding:5px}
+    .live-reference-results>button{width:100%;border:0;border-radius:7px;background:#fff;padding:8px 9px;text-align:left;font:inherit;font-size:11px;cursor:pointer}
+    .live-reference-results>button:hover{background:#f0f5f2}
+    .live-reference-results>small{display:block;padding:9px;font-size:10px;color:var(--live-muted)}
+    .live-permission-group{margin-bottom:18px}
+    .live-permission-group>h3{margin:0 0 8px;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--live-muted)}
+    .live-permission-grid label.inherited{opacity:.65;background:#f5f7f5}
+    .live-session-list{padding:0 24px 22px}
+    .live-session-list>h3{margin:18px 0 10px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--live-muted)}
+    .live-session-list article{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--live-line);border-radius:9px;padding:10px 12px;margin-bottom:7px}
+    .live-session-list b{font-size:11px}
+    .live-session-list small{display:block;font-size:9px;color:var(--live-muted);margin-top:2px}
     :root{--live-ink:#30261f;--live-muted:#786b62;--live-green:#6b432b;--live-green-2:#8a5a38;--live-paper:#f7f2eb;--live-line:#e2d7cc;--live-white:#fff;--live-danger:#a1433d;--live-warning:#9a6728;--live-success:#6f6a43}
     .live-topbar{gap:20px}.live-top-icon{width:35px;height:35px;border:1px solid var(--live-line);border-radius:50%;background:#fff;color:var(--live-green);display:grid;place-items:center;cursor:pointer}.live-global-search{width:min(460px,38vw);height:40px;border:1px solid var(--live-line);border-radius:10px;display:flex;align-items:center;gap:8px;padding:0 11px;position:relative;color:var(--live-muted)}.live-global-search>input{border:0;outline:0;min-width:0;flex:1;font:inherit;font-size:11px}.live-global-search>button{border:0;background:transparent;color:var(--live-muted);display:grid;place-items:center;cursor:pointer}.live-global-results{position:absolute;top:46px;left:0;right:0;background:#fff;border:1px solid var(--live-line);border-radius:11px;box-shadow:0 16px 36px #15271f26;max-height:420px;overflow:auto;padding:6px;z-index:30}.live-global-results>button{width:100%;border:0;border-radius:8px;background:#fff;padding:10px;display:flex;justify-content:space-between;gap:12px;text-align:left;cursor:pointer}.live-global-results>button:hover{background:#f0f5f2}.live-global-results span{display:flex;flex-direction:column;gap:3px;min-width:0}.live-global-results b{font-size:11px;overflow:hidden;text-overflow:ellipsis}.live-global-results small{font-size:9px;color:var(--live-muted);overflow:hidden;text-overflow:ellipsis}.live-global-results em{font-size:8px;font-style:normal;color:var(--live-green);white-space:nowrap}.live-search-message{padding:15px;font-size:10px;color:var(--live-muted);display:flex;align-items:center;gap:7px}.live-search-message.danger{color:var(--live-danger)}
     .live-notification-list article{min-height:92px;padding:15px 20px;border-bottom:1px solid var(--live-line);display:grid;grid-template-columns:36px 1fr auto;align-items:center;gap:12px}.live-notification-list article:last-child{border-bottom:0}.live-notification-list article.unread{background:#f1f6f3}.live-notification-list article>span{width:34px;height:34px;border-radius:50%;background:#e6eee9;color:var(--live-green);display:grid;place-items:center}.live-notification-list article>button:not(.live-dismiss){border:0;background:transparent;text-align:left;display:flex;flex-direction:column;gap:4px;cursor:pointer}.live-notification-list b{font-size:12px}.live-notification-list p{margin:0;color:var(--live-muted);font-size:10px}.live-notification-list small{font-size:8px;color:var(--live-muted)}.live-dismiss{border:1px solid var(--live-line);background:#fff;border-radius:7px;padding:6px 8px;color:var(--live-muted);font-size:9px;cursor:pointer}.live-sidebar nav{scrollbar-width:none}.live-sidebar nav::-webkit-scrollbar{display:none}

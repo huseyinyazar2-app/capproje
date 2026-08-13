@@ -157,14 +157,17 @@ const FIELD_MAPS = Object.freeze({
   materialRequirements: { projectId: "project_id", workItemId: "work_item_id", inventoryItemId: "inventory_item_id", preferredSupplierId: "preferred_supplier_id", purchaseRequestId: "purchase_request_id", itemCode: "item_code", requiredQuantity: "required_quantity", reservedQuantity: "reserved_quantity", orderedQuantity: "ordered_quantity", receivedQuantity: "received_quantity", neededBy: "needed_by" },
 });
 
+// Etiket → sunucu durum kodu. Kodlar worker/index.js içindeki statusEnums ve
+// 0012 migration'ındaki tetikleyicilerle birebir aynı kümedir.
 const STATUS_VALUES = Object.freeze({
-  projects: { Potansiyel: "lead", Keşif: "discovery", Maliyetlendirme: "estimating", Teklif: "offered", Sözleşme: "contracted", Tasarım: "design", "Satın Alma": "procurement", Üretim: "production", Montaj: "installation", Kabul: "acceptance", Beklemede: "on_hold", Tamamlandı: "completed", İptal: "cancelled" },
-  offers: { Taslak: "draft", "Maliyet çalışılıyor": "costing", Sunuldu: "sent", "Revizyon istendi": "revision_requested", "Kabul edildi": "accepted", Kaybedildi: "rejected" },
-  purchases: { Taslak: "draft", "Onay bekliyor": "pending", Onaylandı: "approved", "Sipariş verildi": "ordered", "Kısmi teslim": "partial", "Teslim edildi": "received", İptal: "cancelled" },
-  production: { Planlandı: "planned", "Malzeme bekliyor": "waiting_material", Üretimde: "in_progress", "Kalite kontrolde": "quality_control", Tamamlandı: "completed", Durduruldu: "paused" },
-  installations: { "Keşif gerekli": "survey_needed", "Saha bekleniyor": "site_waiting", Planlandı: "planned", Yolda: "in_transit", Montajda: "in_progress", Eksikli: "incomplete", "Teslim edildi": "completed" },
-  finance: { Planlandı: "planned", "Onay bekliyor": "pending", Onaylandı: "approved", "Tahsil edildi": "collected", Ödendi: "paid", Gecikti: "overdue" },
-  accounting: { Taslak: "draft", Açık: "open", Kısmi: "partial", Ödendi: "paid", "Tahsil edildi": "collected", Gecikti: "overdue" },
+  projects: { Potansiyel: "lead", Keşif: "discovery", Maliyetlendirme: "estimating", Teklif: "offered", Sözleşme: "contracted", Tasarım: "design", "Satın Alma": "procurement", Üretim: "production", Montaj: "installation", Kabul: "acceptance", Beklemede: "on_hold", Tamamlandı: "completed", Kaybedildi: "lost", İptal: "cancelled" },
+  offers: { Taslak: "draft", "Maliyet çalışılıyor": "costing", Sunuldu: "sent", "Onay bekliyor": "pending", "Revizyon istendi": "revision_requested", "Kabul edildi": "accepted", Kaybedildi: "rejected", "Süresi doldu": "expired", İptal: "cancelled" },
+  purchases: { Taslak: "draft", "Onay bekliyor": "pending", Onaylandı: "approved", Reddedildi: "rejected", "Sipariş verildi": "ordered", "Kısmi teslim": "partial", "Teslim edildi": "received", İptal: "cancelled" },
+  purchaseOrders: { Taslak: "draft", "Sipariş verildi": "ordered", "Kısmi teslim": "partial", "Teslim alındı": "received", İptal: "cancelled" },
+  production: { Taslak: "draft", Planlandı: "planned", "Üretime salındı": "released", "Malzeme bekliyor": "waiting_material", Üretimde: "in_progress", "Kalite kontrolde": "quality_control", Durduruldu: "paused", Tamamlandı: "completed", İptal: "cancelled" },
+  installations: { "Keşif gerekli": "survey_needed", "Saha bekleniyor": "site_waiting", Planlandı: "planned", Yolda: "in_transit", Montajda: "in_progress", Eksikli: "incomplete", "Teslim edildi": "completed", İptal: "cancelled" },
+  finance: { Taslak: "draft", Planlandı: "planned", "Onay bekliyor": "pending", Onaylandı: "approved", "Tahsil edildi": "collected", Ödendi: "paid", Gecikti: "overdue", "Ters kaydedildi": "reversed", İptal: "cancelled" },
+  accounting: { Taslak: "draft", Açık: "open", Kısmi: "partial", Ödendi: "paid", "Tahsil edildi": "collected", Gecikti: "overdue", İptal: "cancelled" },
   hr: { Aktif: "active", İzinli: "on_leave", Pasif: "inactive", "İşten ayrıldı": "terminated" },
 });
 
@@ -190,11 +193,19 @@ function mapIncoming(resource, value) {
   return result;
 }
 
-function mapOutgoing(resource, value) {
+function mapOutgoing(resource, value, { keepNull = false } = {}) {
   const fieldMap = FIELD_MAPS[resource] || {};
   const result = {};
   for (const [uiKey, raw] of Object.entries(value || {})) {
-    if (raw === "" || raw == null) continue;
+    if (raw === undefined) continue;
+    // Düzenlemede boş bırakılan alan gerçekten temizlenmelidir; önceden boş
+    // değerler atlandığı için bir kez girilen veri asla silinemiyordu.
+    if (raw === "" || raw === null) {
+      if (!keepNull) continue;
+      const clearKey = fieldMap[uiKey] || uiKey.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+      result[clearKey] = null;
+      continue;
+    }
     const apiKey = fieldMap[uiKey] || uiKey.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
     let mapped = raw;
     if (apiKey.endsWith("_minor")) mapped = Math.round(Number(raw) * 100);
@@ -280,6 +291,15 @@ async function request(path, options = {}) {
     });
     const contentType = response.headers.get("content-type") || "";
     const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+
+    // Statik barındırma tüm yolları index.html'e yönlendirdiğinde API çağrıları
+    // 200 + HTML döner. Bunu başarı saymak uygulamayı sessizce bozuyordu.
+    if (response.ok && !contentType.includes("application/json") && !contentType.includes("text/csv") && !options.allowNonJson) {
+      throw new ApiError("Sunucu API yanıtı yerine sayfa içeriği döndürdü. Uygulamanın API adresi yapılandırmasını kontrol edin.", {
+        status: response.status,
+        code: "API_NOT_REACHABLE",
+      });
+    }
 
     if (!response.ok) {
       const problem = payload?.error && typeof payload.error === "object" ? payload.error : payload;
@@ -570,12 +590,17 @@ export const api = {
     if (!endpoint) throw new ApiError(`Bilinmeyen kaynak: ${resource}`, { code: "UNKNOWN_RESOURCE" });
     return mapIncoming(resource, (await request(`${endpoint}/${encodeURIComponent(id)}`)).data);
   },
-  async create(resource, values) {
+  newIdempotencyKey(resource, action = "create") {
+    return idempotencyKey(resource, action);
+  },
+  async create(resource, values, options = {}) {
     const endpoint = API_CONFIG.endpoints[resource];
     if (!endpoint) throw new ApiError(`Bilinmeyen kaynak: ${resource}`, { code: "UNKNOWN_RESOURCE" });
     const createEndpoint = resource === "memberships" ? "/memberships/invite" : endpoint;
     const body = mapOutgoing(resource, values);
-    const key = idempotencyKey(resource, "create");
+    // Anahtar form açılışında üretilip tekrar gönderimlerde korunur; böylece
+    // çift tıklama veya yeniden deneme ikinci bir kayıt oluşturmaz.
+    const key = options.idempotencyKey || idempotencyKey(resource, "create");
     if (typeof navigator !== "undefined" && !navigator.onLine && this.canQueueOffline(resource)) {
       return queueOfflineCreate(resource, values, createEndpoint, body, key);
     }
@@ -588,10 +613,38 @@ export const api = {
       throw error;
     }
   },
-  async update(resource, id, values) {
+  async update(resource, id, values, options = {}) {
     const endpoint = API_CONFIG.endpoints[resource];
     if (!endpoint) throw new ApiError(`Bilinmeyen kaynak: ${resource}`, { code: "UNKNOWN_RESOURCE" });
-    return mapIncoming(resource, (await request(`${endpoint}/${encodeURIComponent(id)}`, { method: "PATCH", body: mapOutgoing(resource, values) })).data);
+    return mapIncoming(resource, (await request(`${endpoint}/${encodeURIComponent(id)}`, { method: "PATCH", body: mapOutgoing(resource, values, { keepNull: options.keepNull !== false }) })).data);
+  },
+  async permissionCatalog() {
+    const result = await request("/permissions");
+    return { data: result.data || [], meta: result.meta || null };
+  },
+  async changePassword({ currentPassword, newPassword }) {
+    return (await request("/auth/password/change", { method: "POST", body: { current_password: currentPassword, new_password: newPassword } })).data;
+  },
+  async listSessions() {
+    return (await request("/sessions")).data;
+  },
+  async revokeSession(sessionId = "others") {
+    await request(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  },
+  exportUrl(resource, query = {}) {
+    const endpoint = API_CONFIG.endpoints[resource];
+    if (!endpoint) throw new ApiError(`Bilinmeyen kaynak: ${resource}`, { code: "UNKNOWN_RESOURCE" });
+    return resolvePath(withQuery(`${endpoint}/export`, query));
+  },
+  async exportCsv(resource, query = {}) {
+    const endpoint = API_CONFIG.endpoints[resource];
+    if (!endpoint) throw new ApiError(`Bilinmeyen kaynak: ${resource}`, { code: "UNKNOWN_RESOURCE" });
+    const response = await request(withQuery(`${endpoint}/export`, query));
+    return typeof response.data === "string" ? response.data : String(response.data ?? "");
+  },
+  async referenceOptions(resource, { search = "", pageSize = 20 } = {}) {
+    const { data } = await this.list(resource, search ? { q: search, pageSize } : { pageSize });
+    return Array.isArray(data) ? data : [];
   },
   async remove(resource, id) {
     const endpoint = API_CONFIG.endpoints[resource];

@@ -15,8 +15,10 @@
     "db:turso:bootstrap": "node --env-file=.env.local scripts/bootstrap-turso.mjs",
     "db:turso:set-password": "node --env-file=.env.local scripts/set-turso-password.mjs",
     "preview": "vite preview",
-    "test": "node --test tests/*.test.mjs",
-    "test:sites": "node --test tests/sites-worker.test.mjs"
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:unit": "node --test tests/*.test.mjs",
+    "test:sites": "npm run build && node --test tests/sites-worker.test.mjs",
+    "db:verify-backup": "node scripts/verify-backup.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "2.1.10",

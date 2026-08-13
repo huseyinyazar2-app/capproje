@@ -226,9 +226,21 @@ function phoneSessionCookie(token, maxAge = PHONE_SESSION_SECONDS) {
   return `${PHONE_SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
-function sameOrigin(request) {
+// Origin karşılaştırması host üzerinden yapılır. Ters vekil sunucu
+// X-Forwarded-Proto başlığını iletmezse şema karşılaştırması yanlış negatif
+// üretir ve tüm yazma işlemleri kilitlenirdi; host karşılaştırması ise saldırgan
+// alan adını yine reddeder. Ek alan adları ALLOWED_ORIGINS ile tanımlanabilir.
+function sameOrigin(request, env = {}) {
   const origin = request.headers.get("origin");
-  return !origin || origin === new URL(request.url).origin;
+  if (!origin) return true;
+  let originHost;
+  try { originHost = new URL(origin).host; } catch { return false; }
+  if (originHost === new URL(request.url).host) return true;
+  const allowed = String(env.ALLOWED_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean);
+  return allowed.some((value) => {
+    try { return new URL(value.includes("://") ? value : `https://${value}`).host === originHost; }
+    catch { return false; }
+  });
 }
 
 async function authHash(env, value) {
@@ -876,10 +888,16 @@ async function listResource(request, env, principal, slug, config) {
       byMembership.get(row.membership_id).push(row);
     }
     const fallbackById = new Map(fallbackRoles.map((role) => [role.id, role]));
+    // Ekip listesinde ham kullanıcı kimliği yerine ad ve e-posta gösterilebilsin.
+    const userRows = await all(env.DB.prepare(`SELECT id,full_name,email FROM users WHERE id IN (${rows.map(() => "?").join(",")})`).bind(...rows.map((row) => row.user_id)));
+    const userById = new Map(userRows.map((user) => [user.id, user]));
     for (let index = 0; index < rows.length; index += 1) {
       const roles = byMembership.get(rows[index].id) || [fallbackById.get(rows[index].role_id)].filter(Boolean);
       serialized[index].role_ids = roles.map((role) => role.id);
       serialized[index].role_names = roles.map((role) => role.name).join(", ");
+      const user = userById.get(rows[index].user_id);
+      serialized[index].user_name = user?.full_name || null;
+      serialized[index].user_email = user?.email || null;
     }
   }
   return json({ data: serialized, meta: { page, pageSize, total: Number(totalRow?.total || 0) } });
@@ -887,8 +905,17 @@ async function listResource(request, env, principal, slug, config) {
 
 async function getResource(env, principal, slug, config, resourceId) {
   if (!allowed(principal, permissionFor(slug, "read"))) return problem(403, "forbidden", "Bu kaydı görüntüleme yetkiniz yok.");
-  const row = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?`).bind(resourceId, principal.tenantId));
-  return row ? json({ data: serializeRow(row, slug, principal) }) : problem(404, "not_found", "Kayıt bulunamadı.");
+  let row = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?`).bind(resourceId, principal.tenantId));
+  // Üyelik seçicileri kullanıcı kimliğiyle de aranabilmelidir.
+  if (!row && slug === "memberships") row = await one(env.DB.prepare("SELECT * FROM memberships WHERE user_id=? AND tenant_id=?").bind(resourceId, principal.tenantId));
+  if (!row) return problem(404, "not_found", "Kayıt bulunamadı.");
+  const serialized = serializeRow(row, slug, principal);
+  if (slug === "memberships") {
+    const user = await one(env.DB.prepare("SELECT full_name,email FROM users WHERE id=?").bind(row.user_id));
+    serialized.user_name = user?.full_name || null;
+    serialized.user_email = user?.email || null;
+  }
+  return json({ data: serialized });
 }
 
 async function createResource(request, env, principal, slug, config) {
@@ -1164,7 +1191,7 @@ function phoneAuthReady(env) {
 
 async function startPhoneAuth(request, env) {
   if (!phoneAuthReady(env)) return problem(503, "phone_auth_unavailable", "Telefonla giriş henüz yapılandırılmamış.");
-  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
+  if (!sameOrigin(request, env)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
   let body;
   try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
   const phone = normalizeTurkishMobile(body?.phone);
@@ -1206,7 +1233,7 @@ async function startPhoneAuth(request, env) {
 
 async function verifyPhoneAuth(request, env) {
   if (!phoneAuthReady(env)) return problem(503, "phone_auth_unavailable", "Telefonla giriş henüz yapılandırılmamış.");
-  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
+  if (!sameOrigin(request, env)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
   let body;
   try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
   const phone = normalizeTurkishMobile(body?.phone);
@@ -1256,7 +1283,7 @@ function passwordAuthReady(env) {
 
 async function loginWithPassword(request, env) {
   if (!passwordAuthReady(env)) return problem(503, "password_auth_unavailable", "Şifreyle giriş henüz yapılandırılmamış.");
-  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
+  if (!sameOrigin(request, env)) return problem(403, "origin_forbidden", "Giriş isteğinin kaynağı geçersiz.");
   let body;
   try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
   const phone = normalizeTurkishMobile(body?.phone);
@@ -1315,7 +1342,7 @@ function passwordProblem(value, field = "Şifre") {
 // Davetle verilen geçici şifreyi kullanıcının kendisinin değiştirebilmesi için.
 async function changePassword(request, env, principal) {
   if (!passwordAuthReady(env)) return problem(503, "password_auth_unavailable", "Şifreyle giriş yapılandırılmamış.");
-  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "İsteğin kaynağı geçersiz.");
+  if (!sameOrigin(request, env)) return problem(403, "origin_forbidden", "İsteğin kaynağı geçersiz.");
   let body;
   try { body = await parseBody(request); } catch { return problem(400, "invalid_body", "Geçerli JSON gönderin."); }
   const invalid = passwordProblem(body?.new_password, "Yeni şifre");
@@ -1350,7 +1377,7 @@ async function sessionRoute(request, env, principal, segments) {
     return json({ data: rows.map((row) => ({ ...row, current: row.id === principal.sessionId })) });
   }
   if (segments.length === 4 && request.method === "DELETE") {
-    if (!sameOrigin(request)) return problem(403, "origin_forbidden", "İsteğin kaynağı geçersiz.");
+    if (!sameOrigin(request, env)) return problem(403, "origin_forbidden", "İsteğin kaynağı geçersiz.");
     const target = segments[3];
     if (target !== "others" && !validId(target)) return problem(400, "invalid_id", "Geçersiz oturum kimliği.");
     const timestamp = now();
@@ -1366,7 +1393,7 @@ async function sessionRoute(request, env, principal, segments) {
 }
 
 async function logoutPhoneAuth(request, env) {
-  if (!sameOrigin(request)) return problem(403, "origin_forbidden", "Çıkış isteğinin kaynağı geçersiz.");
+  if (!sameOrigin(request, env)) return problem(403, "origin_forbidden", "Çıkış isteğinin kaynağı geçersiz.");
   const token = cookieValue(request, PHONE_SESSION_COOKIE);
   if (token) await run(env.DB.prepare("UPDATE phone_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL").bind(now(), await sha256(token)));
   return json({ data: { authenticated: false } }, 200, { "set-cookie": phoneSessionCookie(null, 0) });
@@ -2247,7 +2274,7 @@ async function backupRoute(request, env, principal, segments) {
     return json({ data: result }, result.status === "completed" ? 201 : 503);
   }
   if (segments.length === 3 && segments[2] === "restore" && request.method === "POST") {
-    return problem(501, "restore_not_enabled", "Geri yükleme güvenlik nedeniyle otomatik çalıştırılmaz. Yedek doğrulaması ve açık bakım onayı sonrası yönetici aracıyla uygulanacaktır.");
+    return problem(501, "restore_not_enabled", "Geri yükleme güvenlik nedeniyle uygulama içinden çalıştırılmaz. Yedeği indirip sunucuda `npm run db:verify-backup -- <dosya>` ile doğrulayın; gerçek geri yükleme bakım penceresinde `--into` seçeneğiyle yapılır.", { verification_command: "npm run db:verify-backup -- <yedek.jsonl>" });
   }
   return problem(404, "not_found", "Yedek endpoint'i bulunamadı.");
 }
@@ -2297,7 +2324,6 @@ async function bootstrap(request, env) {
 const passwordChangeExemptPaths = new Set(["/api/v1/session", "/api/v1/me", "/api/v1/auth/password/change", "/api/v1/permissions"]);
 
 async function dispatchAuthenticated(request, env, principal, url, segments) {
-  if (url.pathname === "/api/v1/auth/password/change" && request.method === "POST") return changePassword(request, env, principal);
   if (principal.mustChangePassword && !passwordChangeExemptPaths.has(url.pathname) && !["GET", "HEAD"].includes(request.method)) {
     return problem(403, "password_change_required", "Devam etmeden önce geçici şifrenizi değiştirmelisiniz.");
   }
@@ -2444,7 +2470,7 @@ async function handleApi(request, env, context) {
   // Çerezle kimliklenen her mutasyon aynı kaynaktan gelmelidir. SameSite=Lax
   // çoğu senaryoyu kapatır; bu kontrol alt alan adı ve eski tarayıcı boşluklarını
   // da kapatır. Bearer tokenlı entegrasyonlar çerez kullanmadığı için muaftır.
-  if (!request.headers.get("authorization")?.startsWith("Bearer ") && !["GET", "HEAD", "OPTIONS"].includes(request.method) && !sameOrigin(request)) {
+  if (!request.headers.get("authorization")?.startsWith("Bearer ") && !["GET", "HEAD", "OPTIONS"].includes(request.method) && !sameOrigin(request, env)) {
     return problem(403, "origin_forbidden", "İsteğin kaynağı geçersiz.");
   }
   // Şifre değiştirme ve oturum bilgisi firma seçiminden bağımsız çalışmalıdır.

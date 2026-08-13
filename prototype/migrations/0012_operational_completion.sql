@@ -71,130 +71,200 @@ UPDATE suppliers SET metadata_json=json_set(metadata_json,'$.legacy_status',stat
 
 CREATE TRIGGER IF NOT EXISTS trg_projects_status_insert BEFORE INSERT ON projects
 WHEN NEW.status NOT IN ('lead','discovery','estimating','offered','contracted','design','procurement','production','installation','acceptance','completed','on_hold','lost','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for projects'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for projects');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_projects_status_update BEFORE UPDATE OF status ON projects
 WHEN NEW.status NOT IN ('lead','discovery','estimating','offered','contracted','design','procurement','production','installation','acceptance','completed','on_hold','lost','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for projects'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for projects');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_offers_status_insert BEFORE INSERT ON offers
 WHEN NEW.status NOT IN ('draft','costing','sent','pending','revision_requested','accepted','rejected','expired','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for offers'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for offers');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_offers_status_update BEFORE UPDATE OF status ON offers
 WHEN NEW.status NOT IN ('draft','costing','sent','pending','revision_requested','accepted','rejected','expired','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for offers'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for offers');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_purchase_requests_status_insert BEFORE INSERT ON purchase_requests
 WHEN NEW.status NOT IN ('draft','pending','approved','rejected','ordered','partial','received','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for purchase_requests'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for purchase_requests');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_purchase_requests_status_update BEFORE UPDATE OF status ON purchase_requests
 WHEN NEW.status NOT IN ('draft','pending','approved','rejected','ordered','partial','received','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for purchase_requests'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for purchase_requests');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_purchase_orders_status_insert BEFORE INSERT ON purchase_orders
 WHEN NEW.status NOT IN ('draft','ordered','partial','received','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for purchase_orders'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for purchase_orders');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_purchase_orders_status_update BEFORE UPDATE OF status ON purchase_orders
 WHEN NEW.status NOT IN ('draft','ordered','partial','received','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for purchase_orders'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for purchase_orders');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_production_orders_status_insert BEFORE INSERT ON production_orders
 WHEN NEW.status NOT IN ('draft','planned','released','waiting_material','in_progress','quality_control','paused','completed','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for production_orders'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for production_orders');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_production_orders_status_update BEFORE UPDATE OF status ON production_orders
 WHEN NEW.status NOT IN ('draft','planned','released','waiting_material','in_progress','quality_control','paused','completed','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for production_orders'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for production_orders');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_installations_status_insert BEFORE INSERT ON installations
 WHEN NEW.status NOT IN ('planned','survey_needed','site_waiting','in_transit','in_progress','incomplete','completed','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for installations'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for installations');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_installations_status_update BEFORE UPDATE OF status ON installations
 WHEN NEW.status NOT IN ('planned','survey_needed','site_waiting','in_transit','in_progress','incomplete','completed','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for installations'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for installations');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_financial_transactions_status_insert BEFORE INSERT ON financial_transactions
 WHEN NEW.status NOT IN ('draft','planned','pending','approved','collected','paid','overdue','reversed','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for financial_transactions'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for financial_transactions');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_financial_transactions_status_update BEFORE UPDATE OF status ON financial_transactions
 WHEN NEW.status NOT IN ('draft','planned','pending','approved','collected','paid','overdue','reversed','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for financial_transactions'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for financial_transactions');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_invoices_status_insert BEFORE INSERT ON invoices
 WHEN NEW.status NOT IN ('draft','open','partial','paid','collected','overdue','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for invoices'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for invoices');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_invoices_status_update BEFORE UPDATE OF status ON invoices
 WHEN NEW.status NOT IN ('draft','open','partial','paid','collected','overdue','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for invoices'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for invoices');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_employees_status_insert BEFORE INSERT ON employees
 WHEN NEW.status NOT IN ('active','on_leave','inactive','terminated')
-BEGIN SELECT RAISE(ABORT,'invalid status for employees'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for employees');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_employees_status_update BEFORE UPDATE OF status ON employees
 WHEN NEW.status NOT IN ('active','on_leave','inactive','terminated')
-BEGIN SELECT RAISE(ABORT,'invalid status for employees'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for employees');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_attendance_status_insert BEFORE INSERT ON attendance
 WHEN NEW.status IS NOT NULL AND NEW.status NOT IN ('present','absent','leave','remote','holiday','sick')
-BEGIN SELECT RAISE(ABORT,'invalid status for attendance'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for attendance');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_attendance_status_update BEFORE UPDATE OF status ON attendance
 WHEN NEW.status IS NOT NULL AND NEW.status NOT IN ('present','absent','leave','remote','holiday','sick')
-BEGIN SELECT RAISE(ABORT,'invalid status for attendance'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for attendance');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_leave_requests_status_insert BEFORE INSERT ON leave_requests
 WHEN NEW.status NOT IN ('pending','approved','rejected','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for leave_requests'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for leave_requests');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_leave_requests_status_update BEFORE UPDATE OF status ON leave_requests
 WHEN NEW.status NOT IN ('pending','approved','rejected','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for leave_requests'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for leave_requests');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_payroll_inputs_status_insert BEFORE INSERT ON payroll_inputs
 WHEN NEW.status IS NOT NULL AND NEW.status NOT IN ('draft','approved','exported','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for payroll_inputs'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for payroll_inputs');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_payroll_inputs_status_update BEFORE UPDATE OF status ON payroll_inputs
 WHEN NEW.status IS NOT NULL AND NEW.status NOT IN ('draft','approved','exported','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for payroll_inputs'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for payroll_inputs');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_work_items_status_insert BEFORE INSERT ON work_items
 WHEN NEW.status NOT IN ('planned','approved','production','completed','cancelled')
    OR NEW.revision_status NOT IN ('draft','review','changes_requested','approved','superseded')
-BEGIN SELECT RAISE(ABORT,'invalid status for work_items'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for work_items');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_work_items_status_update BEFORE UPDATE OF status, revision_status ON work_items
 WHEN NEW.status NOT IN ('planned','approved','production','completed','cancelled')
    OR NEW.revision_status NOT IN ('draft','review','changes_requested','approved','superseded')
-BEGIN SELECT RAISE(ABORT,'invalid status for work_items'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for work_items');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_project_tasks_status_insert BEFORE INSERT ON project_tasks
 WHEN NEW.status NOT IN ('todo','in_progress','blocked','completed','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for project_tasks'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for project_tasks');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_project_tasks_status_update BEFORE UPDATE OF status ON project_tasks
 WHEN NEW.status NOT IN ('todo','in_progress','blocked','completed','cancelled')
-BEGIN SELECT RAISE(ABORT,'invalid status for project_tasks'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for project_tasks');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_accounts_status_insert BEFORE INSERT ON accounts
 WHEN NEW.status NOT IN ('active','passive','closed')
-BEGIN SELECT RAISE(ABORT,'invalid status for accounts'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for accounts');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_accounts_status_update BEFORE UPDATE OF status ON accounts
 WHEN NEW.status NOT IN ('active','passive','closed')
-BEGIN SELECT RAISE(ABORT,'invalid status for accounts'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for accounts');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_customers_status_insert BEFORE INSERT ON customers
 WHEN NEW.status NOT IN ('active','passive','blacklisted')
-BEGIN SELECT RAISE(ABORT,'invalid status for customers'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for customers');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_customers_status_update BEFORE UPDATE OF status ON customers
 WHEN NEW.status NOT IN ('active','passive','blacklisted')
-BEGIN SELECT RAISE(ABORT,'invalid status for customers'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for customers');
+END;
 
 CREATE TRIGGER IF NOT EXISTS trg_suppliers_status_insert BEFORE INSERT ON suppliers
 WHEN NEW.status NOT IN ('active','passive','blacklisted')
-BEGIN SELECT RAISE(ABORT,'invalid status for suppliers'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for suppliers');
+END;
 CREATE TRIGGER IF NOT EXISTS trg_suppliers_status_update BEFORE UPDATE OF status ON suppliers
 WHEN NEW.status NOT IN ('active','passive','blacklisted')
-BEGIN SELECT RAISE(ABORT,'invalid status for suppliers'); END;
+BEGIN
+  SELECT RAISE(ABORT,'invalid status for suppliers');
+END;
 
 -- Stok çıkışı, projeye ayrılmış rezervasyonun altına düşmemelidir.
 CREATE TRIGGER IF NOT EXISTS trg_inventory_on_hand_not_negative
 BEFORE UPDATE OF on_hand_quantity ON inventory_items
 WHEN NEW.on_hand_quantity < 0
-BEGIN SELECT RAISE(ABORT,'inventory on-hand quantity cannot be negative'); END;
+BEGIN
+  SELECT RAISE(ABORT,'inventory on-hand quantity cannot be negative');
+END;
 
 INSERT OR IGNORE INTO permissions (code, description) VALUES
 ('production-orders.complete','Üretim emrini başlatma, tamamlama ve iptal etme'),
