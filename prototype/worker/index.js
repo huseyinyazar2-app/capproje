@@ -495,7 +495,9 @@ async function authenticate(request, env) {
   const tenantId = request.headers.get("x-tenant-id");
   if (!tenantId) {
     const memberships = await all(env.DB.prepare("SELECT m.id AS membership_id,m.tenant_id,m.title,r.id AS role_id,r.code AS role_code,r.name AS role_name,t.name AS tenant_name,t.slug AS tenant_slug FROM memberships m JOIN roles r ON r.id=m.role_id AND r.tenant_id=m.tenant_id JOIN tenants t ON t.id=m.tenant_id WHERE m.user_id=? AND m.status='active' AND t.status='active' ORDER BY t.name").bind(user.id));
-    if (memberships.length === 0) return { ...base, forbiddenTenant: true };
+    // Hiç üyelik yoksa bu bir yetki hatası değil, eksik kurulumdur; kullanıcıya
+    // "yetkin yok" demek yerine ne yapması gerektiğini söyleyebilmeliyiz.
+    if (memberships.length === 0) return { ...base, noMembership: true };
     if (memberships.length > 1) {
       const expanded = await Promise.all(memberships.map((item) => expandMembership(item)));
       return { ...base, tenantSelectionRequired: true, tenants: expanded.map(({ membership }) => ({ id: membership.tenant_id, name: membership.tenant_name, slug: membership.tenant_slug, role: membership.roles[0], roles: membership.roles })) };
@@ -3040,7 +3042,10 @@ async function handleApi(request, env, context) {
     return problem(400, "tenant_required", "Birden fazla firma üyeliğiniz var; x-tenant-id seçilmelidir.", { tenants: principal.tenants });
   }
   if (principal.tenantMissing) return problem(400, "tenant_required", "x-tenant-id başlığı zorunludur.");
-  if (principal.forbiddenTenant) return problem(403, "tenant_forbidden", "Bu firmaya erişim yetkiniz yok.");
+  if (principal.noMembership) {
+    return problem(403, "no_membership", "Hesabınız henüz bir firmaya bağlı değil. Firma yöneticinizin sizi davet etmesi gerekiyor.");
+  }
+  if (principal.forbiddenTenant) return problem(403, "tenant_forbidden", "Seçili firmaya erişim yetkiniz yok. Firma seçimi sıfırlandı, sayfayı yenileyin.");
 
   if (env.FILES && env.ENABLE_REQUEST_BACKUP_FALLBACK !== "false") {
     const fallback = ensureDailyBackup(env, principal.tenantId);

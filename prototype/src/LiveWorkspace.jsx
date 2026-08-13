@@ -1948,7 +1948,11 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
       if (navigator.onLine) syncQueuedRecords();
     } catch (error) {
       const needsLogin = error instanceof ApiError && [401, 403].includes(error.status);
-      setSessionState({ loading: false, session: null, error: needsLogin ? null : error, needsLogin });
+      // 401 sıradan "oturum yok" hâlidir, açıklama gerekmez. 403 ise kimliği
+      // doğrulanmış ama erişemeyen bir kullanıcıdır; sebebi göstermezsek kişi
+      // giriş ekranında sonsuz döngüye düşer ve neden olduğunu asla öğrenemez.
+      const explain = error instanceof ApiError && error.status === 403;
+      setSessionState({ loading: false, session: null, error: needsLogin && !explain ? null : error, needsLogin });
     }
   }
 

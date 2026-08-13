@@ -285,7 +285,27 @@ function unwrap(payload) {
   return payload;
 }
 
+// Tarayıcıda saklanan firma kimliği, veritabanı yeniden kurulduğunda ya da üyelik
+// kaldırıldığında geçersiz kalır. O hâlde her istek 403 döner ve kullanıcı hiçbir
+// şey yapamaz; çıkış düğmesine bile ulaşamaz. Bu yüzden bayat kimlik bir kez
+// temizlenip istek tekrarlanır; sunucu doğru firmayı kendisi seçer.
 async function request(path, options = {}) {
+  try {
+    return await send(path, options);
+  } catch (error) {
+    const recoverable = error instanceof ApiError
+      && error.code === "tenant_forbidden"
+      && !options.tenantId
+      && !options.tenantRetry
+      && !(options.body instanceof FormData)
+      && storageGet(TENANT_KEY);
+    if (!recoverable) throw error;
+    storageSet(TENANT_KEY, null);
+    return send(path, { ...options, tenantRetry: true });
+  }
+}
+
+async function send(path, options = {}) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), options.timeoutMs || API_CONFIG.timeoutMs);
   const tenantId = options.tenantId || storageGet(TENANT_KEY);
@@ -563,6 +583,9 @@ export const api = {
   },
   async loginWithPassword({ phone, password }) {
     storageSet(SESSION_FALLBACK_KEY, null);
+    // Önceki kullanıcıdan ya da yeniden kurulan veritabanından kalan firma
+    // kimliği, yeni oturumu ilk istekte kilitliyordu.
+    storageSet(TENANT_KEY, null);
     return unwrap(await request(API_CONFIG.endpoints.passwordLogin, { method: "POST", body: { phone, password } }));
   },
   useSessionFallback(token) {

@@ -589,4 +589,43 @@ test("a session survives a browser that refuses to store the cookie", async () =
     headers: { "x-session-token": "cps_sahte" },
   }), env);
   assert.equal(rejected.status, 401, "sahte jeton kabul edilmemeli");
+
+  // Veritabanı yeniden kurulduğunda tarayıcıda kalan firma kimliği geçersizdir.
+  // Bu, yetki hatasından ayrı bir koddur; istemci bunu görüp seçimi sıfırlar.
+  const stale = await worker.fetch(new Request("https://cap.example/api/v1/session", {
+    headers: { "x-session-token": token, "x-tenant-id": "ten_00000000-0000-4000-8000-000000000000" },
+  }), env);
+  assert.equal(stale.status, 403);
+  assert.equal((await stale.json()).error.code, "tenant_forbidden");
+
+  // Firma kimliği gönderilmediğinde sunucu doğru firmayı kendisi seçmelidir.
+  const recovered = await worker.fetch(new Request("https://cap.example/api/v1/session", {
+    headers: { "x-session-token": token },
+  }), env);
+  assert.equal(recovered.status, 200, "bayat firma kimligi temizlenince oturum acilmali");
+});
+
+test("a user with no membership is told what to do instead of being denied", async () => {
+  const { database, env } = await setup();
+  env.PASSWORD_AUTH_PEPPER = "test-pepper-at-least-16-characters";
+  await worker.fetch(request("/api/v1/memberships/invite", {
+    body: { email: "bosta@a.test", full_name: "Uyeliksiz", phone: "05321116677", temporary_password: "gecici123", role_ids: ["role-owner"] },
+  }), env);
+  database.prepare("UPDATE users SET status='active' WHERE email='bosta@a.test'").run();
+  database.prepare("UPDATE memberships SET status='active' WHERE user_id=(SELECT id FROM users WHERE email='bosta@a.test')").run();
+  const login = await worker.fetch(new Request("https://cap.example/api/v1/auth/password/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://cap.example" },
+    body: JSON.stringify({ phone: "05321116677", password: "gecici123" }),
+  }), env);
+  const token = (await login.json()).data.session_token;
+
+  database.prepare("DELETE FROM memberships WHERE user_id=(SELECT id FROM users WHERE email='bosta@a.test')").run();
+  const session = await worker.fetch(new Request("https://cap.example/api/v1/session", {
+    headers: { "x-session-token": token },
+  }), env);
+  assert.equal(session.status, 403);
+  const body = await session.json();
+  assert.equal(body.error.code, "no_membership");
+  assert.match(body.error.message, /davet/i, "kullaniciya ne yapmasi gerektigi soylenmeli");
 });
