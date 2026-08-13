@@ -1979,17 +1979,33 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
   }
 
   async function loginWithPassword(values) {
-    await api.loginWithPassword(values);
-    const session = await api.session().catch(() => null);
-    // Giriş başarılı olduğu hâlde oturum okunamıyorsa çerez tarayıcıya
-    // kaydedilmemiştir. Sessizce giriş ekranına dönmek yerine sebebi söylüyoruz.
-    if (!session) {
-      throw new ApiError(
-        "Giriş doğrulandı ancak oturum çerezi tarayıcıya kaydedilemedi. Sitenin HTTPS üzerinden açıldığından ve tarayıcınızın çerezleri engellemediğinden emin olun.",
-        { code: "SESSION_COOKIE_BLOCKED", status: 401 },
+    const login = await api.loginWithPassword(values);
+    // Şifre doğrulandı. Oturumun gerçekten okunabildiğini burada teyit ediyoruz;
+    // aksi hâlde kullanıcı hiçbir açıklama görmeden giriş ekranına geri düşüyor.
+    let failure = await sessionUnreadableReason();
+    if (failure && login?.session_token) {
+      // Tarayıcı çerezi saklamadı. Aynı oturumu başlıkla taşıyıp devam ediyoruz.
+      api.useSessionFallback(login.session_token);
+      failure = await sessionUnreadableReason();
+      if (failure) api.useSessionFallback(null);
+    }
+    if (failure) throw failure;
+    await bootstrap();
+  }
+
+  // Oturum okunamıyorsa sebebini ayırt eder: 401 gerçekten kimliksiz demektir,
+  // diğer hatalar (sunucu/ağ/yapılandırma) olduğu gibi yukarı taşınmalıdır.
+  async function sessionUnreadableReason() {
+    try {
+      await api.session();
+      return null;
+    } catch (error) {
+      if (error instanceof ApiError && error.status && error.status !== 401) return error;
+      return new ApiError(
+        "Giriş doğrulandı ancak oturum tarayıcıda saklanamadı. Tarayıcınızın bu site için çerezleri ve site verilerini engellemediğinden emin olun.",
+        { code: "SESSION_NOT_PERSISTED", status: 401 },
       );
     }
-    await bootstrap();
   }
 
   async function changeTenant(tenantId) {

@@ -554,3 +554,39 @@ test("the session cookie adapts to the request scheme so plain-HTTP deployments 
   const afterLogout = await worker.fetch(new Request("http://cap.example/api/v1/session", { headers: { cookie: `capproje_session=${token}` } }), env);
   assert.equal(afterLogout.status, 401, "cikis sonrasi oturum gecersiz olmali");
 });
+
+test("a session survives a browser that refuses to store the cookie", async () => {
+  const { database, env } = await setup();
+  env.PASSWORD_AUTH_PEPPER = "test-pepper-at-least-16-characters";
+  await worker.fetch(request("/api/v1/memberships/invite", {
+    body: { email: "montaj@a.test", full_name: "Montaj", phone: "05321114455", temporary_password: "gecici123", role_ids: ["role-owner"] },
+  }), env);
+  database.prepare("UPDATE users SET status='active' WHERE email='montaj@a.test'").run();
+  database.prepare("UPDATE memberships SET status='active' WHERE user_id=(SELECT id FROM users WHERE email='montaj@a.test')").run();
+
+  const login = await worker.fetch(new Request("https://cap.example/api/v1/auth/password/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://cap.example" },
+    body: JSON.stringify({ phone: "05321114455", password: "gecici123" }),
+  }), env);
+  assert.equal(login.status, 200);
+  const token = (await login.json()).data.session_token;
+  assert.ok(token, "giris yaniti yedek oturum jetonunu tasimali");
+
+  // Tarayıcı çerezi hiç saklamamış olsa bile aynı jeton başlıkla çalışmalı.
+  const session = await worker.fetch(new Request("https://cap.example/api/v1/session", {
+    headers: { "x-session-token": token },
+  }), env);
+  assert.equal(session.status, 200, "cerez olmadan basliktaki jetonla oturum acilmali");
+
+  // İptal edilmiş bir API anahtarı geçerli tarayıcı oturumunu bloke etmemeli.
+  const withStaleBearer = await worker.fetch(new Request("https://cap.example/api/v1/session", {
+    headers: { "x-session-token": token, authorization: "Bearer cap_gecersiz_anahtar" },
+  }), env);
+  assert.equal(withStaleBearer.status, 200, "gecersiz Bearer anahtari cerez/baslik yolunu kapatmamali");
+
+  const rejected = await worker.fetch(new Request("https://cap.example/api/v1/session", {
+    headers: { "x-session-token": "cps_sahte" },
+  }), env);
+  assert.equal(rejected.status, 401, "sahte jeton kabul edilmemeli");
+});

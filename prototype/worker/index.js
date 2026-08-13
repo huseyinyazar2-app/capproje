@@ -110,8 +110,17 @@ function sessionCookieName(request) {
   return requestIsSecure(request) ? PHONE_SESSION_COOKIE : PHONE_SESSION_COOKIE_INSECURE;
 }
 
+// Çerez, HttpOnly olduğu için birinci tercihtir. Ancak tarayıcı çerezi hiç
+// saklamazsa (üçüncü taraf çerez engeli, gizli mod kısıtları, karışık şema)
+// kullanıcı sonsuza dek giriş ekranına düşer. Bu yüzden istemci, çerezin
+// tutunmadığını tespit ettiğinde aynı oturum jetonunu bu başlıkla gönderir.
+const SESSION_HEADER = "x-session-token";
+
 function readSessionToken(request) {
-  return cookieValue(request, PHONE_SESSION_COOKIE) || cookieValue(request, PHONE_SESSION_COOKIE_INSECURE);
+  return cookieValue(request, PHONE_SESSION_COOKIE)
+    || cookieValue(request, PHONE_SESSION_COOKIE_INSECURE)
+    || (request.headers.get(SESSION_HEADER) || "").trim()
+    || null;
 }
 const PHONE_SESSION_SECONDS = 12 * 60 * 60;
 // Oturum, kullanıldıkça kayan pencereyle uzar; vardiya ortasında düşmemesi için.
@@ -425,7 +434,10 @@ async function authenticate(request, env) {
     const tokenHash = await sha256(authorization.slice(7).trim());
     user = await one(env.DB.prepare("SELECT u.id, u.email, u.full_name, u.phone, u.status, u.must_change_password FROM api_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>?) AND u.status='active'").bind(tokenHash, now()));
     if (user) await run(env.DB.prepare("UPDATE api_tokens SET last_used_at=? WHERE token_hash=?").bind(now(), tokenHash));
-  } else {
+  }
+  // Süresi dolmuş ya da iptal edilmiş bir Bearer anahtarı, geçerli bir tarayıcı
+  // oturumunu bloke etmemeli; bu yüzden çerez/başlık yolu her hâlükârda denenir.
+  if (!user) {
     const sessionToken = readSessionToken(request);
     if (sessionToken) {
       const tokenHash = await sha256(sessionToken);
@@ -1454,7 +1466,7 @@ async function verifyPhoneAuth(request, env) {
   ];
   if (typeof env.DB.batch === "function") await env.DB.batch(statements);
   else for (const statement of statements) await run(statement);
-  return json({ data: { authenticated: true, expires_at: expiresAt } }, 200, { "set-cookie": phoneSessionCookie(request, rawToken) });
+  return json({ data: { authenticated: true, expires_at: expiresAt, session_token: rawToken } }, 200, { "set-cookie": phoneSessionCookie(request, rawToken) });
 }
 
 // Geçerli bir pepper tanımlamak, şifreyle girişi açmak demektir. Ayrıca bir
@@ -1514,7 +1526,9 @@ async function loginWithPassword(request, env) {
   ];
   if (typeof env.DB.batch === "function") await env.DB.batch(statements);
   else for (const statement of statements) await run(statement);
-  return json({ data: { authenticated: true, expires_at: expiresAt, must_change_password: Boolean(user.must_change_password) } }, 200, { "set-cookie": phoneSessionCookie(request, rawToken) });
+  // session_token yalnızca çerez tutunmazsa istemcide saklanır; HTTPS
+  // kurulumlarda kimlik doğrulama HttpOnly çerezle yürümeye devam eder.
+  return json({ data: { authenticated: true, expires_at: expiresAt, must_change_password: Boolean(user.must_change_password), session_token: rawToken } }, 200, { "set-cookie": phoneSessionCookie(request, rawToken) });
 }
 
 function passwordProblem(value, field = "Şifre") {
@@ -3041,7 +3055,7 @@ async function fetchHandler(request, env, context) {
   const url = new URL(request.url);
   const isApiRoute = url.pathname.startsWith("/api/v1/") || url.pathname.startsWith("/api/admin/");
   if (request.method === "OPTIONS" && isApiRoute) {
-    return new Response(null, { status: 204, headers: { allow: "GET,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "authorization,content-type,idempotency-key,x-tenant-id,x-request-id", "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS" } });
+    return new Response(null, { status: 204, headers: { allow: "GET,POST,PUT,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "authorization,content-type,idempotency-key,x-tenant-id,x-request-id,x-session-token", "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS" } });
   }
   if (isApiRoute) {
     try { return await handleApi(request, env, context); }

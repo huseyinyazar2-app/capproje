@@ -61,6 +61,11 @@ export const API_CONFIG = Object.freeze({
 });
 
 const TENANT_KEY = "capproje.tenant.id";
+// Oturum çerezi HttpOnly olduğu için asıl yol odur. Ancak bazı tarayıcı ve
+// barındırma kombinasyonlarında çerez hiç saklanmıyor ve kullanıcı giriş
+// yaptıktan sonra tekrar giriş ekranına düşüyor. Böyle bir durumda -yalnızca
+// böyle bir durumda- aynı jeton burada saklanıp başlıkla gönderilir.
+const SESSION_FALLBACK_KEY = "capproje.session.fallback-token";
 const DEMO_USER_KEY = "capproje.demo.user-email";
 const DEMO_AUTH_ENABLED = import.meta.env.DEV || String(import.meta.env.VITE_ENABLE_DEMO_AUTH) === "true";
 let accessToken = null;
@@ -290,6 +295,8 @@ async function request(path, options = {}) {
   headers.set("Accept", "application/json");
   if (options.body != null && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const sessionFallback = storageGet(SESSION_FALLBACK_KEY);
+  if (sessionFallback) headers.set("X-Session-Token", sessionFallback);
   if (tenantId) headers.set("X-Tenant-Id", tenantId);
   if (demoUserEmail) headers.set("X-User-Email", demoUserEmail);
 
@@ -555,7 +562,14 @@ export const api = {
     return (await request(API_CONFIG.endpoints.phoneAuthStart, { method: "POST", body: { phone } })).data;
   },
   async loginWithPassword({ phone, password }) {
+    storageSet(SESSION_FALLBACK_KEY, null);
     return unwrap(await request(API_CONFIG.endpoints.passwordLogin, { method: "POST", body: { phone, password } }));
+  },
+  useSessionFallback(token) {
+    storageSet(SESSION_FALLBACK_KEY, token || null);
+  },
+  hasSessionFallback() {
+    return Boolean(storageGet(SESSION_FALLBACK_KEY));
   },
   async verifyPhoneAuth({ phone, code, challengeId }) {
     return (await request(API_CONFIG.endpoints.phoneAuthVerify, { method: "POST", body: { phone, code, challenge_id: challengeId } })).data;
@@ -566,6 +580,7 @@ export const api = {
       storageSet(TENANT_KEY, null);
     }
     accessToken = null;
+    storageSet(SESSION_FALLBACK_KEY, null);
     await this.setOfflineContext(null);
     if (DEMO_AUTH_ENABLED) storageSet(DEMO_USER_KEY, null);
   },
