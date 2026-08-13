@@ -7,6 +7,8 @@ Capproje Orman Ürünleri için hazırlanmış, mobil uyumlu ve PWA kurulabilir 
 - Çok kiracılı D1/SQLite veri modeli ve tenant izolasyonu
 - Rol ve alan bazlı erişim; maliyet, maaş ve hassas İK verisi koruması
 - Teklif, proje, iş kalemi, üretim, satın alma, montaj, finans, ön muhasebe ve İK akışları
+- Uçtan uca operasyon zinciri: keşif → teklif → sözleşme → tasarım → malzeme planı →
+  satın alma talebi → sipariş → mal kabul → stok → üretim → kalite → montaj → teslim
 - Müşteri, tedarikçi, dosya, kullanıcı, rol, audit ve yedek yönetimi
 - R2 dosya saklama, günlük tenant yedeği ve idempotent iş akışları
 - Mobil/masaüstü uyumlu PWA; offline durumda kritik işlemleri güvenli biçimde engelleme
@@ -39,7 +41,31 @@ Sunucuda çalışma sırası `npm ci`, `npm run build` ve `npm run start:self-ho
 
 Kurulumdan önce en az şu değerler değiştirilmelidir: `PASSWORD_AUTH_PEPPER`, `BOOTSTRAP_SECRET` ve ilk yönetici şifresi. `ALLOW_DEV_AUTH` üretimde hiçbir zaman açılmamalıdır. Sağlık kontrolü `/api/v1/health` adresindedir.
 
+Nginx, uygulamaya `Host` ve `X-Forwarded-Proto` başlıklarını iletmelidir. Uygulama
+yazma isteklerinde kaynak alan adını doğrular; ön yüz farklı bir alan adından
+sunuluyorsa `ALLOWED_ORIGINS` ile bu alan adı tanımlanmalıdır.
+
+`DATABASE_PROVIDER=turso` kullanılıyorsa migration'lar uygulama başlarken
+otomatik uygulanmaz; her dağıtımdan sonra `npm run db:turso:migrate`
+çalıştırılmalıdır. Yerel SQLite modunda migration'lar açılışta uygulanır.
+
+### Yedek doğrulama
+
+Yedek almak yeterli değildir; geri yüklenebildiği kanıtlanmalıdır. İndirilen bir
+tenant yedeğini boş bir veritabanına geri yükleyerek doğrulayın:
+
+```bash
+npm run db:verify-backup -- /yol/yedek.jsonl
+```
+
+Komut varsayılan olarak bellek içi prova yapar ve canlı veriye dokunmaz. Gerçek
+bir geri yükleme için bakım penceresinde `--into geri-yukleme.sqlite` ekleyin.
+
 ## Vercel ile yayınlama
+
+Vercel yalnızca sunum prototipini yayımlar; **çalışan ürün Vercel'de çalışmaz**
+çünkü Worker API'si, veritabanı ve dosya deposu orada bulunmaz. Canlı ürün için
+Ubuntu sunucusu (yukarıdaki bölüm) veya Cloudflare Workers kullanın.
 
 1. Bu GitHub deposunu Vercel'e bağlayın.
 2. Proje kök dizinini değiştirmeden devam edin.

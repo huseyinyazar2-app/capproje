@@ -93,7 +93,11 @@ test("stock posting stays in the atomic worker batch and migrations remain deplo
   assert.doesNotMatch(migration, /CREATE TRIGGER|\bBEGIN\b/);
   assert.match(worker, /const postMovement = env\.DB\.prepare/);
   assert.match(worker, /const updateBalance = env\.DB\.prepare/);
-  assert.match(worker, /commitWorkflow\([\s\S]*\[postMovement, updateBalance\]/);
+  assert.match(worker, /commitWorkflow\([\s\S]*\[updateBalance, postMovement\]/);
+  // Kesinleşme, stok satırının aynı işlemdeki damgasına bağlıdır; yetersiz stokta
+  // iki statement de boş geçer ve hiçbir yarım durum kalmaz.
+  assert.match(worker, /AND EXISTS \(SELECT 1 FROM inventory_items ii WHERE ii\.id=stock_movements\.inventory_item_id/);
+  assert.doesNotMatch(worker, /__insufficient_stock__/);
 });
 
 test("every domain resource is tenant-scoped, RBAC protected, audited and backed up", () => {

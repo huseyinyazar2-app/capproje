@@ -64,7 +64,9 @@ test("offline state blocks risky mutations while allowing only the safe create q
 test("create and edit forms are connected to API mutations and backend-compatible permissions", () => {
   assert.match(liveSource, /permissionAllows\(session,\s*["']create["'],\s*module\.resource\)/);
   assert.match(liveSource, /permissionAllows\(session,\s*["']update["'],\s*module\.resource\)/);
-  assert.match(liveSource, /await api\.create\(module\.resource,\s*payload\)/);
+  // Oluşturma çağrısı, form açılışında üretilen sabit idempotency anahtarını taşır.
+  assert.match(liveSource, /await api\.create\(module\.resource,\s*payload,\s*\{\s*idempotencyKey: modal\?\._idempotencyKey\s*\}\)/);
+  assert.match(liveSource, /_idempotencyKey: api\.newIdempotencyKey\(module\.resource\)/);
   assert.match(liveSource, /await api\.update\(module\.resource,\s*modal\.id,\s*payload\)/);
   assert.match(liveSource, /<form onSubmit=\{submit\}>/);
   assert.match(liveSource, /onEdit=\{setModal\}/);

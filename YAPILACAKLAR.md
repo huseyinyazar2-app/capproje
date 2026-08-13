@@ -72,7 +72,7 @@
 
 ## Öncelik 1 — Proje kârlılığı ve maliyet kaçağı
 
-- [ ] Proje, mahal ve iş kalemi seviyesinde teklif bütçesi, taahhüt edilmiş maliyet, gerçekleşen maliyet ve kalan tahmini maliyeti göstermek.
+- [~] Proje seviyesinde taahhüt edilmiş maliyet, gerçekleşen maliyet ve tahmini bitiş maliyeti ayrıştırıldı. Mahal ve iş kalemi kırılımı açık.
 - [ ] Projenin tahmini bitiş maliyetini ve tahmini bitiş kârını hesaplamak.
 - [ ] Malzeme artışı, fazla tüketim, fire, yeniden üretim, gecikme, fazla mesai, dış hizmet ve onaysız ek iş kaynaklı kayıpları ayırmak.
 - [ ] “Kâr neden düştü?” açıklamasını tutar ve kaynağıyla göstermek.
@@ -81,9 +81,9 @@
 
 ## Öncelik 1 — Satın alma ve dışarı verilen üretim
 
-- [ ] Satın alma talebi, tedarikçi fiyat toplama, karşılaştırma, onay ve sipariş akışını tamamlamak.
+- [x] Satın alma talebi, onay ve sipariş akışını tamamlamak. (Tedarikçi fiyat toplama ve karşılaştırma hâlâ açık.)
 - [ ] İhtiyaç tarihi ve üretim planına göre satın alma önerileri oluşturmak.
-- [ ] Stokta bulunan, rezerve edilen ve satın alınması gereken miktarları ayırmak.
+- [x] Stokta bulunan, rezerve edilen, sipariş edilen, teslim alınan ve tüketilen miktarları ayırmak.
 - [ ] Cila, metal, cam, CNC, döşeme ve benzeri dış işlemleri proje ve iş kalemiyle ilişkilendirmek.
 - [ ] Dışarı gönderilen parçanın adet, revizyon, gönderim, beklenen dönüş ve gerçek dönüş bilgisini izlemek.
 - [ ] Numune onayı, kalite kabulü, eksik/kusurlu dönüş ve kusur sorumlusunu kaydetmek.
@@ -92,11 +92,11 @@
 
 ## Öncelik 1 — Üretim, kalite ve saha kullanımı
 
-- [ ] İş emri, ürün reçetesi, operasyon sırası, iş merkezi ve sorumlu yapısını kurmak.
+- [~] İş emri yaşam döngüsü (salım, başlatma, kalite, tamamlama, iptal) kuruldu. Ürün reçetesi ve operasyon sırası açık.
 - [ ] Üretim kapasitesi, iş merkezi yükü ve darboğaz görünümünü tasarlamak.
 - [ ] QR/barkod ile iş emri ve ürün takibi sağlamak.
 - [ ] Usta ekranını yalnızca güncel çizim, yapılacak iş, malzeme, miktar, kontrol listesi ve temel aksiyonlarla sadeleştirmek.
-- [ ] Başlat, duraklat, tamamla, sorun bildir ve fotoğraf ekle işlemlerini mobil uyumlu yapmak.
+- [~] Başlat, duraklat, tamamla ve fotoğraf ekle işlemleri çalışıyor. Sorun bildirme akışı açık.
 - [ ] Kalite kontrol noktaları, ölçüm sonuçları, kusur, yeniden işlem ve hurda kaydı eklemek.
 - [ ] Zayıf internet bağlantısında çalışacak çevrimdışı PWA kullanımını planlamak.
 
@@ -179,3 +179,36 @@
 - [ ] Yeterli veri ve açık fayda olmadan gösteriş amaçlı yapay zekâ özellikleri eklememek.
 - [ ] Ürün-pazar uyumu görülmeden sınırsız özelleştirilebilir süreç motoru geliştirmemek.
 - [ ] Her müşteri için çekirdek ürünü çatallayan özel geliştirmeler yapmamak.
+
+## Kod incelemesi sonrası kapatılan boşluklar (0012 sürümü)
+
+- [x] Üretim emrini salımdan sonra başlatma, kalite kontrole alma, tamamlama ve
+      iptal etme akışı. Bu akış olmadan hiçbir proje montaj aşamasına geçemiyordu.
+- [x] Stok rezervasyonunun kısmi kalmasını engelleyen atomik güncelleme.
+- [x] Onaylı satın alma talebinden sipariş açma ve siparişte mal kabul; mal kabulü
+      stok girişi yazıyor ve malzeme ihtiyacının teslim alınan miktarını güncelliyor.
+- [x] Rezervasyonu üretime verme ve serbest bırakma; asılı kalan rezervasyonlar kapandı.
+- [x] Ayrıntılı yetki kodlarının (files.write, memberships.write, roles.write,
+      backups.read/write) sunucuda karşılığının olması ve kataloğun veritabanından
+      servis edilmesi.
+- [x] `export` yetkisinin CSV dışa aktarma ile gerçek karşılığına kavuşması.
+- [x] Şifre değiştirme, geçici şifre zorunluluğu, çok cihazlı oturum ve oturum yönetimi.
+- [x] Sistem rollerinin yalnız firma sahibi tarafından atanabilmesi.
+- [x] Eski tablolarda durum alanı doğrulaması (sunucu + veritabanı tetikleyicisi).
+- [x] Formlardaki durum seçeneklerinin sunucunun kabul ettiği kümeyle hizalanması.
+- [x] Ham kayıt kimliği yazmak yerine arayarak seçim (ilişki seçicileri).
+- [x] İş akışı modalinin ek alanları (fatura, finans hareketi, yeni revizyon) gerçekten göndermesi.
+- [x] Çift tıklamada ikinci kayıt oluşmasını engelleyen sabit idempotency anahtarı.
+- [x] Düzenlemede boş bırakılan alanın gerçekten temizlenebilmesi.
+- [x] Takılan idempotency kayıtlarının serbest bırakılması ve saklama süresi.
+- [x] Kârlılıkta taahhüt/gerçekleşen ayrımı, alacak kapsamı, toplam yük bazlı kapasite çakışması.
+- [x] Yedek geri yükleme provası (`npm run db:verify-backup`).
+
+### Bu incelemeden çıkan, hâlâ açık maddeler
+
+- [ ] Tedarikçi fiyat toplama ve teklif karşılaştırma ekranı.
+- [ ] Mahal ve iş kalemi seviyesinde maliyet kırılımı ve kalan tahmini maliyet.
+- [ ] Ürün reçetesi, operasyon sırası ve iş merkezi kapasite planı.
+- [ ] Üretimde sorun bildirme ve yeniden işlem kaydı.
+- [ ] SMS OTP'nin devreye alınması (altyapı hazır, kapalı).
+- [ ] Şifre sıfırlama (unutan kullanıcı için yönetici dışı akış).
