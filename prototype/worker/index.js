@@ -130,7 +130,9 @@ const PHONE_SESSION_MAX_PER_USER = 10;
 const PASSWORD_ITERATIONS = 100_000;
 const PASSWORD_ITERATIONS_CEILING = 1_000_000;
 const staticSecurityHeaders = {
-  "content-security-policy": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'",
+  // Yazı tipleri artık uygulamayla birlikte sunulduğu için hiçbir dış kaynağa
+  // izin verilmiyor; sayfa tamamen kendi alan adından yüklenir.
+  "content-security-policy": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'",
   "x-frame-options": "DENY",
   "referrer-policy": "strict-origin-when-cross-origin",
   "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",

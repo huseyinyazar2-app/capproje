@@ -150,7 +150,9 @@ export class StaticAssets {
       const headers = new Headers({
         "content-type": mimeTypes.get(path.extname(target).toLowerCase()) || "application/octet-stream",
         "content-length": String(info.size),
-        "cache-control": relative.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+        // Yazı tipi dosyalarının adı içerik özetini taşır, bu yüzden derlenmiş
+        // varlıklar gibi kalıcı olarak önbelleğe alınabilirler.
+        "cache-control": relative.startsWith("assets/") || relative.startsWith("fonts/") ? "public, max-age=31536000, immutable" : "no-cache",
       });
       return new Response(request.method === "HEAD" ? null : await readFile(target), { headers });
     } catch (error) {

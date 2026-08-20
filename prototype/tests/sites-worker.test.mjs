@@ -62,7 +62,11 @@ test("adds restrictive security headers to static assets and the app shell", asy
     assert.match(csp, /script-src 'self'/);
     assert.doesNotMatch(csp, /script-src[^;]*'unsafe-inline'/);
     assert.doesNotMatch(csp, /'unsafe-eval'/);
-    assert.match(csp, /style-src 'self' 'unsafe-inline' https:\/\/fonts\.googleapis\.com/);
+    assert.match(csp, /style-src 'self' 'unsafe-inline';/);
+    // Yazi tipleri uygulamayla birlikte sunuluyor; politika hicbir dis kaynaga
+    // izin vermemeli, aksi halde sayfa ucuncu bir tarafa bagimli kalir.
+    assert.doesNotMatch(csp, /https:\/\//, "politika dis kaynak icermemeli");
+    assert.match(csp, /font-src 'self' data:/);
     assert.match(csp, /frame-ancestors 'none'/);
     assert.equal(response.headers.get("x-frame-options"), "DENY");
     assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
