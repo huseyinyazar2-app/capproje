@@ -130,3 +130,39 @@ test("every database migration is copied unchanged into the Sites package", asyn
     );
   }
 });
+
+test("web fonts are served by the application itself, not by a third party", async () => {
+  const stylesheet = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  // Yazi tipi Google'dan cekildiginde sayfanin acilisi ucuncu bir tarafa bagli
+  // kaliyor; musterinin agi o adresi engellerse tipografi bozuluyordu.
+  assert.doesNotMatch(stylesheet, /fonts\.googleapis\.com|fonts\.gstatic\.com/, "stil dosyasi dis yazi tipi kaynagi icermemeli");
+
+  const packaged = (await readdir(new URL("../public/fonts/", import.meta.url))).filter((name) => name.endsWith(".woff2"));
+  assert.ok(packaged.length >= 4, `latin ve latin-ext altkumeleri paketlenmeli, bulunan: ${packaged.join(", ")}`);
+
+  const referenced = [...stylesheet.matchAll(/url\("\/fonts\/([^"]+)"\)/g)].map((match) => match[1]);
+  assert.ok(referenced.length >= 4, "stil dosyasi yerel yazi tiplerini kullanmali");
+  for (const file of referenced) {
+    assert.ok(packaged.includes(file), `${file} public/fonts altinda yok`);
+    // Dosya adindaki icerik ozeti, kalici onbellek icin sarttir.
+    assert.match(file, /-[0-9a-f]{8}\.woff2$/, `${file} icerik ozeti tasimali`);
+  }
+
+  // Turkce icin latin-ext sart: ğ, ş, İ bu altkumede.
+  assert.ok(referenced.some((file) => file.includes("latin-ext")), "Turkce karakterler icin latin-ext altkumesi gerekli");
+
+  const workerSource = await readFile(new URL("../worker/index.js", import.meta.url), "utf8");
+  assert.doesNotMatch(workerSource.split("\n").find((line) => line.includes("content-security-policy")), /https:\/\//, "guvenlik politikasi dis kaynak icermemeli");
+});
+
+test("the mobile layout keeps the full menu reachable and the session controls visible", async () => {
+  // Onceden elli kusur bolum tek satirda yan yana diziliyordu; ustelik firma
+  // secici ile cikis dugmesi gizlendigi icin telefondan oturum kapatilamiyordu.
+  assert.match(workspaceSource, /live-tabbar/, "dar ekranda alt kisayol cubugu bulunmali");
+  assert.match(workspaceSource, /live-drawer-backdrop/, "cekmece disina dokununca kapanmali");
+  assert.match(workspaceSource, /mobileMenuOpen/);
+  assert.doesNotMatch(workspaceSource, /\.live-nav-group\{display:contents\}/, "gruplar mobilde duzlestirilmemeli");
+  assert.doesNotMatch(workspaceSource, /\.live-sidebar nav \.live-nav-group-toggle\{display:none!important\}/, "grup basliklari mobilde gizlenmemeli");
+  assert.match(workspaceSource, /\.live-sidebar\.open\{transform:none/, "cekmece acildiginda gorunur olmali");
+  assert.match(workspaceSource, /\.live-user\{justify-content:flex-start;padding:12px 8px;position:sticky/, "cikis dugmesi mobilde erisilebilir kalmali");
+});
