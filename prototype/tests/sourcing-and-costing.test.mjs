@@ -384,3 +384,34 @@ test("finalised sourcing and production records cannot be edited or deleted dire
   assert.equal((await send(env, `/api/v1/production-issues/${issue.id}`, { method: "DELETE" })).status, 409);
   assert.equal(database.prepare("SELECT rework_quantity FROM production_orders WHERE id='order-a'").get().rework_quantity, 1);
 });
+
+test("repeated successful logins do not lock a user out", async () => {
+  const { database, env } = await setup();
+  env.PASSWORD_AUTH_ENABLED = "true";
+  env.PASSWORD_AUTH_PEPPER = "test-pepper-at-least-16-characters";
+  await send(env, "/api/v1/memberships/invite", { body: { email: "usta@a.test", full_name: "Usta", phone: "05321112233", temporary_password: "ilksifre1", role_ids: ["role-owner"] } });
+  database.prepare("UPDATE users SET status='active',must_change_password=0 WHERE email='usta@a.test'").run();
+  database.prepare("UPDATE memberships SET status='active' WHERE user_id=(SELECT id FROM users WHERE email='usta@a.test')").run();
+
+  const login = (password) => worker.fetch(new Request("https://example.test/api/v1/auth/password/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://example.test" },
+    body: JSON.stringify({ phone: "05321112233", password }),
+  }), env);
+
+  // Telefon, dizustu ve tablet ile ard arda giris yapmak kilitlenme sebebi degildir.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    assert.equal((await login("ilksifre1")).status, 200, `${attempt + 1}. basarili giris reddedilmemeli`);
+  }
+
+  // Yanlis sifre hala sayilir ve limit uygulanir.
+  for (let attempt = 0; attempt < 5; attempt += 1) assert.equal((await login("yanlissifre")).status, 401);
+  const limited = await login("ilksifre1");
+  assert.equal(limited.status, 429, "ust uste yanlis deneme sonrasi kilit devreye girmeli");
+  assert.equal((await limited.json()).error.code, "rate_limited");
+
+  // Kilit suresi dolunca dogru sifreyle girilebilir ve sayac sifirlanir.
+  database.prepare("UPDATE password_auth_attempts SET created_at='2020-01-01T00:00:00.000Z' WHERE success=0").run();
+  assert.equal((await login("ilksifre1")).status, 200);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM password_auth_attempts WHERE success=0").get().count, 0, "basarili giris eski basarisiz denemeleri temizlemeli");
+});

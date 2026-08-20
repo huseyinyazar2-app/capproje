@@ -200,6 +200,22 @@ const statusEnums = {
   "work-centers": ["active","passive"],
   "production-operations": ["pending","in_progress","blocked","completed","skipped"],
   "production-issues": ["open","in_progress","resolved","cancelled"],
+  // Aşağıdaki kümeler veritabanındaki CHECK kısıtlarıyla birebir aynıdır.
+  // Burada listelenmezlerse geçersiz bir değer sunucuyu geçip SQLite'a çarpar
+  // ve kullanıcı, hangi alanın yanlış olduğunu söylemeyen genel bir kısıt
+  // hatası görür.
+  "site-surveys": ["draft","in_progress","completed","approved","cancelled"],
+  contracts: ["draft","pending_signature","signed","active","completed","terminated","cancelled"],
+  "design-revisions": ["draft","internal_review","client_review","approved","rejected","superseded"],
+  "progress-payments": ["draft","pending","approved","rejected","invoiced","paid","cancelled"],
+  "stock-movements": ["draft","posted","cancelled"],
+  "project-meetings": ["draft","published","closed"],
+  "meeting-actions": ["open","in_progress","completed","cancelled"],
+  "quality-inspections": ["draft","completed","closed"],
+  handovers: ["draft","punch_open","accepted","rejected","closed"],
+  "handover-punch-items": ["open","in_progress","resolved","accepted","cancelled"],
+  "project-communications": ["open","follow_up","closed"],
+  "resource-assignments": ["planned","confirmed","active","completed","cancelled"],
 };
 const enumFields = {
   "work-items": { revision_status: ["draft","review","changes_requested","approved","superseded"], production_type: ["internal","external"] },
@@ -209,8 +225,15 @@ const enumFields = {
   customers: { type: ["company","individual","hotel","architect"] },
   projects: { photo_consent: ["not_requested","denied","internal_only","marketing_allowed"], priority: ["low","normal","high","critical"] },
   "project-tasks": { priority: ["low","normal","high","critical"] },
-  files: { visibility: ["internal","customer","marketing"] },
+  files: { visibility: ["internal","customer","marketing"], capture_stage: ["discovery","design","procurement","production","quality","installation","handover","other"] },
   "production-issues": { issue_type: ["material","quality","machine","drawing","manpower","supplier","other"], severity: ["low","normal","high","critical"] },
+  "stock-movements": { movement_type: ["receipt","issue","adjustment_in","adjustment_out","project_issue","project_return"] },
+  "project-meetings": { meeting_type: ["weekly_project","weekly_production","coordination","site"] },
+  "quality-inspections": { inspection_type: ["incoming","in_process","final","site"], result: ["pending","pass","conditional","fail"] },
+  "project-communications": { channel: ["phone","email","whatsapp","meeting","site","other"], direction: ["inbound","outbound","internal"] },
+  "resource-assignments": { resource_type: ["employee","team","work_center","subcontractor"] },
+  "design-revisions": { drawing_type: ["2d","3d","shop_drawing"] },
+  contracts: { payment_model: ["progress_payment","advance_balance","custom"], photo_consent: ["not_requested","denied","internal_only","marketing_allowed"] },
 };
 // Serbest metin alanları için üst sınırlar. Gövde boyutu sınırı tek başına
 // veritabanına devasa tek alan yazılmasını engellemiyordu.
@@ -1130,7 +1153,11 @@ async function createResource(request, env, principal, slug, config) {
     "quality-inspections": new Set([undefined, "draft"]),
     handovers: new Set([undefined, "draft"]),
   };
-  if (allowedInitialStatuses[slug] && !allowedInitialStatuses[slug].has(body.status)) return problem(409, "workflow_endpoint_required", "Bu başlangıç durumu yalnız ilgili iş akışı endpoint'i ile oluşturulabilir.");
+  // Kataloğa hiç uymayan bir durum, "iş akışı endpoint'i gerekli" demek değil,
+  // yalnızca hatalı bir değerdir. Bu kapıya takılırsa kullanıcı yanlış yönlendirilir;
+  // bu yüzden geçersiz değerler aşağıdaki alan doğrulamasına bırakılır.
+  const recognizedStatus = body.status === undefined || !statusEnums[slug] || statusEnums[slug].includes(body.status);
+  if (recognizedStatus && allowedInitialStatuses[slug] && !allowedInitialStatuses[slug].has(body.status)) return problem(409, "workflow_endpoint_required", "Bu başlangıç durumu yalnız ilgili iş akışı endpoint'i ile oluşturulabilir.");
   const normalized = normalizeInput(slug, config, body, true);
   if (normalized.error) return problem(422, "validation_error", normalized.error);
   const referenceError = await validateReferences(env, principal, config, normalized.values);
@@ -1495,9 +1522,13 @@ async function loginWithPassword(request, env) {
   const ipHash = await authHash(env, clientIp(request) || "unknown");
   await run(env.DB.prepare("DELETE FROM password_auth_attempts WHERE created_at<?").bind(retentionCutoff));
   await run(env.DB.prepare("DELETE FROM phone_sessions WHERE expires_at<? OR (revoked_at IS NOT NULL AND revoked_at<?)").bind(timestamp, retentionCutoff));
+  // Yalnızca BAŞARISIZ denemeler sayılır. Başarılı girişler de sayıldığında
+  // telefon + dizüstü + tablet ile giren ya da gün içinde birkaç kez oturum açan
+  // kullanıcı, hiç yanlış şifre yazmadan kendini kilitli buluyordu; aynı ofisten
+  // (tek IP) çalışan ekip ise topluca dışarıda kalıyordu.
   const [phoneRate, ipRate] = await Promise.all([
-    one(env.DB.prepare("SELECT COUNT(*) AS count FROM password_auth_attempts WHERE phone_hash=? AND created_at>?").bind(phoneHash, windowStart)),
-    one(env.DB.prepare("SELECT COUNT(*) AS count FROM password_auth_attempts WHERE ip_hash=? AND created_at>?").bind(ipHash, windowStart)),
+    one(env.DB.prepare("SELECT COUNT(*) AS count FROM password_auth_attempts WHERE phone_hash=? AND success=0 AND created_at>?").bind(phoneHash, windowStart)),
+    one(env.DB.prepare("SELECT COUNT(*) AS count FROM password_auth_attempts WHERE ip_hash=? AND success=0 AND created_at>?").bind(ipHash, windowStart)),
   ]);
   if (Number(phoneRate?.count || 0) >= 5 || Number(ipRate?.count || 0) >= 20) {
     return problem(429, "rate_limited", "Çok fazla giriş denemesi yapıldı. Lütfen 10 dakika sonra tekrar deneyin.", { retry_after_seconds: 600 });
@@ -1525,6 +1556,9 @@ async function loginWithPassword(request, env) {
     env.DB.prepare("INSERT INTO phone_sessions (id,user_id,token_hash,ip_hash,user_agent_hash,created_at,last_seen_at,expires_at,auth_method) VALUES (?,?,?,?,?,?,?,?,?)")
       .bind(id("phs_"), user.id, tokenHash, ipHash, await authHash(env, request.headers.get("user-agent") || "unknown"), timestamp, timestamp, expiresAt, "password"),
     env.DB.prepare("INSERT INTO password_auth_attempts (id,phone_hash,ip_hash,success,created_at) VALUES (?,?,?,?,?)").bind(id("paa_"), phoneHash, ipHash, 1, timestamp),
+    // Şifreyi birkaç kez yanlış yazıp sonunda doğru giren kullanıcı, bir sonraki
+    // girişinde eski denemeler yüzünden kilitlenmemelidir.
+    env.DB.prepare("DELETE FROM password_auth_attempts WHERE phone_hash=? AND success=0").bind(phoneHash),
   ];
   if (typeof env.DB.batch === "function") await env.DB.batch(statements);
   else for (const statement of statements) await run(statement);
@@ -1742,13 +1776,24 @@ async function offerAction(request, env, principal, offerId, action) {
   return json({ data: serializeRow(await workflowRow(env, principal, "offers", offerId), "offers", principal) });
 }
 
+// İstek gövdesinde status alanı hiç yoksa bu bir geçiş hatası değil, eksik
+// alandır. Ayırmazsak yanıt "boş durumuna geçilemez" diyerek asıl sebebi gizler
+// ve istemci hangi alanı göndermediğini asla öğrenemez.
+function missingStatus(body, allowed = []) {
+  if (typeof body?.status === "string" && body.status.trim()) return null;
+  const hint = allowed?.length ? ` Bu kayıt için geçerli değerler: ${allowed.join(", ")}.` : "";
+  return problem(422, "validation_error", `status alanı zorunludur.${hint}`);
+}
+
 async function transitionProject(request, env, principal, projectId) {
   if (!allowed(principal, "projects.transition")) return problem(403, "forbidden", "Proje aşaması değiştirme yetkiniz yok.");
   const project = await workflowRow(env, principal, "projects", projectId);
   if (!project) return problem(404, "not_found", "Proje bulunamadı.");
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
-  const target = body?.status;
+  const gap = missingStatus(body, projectTransitions[project.status]);
+  if (gap) return gap;
+  const target = body.status;
   if (target === project.status) return json({ data: serializeRow(project, "projects", principal), meta: { replayed: true } });
   if (!projectTransitions[project.status]?.includes(target)) return problem(409, "invalid_transition", `${project.status} durumundan ${target || "boş"} durumuna geçilemez.`);
   const intelligence = await projectCommandCenterData(env, principal, project);
@@ -1826,7 +1871,9 @@ async function transitionProductionOrder(request, env, principal, orderId) {
   if (!order) return problem(404, "not_found", "Üretim emri bulunamadı.");
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
-  const target = body?.status;
+  const gap = missingStatus(body, productionTransitions[order.status]);
+  if (gap) return gap;
+  const target = body.status;
   if (target === order.status) return json({ data: serializeRow(order, "production-orders", principal), meta: { replayed: true } });
   if (!productionTransitions[order.status]?.includes(target)) return problem(409, "invalid_transition", `${order.status} durumundaki üretim emri ${target || "boş"} durumuna geçirilemez.`);
   if (target === "cancelled" && !String(body.reason || "").trim()) return problem(422, "validation_error", "İptal nedeni zorunludur.");
@@ -1914,6 +1961,8 @@ async function productionIssueAction(request, env, principal, issueId, action) {
   }
 
   const transitions = { open: ["in_progress", "cancelled"], in_progress: ["open", "cancelled"], resolved: [], cancelled: [] };
+  const gap = missingStatus(body, transitions[record.status]);
+  if (gap) return gap;
   const target = body.status;
   if (target === record.status) return json({ data: serializeRow(record, "production-issues", principal), meta: { replayed: true } });
   if (!transitions[record.status]?.includes(target)) return problem(409, "invalid_transition", `${record.status} durumundaki sorun ${target || "boş"} durumuna geçirilemez.`);
@@ -2059,6 +2108,8 @@ async function transitionProductionOperation(request, env, principal, operationI
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
   const transitions = { pending: ["in_progress", "blocked", "skipped"], in_progress: ["completed", "blocked"], blocked: ["in_progress", "skipped"], completed: [], skipped: [] };
+  const gap = missingStatus(body, transitions[record.status]);
+  if (gap) return gap;
   const target = body.status;
   if (target === record.status) return json({ data: serializeRow(record, "production-operations", principal), meta: { replayed: true } });
   if (!transitions[record.status]?.includes(target)) return problem(409, "invalid_transition", `${record.status} durumundaki operasyon ${target || "boş"} durumuna geçirilemez.`);
@@ -2319,6 +2370,8 @@ async function quotationAction(request, env, principal, quotationId, action) {
   }
 
   const transitions = { draft: ["received", "expired"], received: ["rejected", "expired"], selected: [], rejected: ["received"], expired: [] };
+  const gap = missingStatus(body, transitions[record.status]);
+  if (gap) return gap;
   const target = body.status;
   if (target === record.status) return json({ data: serializeRow(record, "supplier-quotations", principal), meta: { replayed: true } });
   if (!transitions[record.status]?.includes(target)) return problem(409, "invalid_transition", `${record.status} durumundaki teklif ${target || "boş"} durumuna geçirilemez.`);
@@ -2390,6 +2443,8 @@ async function transitionSurvey(request, env, principal, surveyId) {
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
   const transitions = { draft: ["in_progress", "cancelled"], in_progress: ["completed", "cancelled"], completed: ["approved", "in_progress"], approved: [], cancelled: [] };
+  const surveyGap = missingStatus(body, transitions[record.status]);
+  if (surveyGap) return surveyGap;
   if (body.status === record.status) return json({ data: serializeRow(record, "site-surveys", principal), meta: { replayed: true } });
   if (!transitions[record.status]?.includes(body.status)) return problem(409, "invalid_transition", `${record.status} durumundan ${body.status || "boş"} durumuna geçilemez.`);
   const timestamp = now();
@@ -2406,6 +2461,8 @@ async function transitionContract(request, env, principal, contractId) {
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
   const transitions = { draft: ["pending_signature", "cancelled"], pending_signature: ["signed", "cancelled"], signed: ["active", "terminated"], active: ["completed", "terminated"], completed: [], terminated: [], cancelled: [] };
+  const contractGap = missingStatus(body, transitions[record.status]);
+  if (contractGap) return contractGap;
   if (body.status === record.status) return json({ data: serializeRow(record, "contracts", principal), meta: { replayed: true } });
   if (!transitions[record.status]?.includes(body.status)) return problem(409, "invalid_transition", `${record.status} durumundan ${body.status || "boş"} durumuna geçilemez.`);
   const customerSigner = body.signed_by_customer || record.signed_by_customer;

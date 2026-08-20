@@ -629,3 +629,53 @@ test("a user with no membership is told what to do instead of being denied", asy
   assert.equal(body.error.code, "no_membership");
   assert.match(body.error.message, /davet/i, "kullaniciya ne yapmasi gerektigi soylenmeli");
 });
+
+test("a transition without a status field says which field is missing", async () => {
+  const { database, env } = await setup();
+  seedProductionProject(database);
+  assert.equal((await worker.fetch(request("/api/v1/production-orders/order-a/release"), env)).status, 200);
+
+  // Eksik alan bir "gecis hatasi" degildir. Onceden yanit 409 "bos durumuna
+  // gecilemez" diyordu; istemci hangi alani gondermedigini anlayamiyordu.
+  for (const [path, body] of [
+    ["/api/v1/production-orders/order-a/transition", {}],
+    ["/api/v1/projects/project-a/transition", { note: "aciklama" }],
+  ]) {
+    const response = await worker.fetch(request(path, { body }), env);
+    assert.equal(response.status, 422, path);
+    const payload = await response.json();
+    assert.equal(payload.error.code, "validation_error", path);
+    assert.match(payload.error.message, /status/, path);
+    assert.match(payload.error.message, /gecerli degerler|geçerli değerler/i, path);
+  }
+
+  // Gecerli bir deger gonderildiginde davranis degismemeli.
+  assert.equal((await worker.fetch(request("/api/v1/production-orders/order-a/transition", { body: { status: "in_progress" } }), env)).status, 200);
+});
+
+test("enum fields the database constrains are rejected by name, not by a generic constraint error", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO inventory_items (id,tenant_id,sku,name,unit,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+    .run("inv-a", "tenant-a", "MDF-18", "18mm MDF", "adet", timestamp, timestamp);
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+    .run("project-a", "tenant-a", "P-1", "Proje", "lead", timestamp, timestamp);
+
+  // Bu degerler SQLite CHECK kisitlarina takiliyordu; sunucu hangi alanin
+  // yanlis oldugunu soylemeyen genel bir kisit hatasi donuyordu.
+  const cases = [
+    ["/api/v1/stock-movements", { movement_number: "STK-1", inventory_item_id: "inv-a", movement_type: "in", movement_date: "2026-08-10", quantity: 5 }, "movement_type"],
+    ["/api/v1/project-communications", { project_id: "project-a", channel: "guvercin", direction: "inbound", subject: "Deneme", occurred_at: timestamp }, "channel"],
+    ["/api/v1/stock-movements", { movement_number: "STK-2", inventory_item_id: "inv-a", movement_type: "receipt", movement_date: "2026-08-10", quantity: 5, status: "gonderildi" }, "status"],
+  ];
+  for (const [path, body, field] of cases) {
+    const response = await worker.fetch(request(path, { body }), env);
+    assert.equal(response.status, 422, `${path} ${field}`);
+    const payload = await response.json();
+    assert.equal(payload.error.code, "validation_error", `${path} ${field}`);
+    assert.match(payload.error.message, new RegExp(field), `${path} hatasinda alan adi gecmeli`);
+  }
+
+  // Gecerli deger hala kabul edilmeli.
+  const ok = await worker.fetch(request("/api/v1/stock-movements", { body: { movement_number: "STK-3", inventory_item_id: "inv-a", movement_type: "receipt", movement_date: "2026-08-10", quantity: 5 } }), env);
+  assert.ok(ok.status < 300, `gecerli deger kabul edilmeli, alinan: ${ok.status}`);
+});
