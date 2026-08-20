@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
+import { ErrorBoundary } from "./ErrorBoundary.jsx";
 
 const PrototypeApp = lazy(() => import("./App.jsx").then(({ App }) => ({ default: App })));
 const LiveWorkspace = lazy(() => import("./LiveWorkspace.jsx").then(({ LiveWorkspace }) => ({ default: LiveWorkspace })));
@@ -10,9 +11,11 @@ function Root() {
   const [prototypeMode, setPrototypeMode] = useState(() => params.get("prototype") === "1" || (import.meta.env.DEV && params.get("live") !== "1"));
 
   return (
-    <Suspense fallback={<div role="status" style={{ padding: "2rem", fontFamily: "system-ui", color: "#20262c" }}>Capproje hazırlanıyor…</div>}>
-      {prototypeMode ? <PrototypeApp /> : <LiveWorkspace onBackToPrototype={() => setPrototypeMode(true)} />}
-    </Suspense>
+    <ErrorBoundary>
+      <Suspense fallback={<div role="status" style={{ padding: "2rem", fontFamily: "system-ui", color: "#20262c" }}>Capproje hazırlanıyor…</div>}>
+        {prototypeMode ? <PrototypeApp /> : <LiveWorkspace onBackToPrototype={() => setPrototypeMode(true)} />}
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 
