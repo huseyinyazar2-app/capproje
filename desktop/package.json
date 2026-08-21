@@ -1,0 +1,75 @@
+{
+  "name": "capproje-masaustu",
+  "version": "1.0.0",
+  "productName": "Capproje",
+  "private": true,
+  "description": "Capproje yönetim uygulamasının Windows masaüstü penceresi.",
+  "author": "Capproje",
+  "homepage": "https://cap.taslak.online",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/huseyinyazar2-app/capproje.git"
+  },
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win --publish never",
+    "build:linux": "electron-builder --linux AppImage --publish never"
+  },
+  "devDependencies": {
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "online.taslak.cap.desktop",
+    "productName": "Capproje",
+    "copyright": "Capproje",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "baglanti-yok.html",
+      "assets/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Capproje",
+      "language": "1055",
+      "installerLanguages": [
+        "tr_TR"
+      ],
+      "artifactName": "Capproje-Kurulum-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Capproje-Tasinabilir-${version}.${ext}"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Office"
+    }
+  }
+}
