@@ -1,0 +1,1274 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Capproje'nin bütün ekranlarını, düğmelerini ve iş akışını ekran görüntüleriyle adım adım anlatan kullanım kılavuzu.">
+<meta name="theme-color" content="#3a281c">
+<link rel="icon" href="/icons/capproje-192.png">
+<title>Capproje Kullanım Kılavuzu</title>
+<style>
+  html { color-scheme: light dark; }
+  :root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body { margin: 0; }
+  img { max-width: 100%; }
+</style>
+</head>
+<body>
+<style>
+  /* Yazı tipleri uygulamayla birlikte sunulur; sayfa hiçbir dış adrese bağlanmaz. */
+  @font-face {
+    font-family: "Inter";
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url("kilavuz/fonts/inter-latin-ext-34b9c504.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  @font-face {
+    font-family: "Inter";
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url("kilavuz/fonts/inter-latin-3100e775.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: "Manrope";
+    font-style: normal;
+    font-weight: 500 700;
+    font-display: swap;
+    src: url("kilavuz/fonts/manrope-latin-ext-3911b66d.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  @font-face {
+    font-family: "Manrope";
+    font-style: normal;
+    font-weight: 500 700;
+    font-display: swap;
+    src: url("kilavuz/fonts/manrope-latin-a30ddcd3.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+
+  :root {
+    --ground: #f6f1e9;
+    --surface: #fffdf9;
+    --surface-2: #f1e8da;
+    --ink: #241a12;
+    --muted: #6d5c4c;
+    --bark: #3a281c;
+    --bark-ink: #f5ece0;
+    --tan: #a2682c;
+    --tan-soft: #f0e1c9;
+    --sap: #4f6739;
+    --sap-soft: #e5ead8;
+    --clay: #97432f;
+    --clay-soft: #f6e0d8;
+    --rule: #e3d7c6;
+    --rule-soft: #eee6d9;
+    --shadow: 0 1px 2px rgba(58, 40, 28, .05), 0 10px 28px rgba(58, 40, 28, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #14100b;
+      --surface: #1e1811;
+      --surface-2: #272018;
+      --ink: #f2e9dd;
+      --muted: #ab9a88;
+      --bark: #100c07;
+      --bark-ink: #f2e9dd;
+      --tan: #d9a35c;
+      --tan-soft: #3a2b18;
+      --sap: #a2c07f;
+      --sap-soft: #23301b;
+      --clay: #e0917a;
+      --clay-soft: #3a2119;
+      --rule: #372b1f;
+      --rule-soft: #2a2118;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px rgba(0, 0, 0, .35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #14100b;
+    --surface: #1e1811;
+    --surface-2: #272018;
+    --ink: #f2e9dd;
+    --muted: #ab9a88;
+    --bark: #100c07;
+    --bark-ink: #f2e9dd;
+    --tan: #d9a35c;
+    --tan-soft: #3a2b18;
+    --sap: #a2c07f;
+    --sap-soft: #23301b;
+    --clay: #e0917a;
+    --clay-soft: #3a2119;
+    --rule: #372b1f;
+    --rule-soft: #2a2118;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 { font-family: "Manrope", "Segoe UI", system-ui, sans-serif; text-wrap: balance; margin: 0; }
+  p { margin: 0; }
+  a { color: var(--tan); }
+
+  /* ---------- Üst şerit ---------- */
+  .kapak {
+    background: var(--bark);
+    color: var(--bark-ink);
+    padding-block: clamp(2.5rem, 7vw, 4.5rem) clamp(2.5rem, 6vw, 3.75rem);
+    padding-inline: 16px;
+  }
+  .kapak-ic { max-width: 1180px; margin-inline: auto; }
+  .kapak .etiket {
+    font-size: .72rem; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--tan); font-weight: 600; margin-bottom: .9rem;
+  }
+  .kapak h1 { font-size: clamp(2.1rem, 6vw, 3.4rem); font-weight: 700; line-height: 1.08; letter-spacing: -.02em; max-width: 18ch; }
+  .kapak p { margin-top: 1.1rem; max-width: 56ch; color: #d9cbb9; font-size: clamp(1rem, 2.4vw, 1.12rem); }
+  :root[data-theme="dark"] .kapak p, :root:not([data-theme="light"]) .kapak p { color: #b6a693; }
+  .kapak-notlar { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.9rem; }
+  .kapak-notlar span {
+    border: 1px solid rgba(220, 200, 175, .28); border-radius: 999px;
+    padding: .34rem .85rem; font-size: .82rem; color: #e3d6c5;
+  }
+
+  /* ---------- Yerleşim ---------- */
+  .govde {
+    max-width: 1180px; margin-inline: auto;
+    padding-inline: 16px; padding-block: 0 5rem;
+    display: grid; gap: clamp(1.5rem, 4vw, 3.25rem);
+  }
+  @media (min-width: 1000px) { .govde { grid-template-columns: 236px minmax(0, 1fr); align-items: start; } }
+
+  /* ---------- İçindekiler ---------- */
+  .icindekiler { padding-top: 2rem; }
+  @media (min-width: 1000px) {
+    .icindekiler { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1.25rem); max-height: calc(100vh - 3rem); overflow-y: auto; }
+  }
+  .icindekiler > b {
+    display: block; font-family: "Manrope", sans-serif; font-size: .72rem;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin-bottom: .8rem;
+  }
+  .icindekiler ol { list-style: none; margin: 0; padding: 0; display: grid; gap: .05rem; counter-reset: toc; }
+  .icindekiler a {
+    display: flex; gap: .6rem; text-decoration: none; color: var(--ink);
+    font-size: .92rem; padding: .36rem .55rem; border-radius: 7px; line-height: 1.35;
+  }
+  .icindekiler a::before {
+    counter-increment: toc; content: counter(toc, decimal-leading-zero);
+    color: var(--tan); font-variant-numeric: tabular-nums; font-size: .78rem; padding-top: .12rem;
+  }
+  .icindekiler a:hover { background: var(--surface-2); }
+  .icindekiler a:focus-visible { outline: 2px solid var(--tan); outline-offset: 1px; }
+  .icindekiler-mobil { display: none; }
+  @media (max-width: 999px) {
+    .icindekiler { padding-top: 1.5rem; }
+    .icindekiler-mobil { display: block; }
+    /* Dar ekranda yalnız açılır kutu kalmalı; ikisi birden görününce liste
+       iki kez yazılıyordu. */
+    .icindekiler-masaustu { display: none; }
+    .icindekiler summary {
+      cursor: pointer; font-family: "Manrope", sans-serif; font-weight: 700;
+      background: var(--surface); border: 1px solid var(--rule); border-radius: 9px;
+      padding: .7rem .95rem; list-style: none;
+    }
+    .icindekiler summary::-webkit-details-marker { display: none; }
+    .icindekiler summary::after { content: " ▾"; color: var(--tan); }
+    .icindekiler ol { margin-top: .5rem; }
+  }
+
+  /* ---------- İçerik ---------- */
+  .icerik { padding-top: 2rem; min-width: 0; display: grid; gap: 3.5rem; }
+  .bolum { scroll-margin-top: 1.5rem; display: grid; gap: 1.1rem; }
+  .bolum > .sira {
+    font-family: "Manrope", sans-serif; font-size: .72rem; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--tan); font-weight: 700;
+  }
+  .bolum h2 { font-size: clamp(1.5rem, 3.6vw, 2rem); font-weight: 700; letter-spacing: -.015em; line-height: 1.2; }
+  .bolum h3 {
+    font-size: 1.12rem; font-weight: 700; margin-top: 1.2rem;
+    padding-top: 1.2rem; border-top: 1px solid var(--rule-soft);
+  }
+  .bolum h4 { font-size: .98rem; font-weight: 700; margin-top: .6rem; }
+  .bolum p, .bolum li { max-width: 72ch; }
+  .bolum > p + p { margin-top: -.35rem; }
+
+  ul.duz { margin: 0; padding-left: 1.15rem; display: grid; gap: .45rem; }
+  ul.duz li::marker { color: var(--tan); }
+
+  /* Adım listesi */
+  ol.adimlar { list-style: none; margin: 0; padding: 0; counter-reset: adim; display: grid; gap: .85rem; }
+  ol.adimlar > li {
+    counter-increment: adim; display: grid; grid-template-columns: 1.65rem minmax(0, 1fr);
+    gap: .75rem; align-items: start;
+  }
+  ol.adimlar > li::before {
+    content: counter(adim); background: var(--tan-soft); color: var(--tan);
+    font-family: "Manrope", sans-serif; font-weight: 700; font-size: .82rem;
+    width: 1.65rem; height: 1.65rem; border-radius: 50%;
+    display: grid; place-items: center; margin-top: .12rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Düğme / alan rozetleri */
+  .dgm, .alan {
+    font-family: "Manrope", sans-serif; font-size: .84em; font-weight: 700;
+    padding: .1em .5em; border-radius: 5px; white-space: nowrap;
+  }
+  .dgm { background: var(--bark); color: var(--bark-ink); }
+  :root[data-theme="dark"] .dgm, :root:not([data-theme="light"]) .dgm { background: var(--tan-soft); color: var(--tan); }
+  .alan { background: var(--surface-2); color: var(--ink); border: 1px solid var(--rule); font-weight: 600; }
+
+  /* Uyarı kutuları */
+  .not { border-left: 3px solid var(--rule); padding: .1rem 0 .1rem 1rem; display: grid; gap: .3rem; max-width: 72ch; }
+  .not > b { font-family: "Manrope", sans-serif; font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; }
+  .not.ipucu { border-color: var(--sap); }
+  .not.ipucu > b { color: var(--sap); }
+  .not.dikkat { border-color: var(--clay); }
+  .not.dikkat > b { color: var(--clay); }
+  .not.bilgi { border-color: var(--tan); }
+  .not.bilgi > b { color: var(--tan); }
+
+  /* Ekran görüntüsü */
+  figure.sahne { margin: .6rem 0 0; display: grid; gap: .55rem; }
+  figure.sahne .cerceve {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
+    padding: 6px; box-shadow: var(--shadow); overflow: hidden; line-height: 0;
+  }
+  figure.sahne img { width: 100%; height: auto; border-radius: 7px; display: block; cursor: zoom-in; }
+  figure.sahne figcaption { font-size: .88rem; color: var(--muted); max-width: 72ch; line-height: 1.5; }
+  figure.sahne figcaption b { color: var(--ink); font-weight: 600; }
+  figure.telefon .cerceve { max-width: 288px; margin-inline: auto; border-radius: 22px; padding: 7px; }
+  figure.telefon img { border-radius: 16px; }
+  figure.telefon figcaption { text-align: center; margin-inline: auto; }
+  .telefon-ikili { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .telefon-ikili figure { margin-top: 0; }
+
+  /* Tablolar */
+  .tablo-kutu { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: .91rem; min-width: 520px; }
+  th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th {
+    font-family: "Manrope", sans-serif; font-size: .72rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); background: var(--surface-2); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td b { font-weight: 600; }
+  .tablo-kutu.dizin table { min-width: 620px; }
+
+  /* Aşama zinciri */
+  .zincir { display: grid; gap: .5rem; counter-reset: asama; margin-top: .4rem; }
+  .zincir > article {
+    counter-increment: asama; background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 10px; padding: .85rem 1rem .95rem 1rem;
+    display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: .85rem; align-items: start;
+  }
+  .zincir > article::before {
+    content: counter(asama); font-family: "Manrope", sans-serif; font-weight: 700;
+    color: var(--tan); font-size: 1.05rem; font-variant-numeric: tabular-nums;
+    border-right: 1px solid var(--rule); padding-right: .6rem; text-align: right; line-height: 1.5;
+  }
+  .zincir h4 { margin: 0; font-size: 1rem; }
+  .zincir p { margin-top: .2rem; font-size: .93rem; color: var(--muted); }
+  .zincir p b { color: var(--ink); font-weight: 600; }
+  .zincir .kapi {
+    margin-top: .5rem; font-size: .84rem; color: var(--clay);
+    background: var(--clay-soft); border-radius: 6px; padding: .3rem .6rem; display: inline-block;
+  }
+
+  /* Sözlük / SSS */
+  dl.sss { display: grid; gap: 1.1rem; margin: 0; max-width: 72ch; }
+  dl.sss dt { font-family: "Manrope", sans-serif; font-weight: 700; font-size: .98rem; }
+  dl.sss dd { margin: .25rem 0 0; color: var(--muted); }
+  dl.sss dd b { color: var(--ink); font-weight: 600; }
+  .hata-metni {
+    display: block; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .84rem; background: var(--surface-2); border-radius: 6px;
+    padding: .45rem .65rem; margin-bottom: .4rem; color: var(--ink); line-height: 1.45;
+  }
+
+  /* Alt bilgi */
+  .dipnot {
+    border-top: 1px solid var(--rule); margin-top: 1rem; padding-top: 1.5rem;
+    font-size: .88rem; color: var(--muted); max-width: 72ch;
+  }
+
+  /* Büyüteç */
+  #buyutec:not([open]) { display: none; }
+  #buyutec[open] {
+    position: fixed; inset: 0; background: rgba(20, 14, 9, .92);
+    display: grid; place-items: center; padding: 16px; z-index: 50; border: 0; margin: 0; width: 100%;
+    padding-top: calc(16px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    cursor: zoom-out;
+  }
+  #buyutec img { max-width: 100%; max-height: 100%; border-radius: 8px; object-fit: contain; }
+  #buyutec-kapat {
+    position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px;
+    background: rgba(255, 253, 249, .12); color: #fffdf9; border: 1px solid rgba(255, 253, 249, .28);
+    border-radius: 8px; padding: .4rem .8rem; font-family: "Manrope", sans-serif; font-size: .85rem; cursor: pointer;
+  }
+  :focus-visible { outline: 2px solid var(--tan); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<header class="kapak">
+  <div class="kapak-ic">
+    <div class="etiket">Capproje · Orman Ürünleri Yönetim Platformu</div>
+    <h1>Programı ilk günden doğru kullanma kılavuzu</h1>
+    <p>
+      Capproje, bir mobilya ve ahşap işleri firmasının müşteri talebinden teslim tutanağına kadar
+      olan bütün zincirini tek yerde tutar. Bu sayfa, hangi ekranın ne işe yaradığını, hangi düğmenin
+      ne yaptığını ve işleri hangi sırayla yapmanız gerektiğini ekran görüntüleriyle anlatır.
+    </p>
+    <div class="kapak-notlar">
+      <span>Bilgisayar ve telefon</span>
+      <span>Gerçek ekran görüntüleri</span>
+      <span>Adım adım anlatım</span>
+    </div>
+  </div>
+</header>
+
+<div class="govde">
+  <nav class="icindekiler" aria-label="İçindekiler">
+    <details class="icindekiler-mobil" id="toc-mobil">
+      <summary>İçindekiler</summary>
+      <ol>
+        <li><a href="#giris">Programa giriş yapmak</a></li>
+        <li><a href="#ekran">Ekranı tanıyalım</a></li>
+        <li><a href="#ortak">Her ekranda aynı çalışan 7 şey</a></li>
+        <li><a href="#zincir">Bir projenin baştan sona yolculuğu</a></li>
+        <li><a href="#komuta">Proje komuta merkezi</a></li>
+        <li><a href="#anasayfa">Ana sayfa nasıl okunur</a></li>
+        <li><a href="#saha">Saha modu — telefonla sahada çalışmak</a></li>
+        <li><a href="#arama">Aradığınızı bulmak</a></li>
+        <li><a href="#cevrimdisi">İnternet kesildiğinde</a></li>
+        <li><a href="#satinalma">Satın alma: talepten mal kabule</a></li>
+        <li><a href="#uretim">Üretim ve kalite</a></li>
+        <li><a href="#finans">Para: finans hareketleri ve hakedişler</a></li>
+        <li><a href="#bildirim">Bildirimler</a></li>
+        <li><a href="#yonetim">Kullanıcılar, roller ve yetkiler</a></li>
+        <li><a href="#sss">Karşılaşabileceğiniz uyarılar ve anlamları</a></li>
+        <li><a href="#dizin">Bütün ekranlar, tek listede</a></li>
+      </ol>
+    </details>
+    <div class="icindekiler-masaustu">
+      <b>İçindekiler</b>
+      <ol>
+        <li><a href="#giris">Programa giriş yapmak</a></li>
+        <li><a href="#ekran">Ekranı tanıyalım</a></li>
+        <li><a href="#ortak">Her ekranda aynı çalışan 7 şey</a></li>
+        <li><a href="#zincir">Bir projenin baştan sona yolculuğu</a></li>
+        <li><a href="#komuta">Proje komuta merkezi</a></li>
+        <li><a href="#anasayfa">Ana sayfa nasıl okunur</a></li>
+        <li><a href="#saha">Saha modu — telefonla sahada çalışmak</a></li>
+        <li><a href="#arama">Aradığınızı bulmak</a></li>
+        <li><a href="#cevrimdisi">İnternet kesildiğinde</a></li>
+        <li><a href="#satinalma">Satın alma: talepten mal kabule</a></li>
+        <li><a href="#uretim">Üretim ve kalite</a></li>
+        <li><a href="#finans">Para: finans hareketleri ve hakedişler</a></li>
+        <li><a href="#bildirim">Bildirimler</a></li>
+        <li><a href="#yonetim">Kullanıcılar, roller ve yetkiler</a></li>
+        <li><a href="#sss">Karşılaşabileceğiniz uyarılar ve anlamları</a></li>
+        <li><a href="#dizin">Bütün ekranlar, tek listede</a></li>
+      </ol>
+    </div>
+  </nav>
+
+  <main class="icerik">
+
+    <!-- 1 -->
+    <section class="bolum" id="giris">
+      <div class="sira">Başlangıç</div>
+      <h2>Programa giriş yapmak</h2>
+      <p>
+        Capproje'ye <b>cep telefonu numaranız ve şifrenizle</b> girersiniz. Kullanıcı adı yoktur;
+        firmanızda size tanımlanan numara sizin kimliğinizdir. Numarayı <span class="alan">05xx xxx xx xx</span>
+        biçiminde, başında sıfırla yazın.
+      </p>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/01-giris.png" alt="Capproje giriş ekranı: cep telefonu ve şifre alanları" loading="lazy"></div>
+        <figcaption>Giriş ekranı. Solda firmanın tanıtım alanı, sağda <b>Cep telefonu</b> ve <b>Şifre</b> kutuları. Altta <b>Şifremi unuttum</b> bağlantısı var.</figcaption>
+      </figure>
+
+      <h3>İlk girişinizde ne olur?</h3>
+      <ol class="adimlar">
+        <li>Yöneticiniz sizi sisteme ekler ve size <b>geçici bir şifre</b> verir.</li>
+        <li>Bu şifreyle ilk kez girdiğinizde program sizi doğrudan <b>şifre değiştirme</b> ekranına alır.</li>
+        <li>Kendi şifrenizi belirlemeden hiçbir kayıt oluşturamaz veya değiştiremezsiniz. Bu kasıtlıdır: geçici şifre elden ele geçebilir.</li>
+        <li>Şifreniz en az 8 karakter olmalıdır.</li>
+      </ol>
+
+      <h3>Şifrenizi unutursanız</h3>
+      <p>
+        Giriş ekranında <span class="dgm">Şifremi unuttum</span> bağlantısına basın, numaranızı ve isterseniz
+        yöneticinin sizi tanıyacağı kısa bir not yazın. Talebiniz firma yöneticinize düşer; yönetici
+        kimliğinizi doğruladıktan sonra size yeni bir geçici şifre verir.
+      </p>
+      <div class="not bilgi">
+        <b>Neden SMS gelmiyor?</b>
+        <p>
+          Güvenlik gereği program, girilen numaranın sistemde kayıtlı olup olmadığını size söylemez —
+          söyleseydi, yabancı biri numara deneyerek firmanızda kimlerin çalıştığını öğrenebilirdi.
+          Yeni şifreyi yöneticiniz size elden veya telefonla iletir.
+        </p>
+      </div>
+
+      <h3>Şifrenizi kendiniz değiştirmek</h3>
+      <p>
+        Program içinde, sol menünün en altındaki adınızın yanında iki küçük simge vardır. Soldaki
+        <b>kişi</b> simgesi <b>Şifre ve oturumlar</b> penceresini açar; buradan şifrenizi
+        değiştirebilir, açık oturumlarınızı görebilirsiniz. Sağdaki <b>çıkış</b> simgesi programdan çıkar.
+      </p>
+      <div class="not dikkat">
+        <b>Ortak bilgisayarda</b>
+        <p>İşiniz bittiğinde çıkış simgesine basın. Tarayıcı sekmesini kapatmak oturumu kapatmaz.</p>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section class="bolum" id="ekran">
+      <div class="sira">Temel</div>
+      <h2>Ekranı tanıyalım</h2>
+      <p>
+        Program tek bir düzen kullanır: solda menü, üstte arama ve durum çubuğu, ortada çalıştığınız
+        ekran. Hangi bölümde olursanız olun bu üç parça yerinde durur.
+      </p>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/02-ana-sayfa.png" alt="Capproje ana sayfası: sol menü, üst çubuk, özet kutuları" loading="lazy"></div>
+        <figcaption>Giriş yaptığınızda gördüğünüz <b>Ana Sayfa</b>. Bu ekranın nasıl okunacağı <a href="#anasayfa">6. bölümde</a> anlatılıyor.</figcaption>
+      </figure>
+
+      <h3>Sol menü</h3>
+      <p>
+        Menü altı başlık altında toplanmıştır: <b>Genel</b>, <b>Müşteri &amp; Proje</b>, <b>Operasyon</b>,
+        <b>Finans</b>, <b>İnsan Kaynakları</b>, <b>Yönetim</b>. Bir başlığa bastığınızda o başlık açılır,
+        diğeri kapanır — böylece 40'tan fazla ekran aynı anda göz önüne yığılmaz.
+      </p>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/03-menu.png" alt="Sol menü: firma seçici, menü grupları, kullanıcı alanı" loading="lazy"></div>
+        <figcaption>
+          En üstte <b>Aktif Firma</b> kutusu (birden fazla firmada çalışıyorsanız buradan geçiş yaparsınız),
+          ortada menü grupları, en altta <b>adınız ve rolünüz</b>.
+        </figcaption>
+      </figure>
+
+      <div class="not bilgi">
+        <b>Menüde göremediğiniz bir bölüm</b>
+        <p>
+          Yetkiniz olmayan ekranlar menüde hiç görünmez — bozuk değildir, size kapalıdır.
+          Görmeniz gereken bir bölüm eksikse yöneticinizden rolünüze yetki eklemesini isteyin.
+        </p>
+      </div>
+
+      <h3>Üst çubuk</h3>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/04-ust-cubuk.png" alt="Üst çubuk: firma adı, sayfa adı, arama kutusu, kuyruk, bildirim zili, bağlantı rozeti" loading="lazy"></div>
+        <figcaption>Soldan sağa: firma adı ve bulunduğunuz sayfanın adı · genel arama · <b>Prototipe dön</b> · <b>Kuyruk</b> · bildirim zili · bağlantı rozeti.</figcaption>
+      </figure>
+      <ul class="duz">
+        <li><b>Arama kutusu:</b> Proje, müşteri, teklif, ürün veya belge — hepsini aynı anda arar. En az 2 harf yazın. Ayrıntısı <a href="#arama">8. bölümde</a>.</li>
+        <li><b>Prototipe dön:</b> Programın tasarım önizlemesini açar. Gerçek verinizle ilgisi yoktur, müşteriye sunum yaparken kullanılır. Yanlışlıkla bastıysanız sayfayı yenileyin.</li>
+        <li><b>Kuyruk:</b> İnternetsizken oluşturduğunuz kayıtlar burada bekler. <a href="#cevrimdisi">9. bölüme</a> bakın.</li>
+        <li><b>Zil:</b> Bildirimler ekranını açar. Üzerinde okunmamış bildirim sayısı görünür.</li>
+        <li><b>Canlı / Çevrimdışı:</b> Yeşil nokta varsa sunucuya bağlısınız. Kırmızıya döndüyse internetiniz kesilmiştir.</li>
+      </ul>
+
+      <h3>Telefonda görünüm</h3>
+      <p>
+        Telefonda sol menü ekranı kaplayan bir çekmeceye dönüşür. Ekranın altında her zaman duran
+        dört kısayol ve bir <span class="dgm">Tüm Menü</span> düğmesi vardır.
+      </p>
+      <div class="telefon-ikili">
+        <figure class="sahne telefon">
+          <div class="cerceve"><img src="kilavuz/gorseller/22-telefon-ana-sayfa.png" alt="Telefonda ana sayfa ve alt kısayol çubuğu" loading="lazy"></div>
+          <figcaption>Alt çubuk: Ana Sayfa · Projeler · Saha Modu · Bildirimler · Tüm Menü.</figcaption>
+        </figure>
+        <figure class="sahne telefon">
+          <div class="cerceve"><img src="kilavuz/gorseller/23-telefon-menu.png" alt="Telefonda açılan tam menü çekmecesi" loading="lazy"></div>
+          <figcaption><span class="dgm">Tüm Menü</span> dediğinizde bütün bölümler açılır. Kapatmak için yandaki karartılmış alana dokunun.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section class="bolum" id="ortak">
+      <div class="sira">Temel</div>
+      <h2>Her ekranda aynı çalışan 7 şey</h2>
+      <p>
+        Program 40'tan fazla ekran içerir ama hepsi aynı kalıbı kullanır. Bu bölümü bir kez
+        öğrendiğinizde, daha önce hiç açmadığınız bir ekranda bile ne yapacağınızı bilirsiniz.
+        Örnekler <b>Projeler</b> ekranı üzerinden veriliyor.
+      </p>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/05-projeler-liste.png" alt="Projeler listesi: başlık, araç çubuğu, arama, tablo, satır düğmeleri" loading="lazy"></div>
+        <figcaption>Tipik bir kayıt ekranı. Üstte başlık ve düğmeler, altında arama satırı, sonra tablo, en altta kayıt sayısı.</figcaption>
+      </figure>
+
+      <h3>1 · Başlık ve iki ana düğme</h3>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/06-arac-cubugu.png" alt="Araç çubuğu: başlık, açıklama, CSV indir ve Yeni proje düğmeleri" loading="lazy"></div>
+        <figcaption>Başlığın altındaki gri yazı, o ekranın ne işe yaradığını tek cümleyle söyler.</figcaption>
+      </figure>
+      <ul class="duz">
+        <li><span class="dgm">CSV indir</span> — Ekrandaki kayıtları Excel'de açabileceğiniz bir dosya olarak indirir. Yalnız dışa aktarma yetkisi olan kullanıcılarda görünür.</li>
+        <li><span class="dgm">+ Yeni …</span> — Boş bir form açar. Düğmenin üzerinde o ekranın kayıt adı yazar: <span class="dgm">Yeni proje</span>, <span class="dgm">Yeni teklif</span>, <span class="dgm">Yeni müşteri</span>…</li>
+      </ul>
+
+      <h3>2 · Arama ve görünüm</h3>
+      <p>
+        Arama kutusuna kod, ad, müşteri veya durum yazıp <span class="dgm">Ara</span> düğmesine basın
+        (Enter de çalışır). Sağdaki üç düğme aynı kayıtları farklı biçimde gösterir — bu düğmeler
+        yalnız destekleyen ekranlarda çıkar:
+      </p>
+      <ul class="duz">
+        <li><b>Liste</b> — Klasik tablo. Tüm sütunları ve bütün satır düğmelerini gösterir.</li>
+        <li><b>Kanban</b> — Kayıtları durumuna göre sütunlara dizer. "Hangi iş nerede takılı?" sorusunun cevabı.</li>
+        <li><b>Takvim</b> — Tarihi olan kayıtları ay görünümüne yerleştirir. Tarihsiz kayıtlar burada görünmez.</li>
+      </ul>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/07-kanban.png" alt="Projelerin kanban görünümü, aşamalara göre sütunlar" loading="lazy"></div>
+        <figcaption>Kanban görünümü. Her sütun bir aşamadır, sütun başlığındaki sayı o aşamadaki kayıt adedidir.</figcaption>
+      </figure>
+      <div class="not bilgi">
+        <b>Liste ilk 50 kaydı gösterir</b>
+        <p>
+          Ekran açıldığında en güncel 50 kayıt yüklenir. Aradığınız kayıt listede yoksa yok demek
+          değildir — arama kutusunu kullanın. Tablonun altındaki sayı, firmanızdaki <b>toplam</b> kayıt adedidir.
+        </p>
+      </div>
+
+      <h3>3 · Satır sonundaki düğmeler</h3>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/08-satir-islemleri.png" alt="Bir tablo satırı ve sonundaki işlem düğmeleri" loading="lazy"></div>
+        <figcaption>Her satırın sonunda o kayda uygulanabilecek işlemler durur. Yetkiniz yoksa düğme hiç çıkmaz.</figcaption>
+      </figure>
+      <div class="tablo-kutu">
+        <table>
+          <thead><tr><th>Düğme</th><th>Ne yapar</th></tr></thead>
+          <tbody>
+            <tr><td><b>Pano simgesi</b> (veya <span class="dgm">Komuta merkezi</span>)</td><td>Kaydın bütün alanlarını açar. Projelerde bu düğme özel bir ekran açar — <a href="#komuta">5. bölüme</a> bakın.</td></tr>
+            <tr><td><b>Yazılı düğmeler</b><br>(<span class="dgm">Onayla</span>, <span class="dgm">Reddet</span>, <span class="dgm">Aşamayı değiştir</span>…)</td><td>Kaydın durumunu ilerleten <b>iş akışı</b> düğmeleridir. Hangi düğmenin çıkacağı kaydın o anki durumuna göre değişir.</td></tr>
+            <tr><td><b>Kalem simgesi</b></td><td>Kaydı düzenleme formunu açar.</td></tr>
+            <tr><td><b>Çarpı simgesi</b></td><td>Kaydı siler. Önce bir onay penceresi çıkar.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>4 · Yeni kayıt formu</h3>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/09-yeni-kayit-formu.png" alt="Yeni proje formu: zorunlu alanlar, referans alanları, Kaydet düğmesi" loading="lazy"></div>
+        <figcaption>Yeni proje formu. Yıldızlı alanlar zorunludur; formun altında <span class="dgm">Vazgeç</span> ve <span class="dgm">Kaydet</span> vardır.</figcaption>
+      </figure>
+      <ul class="duz">
+        <li><b>Yıldızlı (*) alanlar zorunludur.</b> Boş bırakırsanız kayıt gitmez, alanın altında kırmızı uyarı çıkar.</li>
+        <li><b>"… arayın…" yazan alanlar bağlantı alanıdır.</b> Örneğin <span class="alan">Müşteri</span> kutusuna müşterinin adını yazmaya başlayın, çıkan listeden seçin. Uzun kayıt numaralarını elle yazmanız gerekmez. Seçtikten sonra büyüteç simgesi seçimi değiştirir, çarpı temizler.</li>
+        <li><b>Ölçüler milimetre, tutarlar Türk Lirası</b> olarak girilir. Genişlik/yükseklik/derinlik alanlarına <span class="alan">1800</span> yazmak 1,80 metre demektir.</li>
+        <li><b>Kaydet</b>e iki kez basmanız sorun çıkarmaz; program aynı kaydı ikinci kez oluşturmaz.</li>
+      </ul>
+      <div class="not dikkat">
+        <b>Formda "Durum" alanını aramayın</b>
+        <p>
+          Çoğu kayıt türünde durumu formdan değiştiremezsiniz; durum yalnız satır sonundaki iş akışı
+          düğmeleriyle ilerler. Bu bilerek böyledir: onaylanmış bir teklifin veya kesinleşmiş bir finans
+          hareketinin elle "taslak"a çekilmesini engeller. Yeni kayıt açarken de yalnız baştaki durumları
+          seçebilirsiniz — projede <span class="alan">Talep</span> ve <span class="alan">Keşif</span> gibi.
+        </p>
+      </div>
+
+      <h3>5 · Silme</h3>
+      <p>
+        Çarpıya bastığınızda çıkan pencere kaydın adını gösterir ve onay ister. Kayıt başka
+        yerlerde kullanılıyorsa (örneğin bir müşterinin projeleri varsa) program silmeyi <b>güvenle
+        reddeder</b> ve size sebebini yazar. Bu bir hata değil, koruma mekanizmasıdır.
+      </p>
+
+      <h3>6 · Bağlantı kesildiğinde</h3>
+      <p>
+        İnternet giderse ekranın en üstünde turuncu bir şerit çıkar. Bu durumda yalnız
+        <b>güvenli yeni kayıtlar</b> oluşturabilirsiniz; onay, silme ve dosya işlemleri bağlantı bekler.
+        Ayrıntı <a href="#cevrimdisi">9. bölümde</a>.
+      </p>
+
+      <h3>7 · Yetki duvarına çarparsanız</h3>
+      <p>
+        Bir ekranı açtığınızda "Bu bölüme erişim yetkiniz yok" yazısı görüyorsanız kayıt silinmiş
+        değildir; rolünüzde o yetki yoktur. Yöneticinize hangi ekranı görmeniz gerektiğini söyleyin.
+      </p>
+    </section>
+
+    <!-- 4 -->
+    <section class="bolum" id="zincir">
+      <div class="sira">İşin sırası</div>
+      <h2>Bir projenin baştan sona yolculuğu</h2>
+      <p>
+        Capproje'nin bel kemiği budur. Bir proje, aşağıdaki aşamalardan <b>sırayla</b> geçer.
+        Aşama atlayamazsınız ve her aşamaya geçmeden önce program birkaç şartı kontrol eder.
+        Bu yüzden "nereden başlayacağım?" sorusunun cevabı hep aynıdır: <b>müşteri, sonra proje.</b>
+      </p>
+
+      <div class="zincir">
+        <article>
+          <div>
+            <h4>Talep</h4>
+            <p>Müşteriden iş geldi. <b>Müşteriler</b> ekranından müşteriyi açın, sonra <b>Projeler</b> ekranından projeyi <span class="alan">Talep</span> aşamasında oluşturun.</p>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Keşif</h4>
+            <p>Sahaya gidilir, ölçü alınır. <b>Keşifler</b> ekranında keşif kaydı açılır; ölçüler <b>Keşif Metrajları</b> ekranına mahal mahal girilir. Sahadayken telefondan <b>Saha Modu</b>'nu kullanmak en pratiğidir.</p>
+            <div class="kapi">Sonraki aşamaya geçiş şartı: onaylı keşif ve metraj</div>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Teklif Hazırlığı</h4>
+            <p>Metrajdan fiyat çıkar. <b>Satış &amp; Teklif</b> ekranında teklif kaydı, <b>Teklif Kalemleri</b> ekranında satır satır ürün, miktar, birim fiyat ve maliyet girilir.</p>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Teklif</h4>
+            <p>Teklif müşteriye sunulur. Müşteri cevabına göre teklif satırındaki <span class="dgm">Kabul et</span> veya <span class="dgm">Reddet</span> düğmesini kullanın. Reddederken kayıp nedenini yazmak zorunludur — bu veri sonra "neden kaybediyoruz?" sorusunu cevaplar.</p>
+            <div class="kapi">Sonraki aşamaya geçiş şartı: müşteriye sunulmuş teklif</div>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Sözleşme</h4>
+            <p>Kabul edilen teklif satırında <span class="dgm">Projeye dönüştür</span> düğmesi çıkar. <b>Sözleşmeler</b> ekranında ödeme modeli (hakedişli / avans-bakiye), avans oranı, teminat ve garanti süresi tanımlanır.</p>
+            <div class="kapi">Sonraki aşamaya geçiş şartı: imzalı sözleşme</div>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Tasarım</h4>
+            <p><b>Tasarım Revizyonları</b> ekranında 2D/3D çizimler yüklenir. Çizim önce iç kontrolden geçer, sonra <span class="dgm">Müşteriye sun</span> ile müşteri onayına gider; müşteri onaylayınca <span class="dgm">Onayla</span>, değişiklik isterse <span class="dgm">Reddet</span> ve nedeni yazılır.</p>
+            <div class="kapi">Sonraki aşamaya geçiş şartı: onaylı tasarım + tanımlı iş kalemleri</div>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Satın Alma</h4>
+            <p><b>İş Kalemleri</b> ve <b>Ürün Reçeteleri</b>nden malzeme ihtiyacı çıkarılır, <b>Malzeme İhtiyaç Planı</b>nda stoktan ayrılır veya <b>Satın Alma</b> talebine dönüşür. Tedarikçi teklifleri karşılaştırılır, sipariş açılır, mal kabul yapılır.</p>
+            <div class="kapi">Sonraki aşamaya geçiş şartı: eksik malzeme kalmaması</div>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Üretim &amp; Kalite</h4>
+            <p><b>Üretim</b> ekranında emirler <span class="dgm">Üretime sal</span> ile başlatılır, <b>Üretim Operasyonları</b> tek tek ilerletilir, <b>Kalite Kontrolleri</b> ile kontrol edilir. Çıkan sorunlar <b>Üretim Sorunları</b>na yazılır.</p>
+            <div class="kapi">Sonraki aşamaya geçiş şartı: üretim emirlerinin tamamlanması + final kalite geçişi</div>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Montaj</h4>
+            <p><b>Montaj</b> ekranında saha planı, ekip ve tarihler tutulur. Sahada çıkan eksikler <b>Teslim Eksikleri</b>ne yazılır.</p>
+            <div class="kapi">Sonraki aşamaya geçiş şartı: montajın tamamlanması</div>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Teslim</h4>
+            <p><b>Teslim &amp; Kabul</b> ekranında teslim tutanağı, müşteri imzası ve memnuniyet puanı kaydedilir.</p>
+            <div class="kapi">Sonraki aşamaya geçiş şartı: müşteri kabulü + açık eksik kalmaması</div>
+          </div>
+        </article>
+        <article>
+          <div>
+            <h4>Tamamlandı</h4>
+            <p>Proje tamamlandı olarak kapanır. Hakedişler, son faturalar ve kârlılık bu aşamada kesinleşir.</p>
+          </div>
+        </article>
+      </div>
+
+      <h3>Aşamayı nasıl ilerletirsiniz?</h3>
+      <ol class="adimlar">
+        <li><b>Projeler</b> ekranını açın.</li>
+        <li>İlgili proje satırının sonundaki <span class="dgm">Aşamayı değiştir</span> düğmesine basın.</li>
+        <li>Açılan pencerede <span class="alan">Yeni aşama</span> listesinden hedefi seçin. Listede yalnız <b>izin verilen sıradaki</b> aşamalar çıkar — sıra atlamak mümkün değildir.</li>
+        <li>İsterseniz bir <span class="alan">Geçiş notu</span> yazın, sonra <span class="dgm">İşlemi onayla</span> deyin.</li>
+      </ol>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/11-asama-degistir.png" alt="Proje aşamasını değiştir penceresi" loading="lazy"></div>
+        <figcaption>Aşama değiştirme penceresi. Üstte hangi projede olduğunuz, ortada seçim listesi, altta not alanı.</figcaption>
+      </figure>
+
+      <div class="not dikkat">
+        <b>"Zorunlu proje koşulları tamamlanmalıdır" uyarısı</b>
+        <p>
+          Aşama kapısındaki şartlardan biri sağlanmadıysa program geçişi durdurur ve <b>hangi şartın
+          eksik olduğunu</b> yazar. Doğru davranış eksiği tamamlamaktır. Gerçekten istisna gerekiyorsa
+          bunu yalnız <b>firma sahibi / yönetici</b> yapabilir ve en az 10 karakterlik bir gerekçe
+          yazmak zorundadır. Gerekçe denetim kaydına işlenir.
+        </p>
+      </div>
+      <div class="not ipucu">
+        <b>Aşama değiştirince ne olur?</b>
+        <p>
+          Program o aşamaya ait hazır görevleri otomatik açar ve proje yöneticisine bildirim gönderir.
+          Yani aşamayı ilerletmek sadece bir etiket değiştirmez, ekibe iş dağıtır. <b>Proje Görevleri</b>
+          ekranında bu görevleri sorumlularına atayın.
+        </p>
+      </div>
+      <div class="not ipucu">
+        <b>Aşama adı her yerde aynıdır</b>
+        <p>
+          Yukarıdaki on bir ad; proje listesindeki <b>Aşama</b> sütununda, kanban sütun
+          başlıklarında, aşama değiştirme listesinde ve komuta merkezindeki zincirde
+          birebir aynı yazılır. Farklı bir kelime görüyorsanız o bir aşama değil,
+          başka bir kaydın durumudur.
+        </p>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section class="bolum" id="komuta">
+      <div class="sira">Projeler</div>
+      <h2>Proje komuta merkezi</h2>
+      <p>
+        Bir projenin durumunu öğrenmek için tek tek ekran dolaşmanız gerekmez.
+        <b>Projeler</b> ekranında satırın sonundaki <span class="dgm">Komuta merkezi</span> düğmesi,
+        o projeyle ilgili her şeyi tek pencerede toplar.
+      </p>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/10-komuta-merkezi.png" alt="Proje komuta merkezi: aşama zinciri, hazırlık oranı, sıradaki işler, aşama kapıları" loading="lazy"></div>
+        <figcaption>Komuta merkezi. Üstte aşama zinciri, ortada dört özet kutusu, altta yapılacaklar ve kontrol sonucu.</figcaption>
+      </figure>
+
+      <h3>Ne göreceksiniz</h3>
+      <ul class="duz">
+        <li><b>Aşama zinciri</b> — Projenin geçtiği aşamalar. Tik işaretliler tamamlandı, koyu olan aktif aşama.</li>
+        <li><b>Sonraki aşamaya hazırlık</b> — Yüzde olarak: bir sonraki aşamaya geçmek için şartların ne kadarı tamam.</li>
+        <li><b>Açık görev</b> — Bu projede bekleyen iş sayısı, altında kaçının geciktiği. <span class="dgm">Görevlere git</span> ile listeye atlar.</li>
+        <li><b>Proje dosyası</b> — Bu projeye yüklenmiş fotoğraf, çizim ve belge sayısı.</li>
+        <li><b>Tahmini kâr</b> — Sözleşme bedeli ile bugüne kadarki maliyetten hesaplanan tahmini kâr ve marj. <span class="dgm">Maliyet kırılımı</span> ile mahal ve iş kalemi bazında bütçe / gerçekleşen / taahhüt / kalan tahmini açar.</li>
+        <li><b>Sıradaki doğru işler</b> — Programın önerdiği yapılacaklar, önem sırasına dizilmiş. Yanındaki <span class="dgm">Aç</span> sizi doğrudan o ekrana götürür.</li>
+        <li><b>Aşama kapıları</b> — Sonraki aşamaya geçişi engelleyen (kırmızı) ve sadece uyaran (turuncu) şartlar.</li>
+        <li><b>Operasyon bağlantıları</b> — Onaylı keşif, onaylı tasarım, üretim tamamlanma, kalite, montaj ve müşteri kabulü sayıları. Her kutu tıklanabilir.</li>
+      </ul>
+
+      <div class="not ipucu">
+        <b>Günlük alışkanlık önerisi</b>
+        <p>
+          Sabah programı açtığınızda aktif projelerin komuta merkezine tek tek bakmak yerine
+          <b>Ana Sayfa</b>'daki dikkat kutularına bakın; bir şey kırmızıysa oradan ilgili projenin
+          komuta merkezine inin.
+        </p>
+      </div>
+    </section>
+
+    <!-- 6 -->
+    <section class="bolum" id="anasayfa">
+      <div class="sira">Günlük kullanım</div>
+      <h2>Ana sayfa nasıl okunur</h2>
+      <p>Ana sayfa dört kattan oluşur ve yukarıdan aşağıya "genel durum → nerede takıldık → ne oldu" sırasını izler.</p>
+      <ol class="adimlar">
+        <li><b>Özet kutuları</b> — Aktif proje sayısı, açık teklifler ve tutarı, üretim emirleri, montaj planları, beklenen tahsilat, aktif personel.</li>
+        <li><b>Portföy hangi aşamada?</b> — Projelerin aşamalara dağılımı. Bir kutuya basınca proje listesine gider. Burada bir aşamada anormal yığılma varsa darboğaz oradadır.</li>
+        <li><b>Dikkat kutuları</b> — Gecikmiş görev, satın alma onayı, tasarım onayı, kalite uyarısı, malzeme eksiği, kapasite çakışması. <b>Kırmızı çerçeveli olanlar bugün ilgilenmeniz gerekenlerdir.</b> Her kutu ilgili ekrana götürür.</li>
+        <li><b>Son hareketler</b> — Ekibin son işlemleri, en yenisi üstte.</li>
+      </ol>
+      <div class="not bilgi">
+        <b>Sayılar sizin yetkinize göredir</b>
+        <p>Göremediğiniz bir modülün sayıları ana sayfada da görünmez. İki kullanıcının ana sayfası farklı olabilir; bu normaldir.</p>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section class="bolum" id="saha">
+      <div class="sira">Günlük kullanım</div>
+      <h2>Saha modu — telefonla sahada çalışmak</h2>
+      <p>
+        Sahadayken uzun formlar doldurmak zordur. <b>Saha Modu</b> bunun için vardır: bir kez
+        aktif projeyi seçersiniz, sonra tek dokunuşla kayıt açarsınız. Seçtiğiniz proje
+        telefonunuzda hatırlanır, her seferinde yeniden seçmezsiniz.
+      </p>
+
+      <div class="telefon-ikili">
+        <figure class="sahne telefon">
+          <div class="cerceve"><img src="kilavuz/gorseller/24-saha-modu.png" alt="Saha modu ekranı: aktif proje seçimi ve hızlı işlem kartları" loading="lazy"></div>
+          <figcaption>Üstte <b>Aktif proje</b> kutusu, altında hızlı işlem kartları.</figcaption>
+        </figure>
+        <figure class="sahne telefon">
+          <div class="cerceve"><img src="kilavuz/gorseller/25-saha-fotograf.png" alt="Saha modunda fotoğraf ekleme formu" loading="lazy"></div>
+          <figcaption>Fotoğraf çekme formu — proje, mahal ve aşama bilgisiyle birlikte kaydedilir.</figcaption>
+        </figure>
+      </div>
+
+      <h3>Adım adım</h3>
+      <ol class="adimlar">
+        <li>Alt çubuktan <span class="dgm">Saha Modu</span>'na dokunun.</li>
+        <li><span class="alan">Aktif proje</span> kutusuna proje kodunu veya adını yazmaya başlayın, çıkan listeden seçin.</li>
+        <li>Yapacağınız işi seçin: <b>Fotoğraf çek</b>, <b>Keşif kaydı</b>, <b>Ölçü / metraj</b>, <b>Kalite kusuru</b>, <b>Montaj eksiği</b>, <b>Görüşme notu</b> veya <b>Görev ekle</b>.</li>
+        <li>Form açılır — proje, tarih ve durum gibi alanlar önceden doldurulmuş gelir. Kalanı yazıp kaydedin.</li>
+      </ol>
+
+      <div class="not ipucu">
+        <b>İnternet olmayan şantiyede</b>
+        <p>
+          Kartın altında <b>"Çevrimdışı da kaydedilir"</b> yazıyorsa o kaydı internetsiz de
+          açabilirsiniz; kayıt telefonunuzda bekler ve bağlantı gelince kendiliğinden gönderilir.
+          <b>"Bağlantı gerekli"</b> yazanlar (fotoğraf yükleme gibi) internet ister.
+        </p>
+      </div>
+      <p>
+        Ekranın altındaki <b>Günlük çalışma alanları</b> bölümü sık kullanılan dört ekrana kısayoldur:
+        Görevlerim, Montaj planı, Kalite kontrolleri, Proje fotoğrafları.
+      </p>
+    </section>
+
+    <!-- 8 -->
+    <section class="bolum" id="arama">
+      <div class="sira">Günlük kullanım</div>
+      <h2>Aradığınızı bulmak</h2>
+      <p>Programda iki ayrı arama vardır ve karıştırılmamalıdır.</p>
+
+      <h3>Genel arama (üst çubuktaki)</h3>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/12-genel-arama.png" alt="Üst çubuktaki genel arama ve çıkan sonuçlar" loading="lazy"></div>
+        <figcaption>En az 2 harf yazın; sonuçlar hangi bölümden geldiğiyle birlikte listelenir. Birine basınca o bölüme gidersiniz.</figcaption>
+      </figure>
+      <p>
+        Bu arama <b>bütün bölümlerde</b> aynı anda arar: proje, müşteri, teklif, ürün, belge.
+        Nerede olduğunu bilmediğiniz bir kaydı ararken bunu kullanın. Yazmayı bıraktıktan kısa süre
+        sonra kendiliğinden arar, düğmeye basmanız gerekmez.
+      </p>
+
+      <h3>Ekran içi arama (listenin üstündeki)</h3>
+      <p>
+        Bu arama <b>sadece bulunduğunuz ekranda</b> arar ve listeyi filtreler. Kod, ad, müşteri
+        veya durum yazabilirsiniz. Listeyi temizlemek için kutuyu boşaltıp yeniden
+        <span class="dgm">Ara</span> deyin.
+      </p>
+    </section>
+
+    <!-- 9 -->
+    <section class="bolum" id="cevrimdisi">
+      <div class="sira">Günlük kullanım</div>
+      <h2>İnternet kesildiğinde</h2>
+      <p>
+        Program çevrimdışı çalışabilir ama <b>her şeyi değil</b>. Kural basittir: veri <b>eklemek</b>
+        çoğunlukla mümkündür, veri <b>değiştirmek ve onaylamak</b> mümkün değildir. Çünkü onay ve
+        silme işlemleri sunucudaki güncel duruma bakmak zorundadır.
+      </p>
+
+      <div class="tablo-kutu">
+        <table>
+          <thead><tr><th>Çevrimdışıyken</th><th>Durum</th></tr></thead>
+          <tbody>
+            <tr><td>Keşif, metraj, görev, kalite kusuru, montaj eksiği, görüşme notu eklemek</td><td><b>Çalışır</b> — kayıt kuyruğa alınır</td></tr>
+            <tr><td>Fotoğraf ve dosya yüklemek</td><td>Bağlantı bekler</td></tr>
+            <tr><td>Onaylamak, reddetmek, aşama ilerletmek</td><td>Bağlantı bekler</td></tr>
+            <tr><td>Kayıt silmek, rol yetkisi değiştirmek, yedek almak</td><td>Bağlantı bekler</td></tr>
+            <tr><td>Finans hareketi oluşturmak</td><td>Bağlantı bekler</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Kuyruk nasıl yönetilir</h3>
+      <ol class="adimlar">
+        <li>Üst çubuktaki <span class="dgm">Kuyruk</span> düğmesine basın. Üzerindeki sayı bekleyen kayıt adedidir.</li>
+        <li>Bağlantı gelince kayıtlar kendiliğinden gönderilir. Beklemek istemezseniz <span class="dgm">Şimdi eşitle</span> deyin.</li>
+        <li>Bir kayıt <b>"İnceleme gerekli"</b> görünüyorsa sunucu onu kabul etmemiştir; altındaki açıklamayı okuyun, düzeltip <span class="dgm">Tekrar dene</span> deyin.</li>
+        <li>Yanlışlıkla oluşturduğunuz bir kaydı çarpı simgesiyle kuyruktan kaldırabilirsiniz — o kayıt sunucuya hiç gitmez.</li>
+      </ol>
+      <div class="not dikkat">
+        <b>Kuyruk kalıcı bir depo değildir</b>
+        <p>
+          Bekleyen kayıtlar cihazda en fazla <b>7 gün</b> tutulur ve yalnız aynı kullanıcı ile aynı
+          firmada eşitlenir. Sahadan döndüğünüzde bağlantıya girip kuyruğun boşaldığını görün.
+        </p>
+      </div>
+    </section>
+
+    <!-- 10 -->
+    <section class="bolum" id="satinalma">
+      <div class="sira">Operasyon</div>
+      <h2>Satın alma: talepten mal kabule</h2>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/19-satin-alma.png" alt="Satın alma talepleri listesi" loading="lazy"></div>
+        <figcaption>Satın Alma ekranı. Her talebin durumu ve satır sonunda o duruma uygun düğmeler.</figcaption>
+      </figure>
+
+      <ol class="adimlar">
+        <li><b>Talep açın.</b> <b>Satın Alma</b> ekranında <span class="dgm">+ Yeni talep</span>: ne, ne kadar, ne zaman gerekiyor, hangi projeye. İsterseniz tercih edilen tedarikçiyi de yazın.</li>
+        <li><b>Teklif toplayın.</b> <b>Tedarikçi Teklifleri</b> ekranından aynı talebe birden fazla tedarikçi teklifi girin: tutar, birim fiyat, termin, ödeme koşulu.</li>
+        <li><b>Karşılaştırın.</b> Talep satırındaki detay düğmesi <b>teklif karşılaştırma</b> penceresini açar: teklif sayısı, en düşük–en yüksek farkı, fiyat aralığı ve her satırda <b>En düşük fiyat</b> / <b>En kısa termin</b> işaretleri.</li>
+        <li><b>Seçin.</b> Kazanan teklifte <span class="dgm">Seç</span> deyin. Diğerleri otomatik reddedilir. <b>En düşük teklifi seçmiyorsanız</b> program en az 10 karakterlik gerekçe ister — bu kayıt denetimde durur.</li>
+        <li><b>Onaylayın.</b> Talep satırında <span class="dgm">Onayla</span>. Yetkisi olmayan kullanıcıda bu düğme çıkmaz.</li>
+        <li><b>Sipariş açın.</b> Onaylı talepte <span class="dgm">Sipariş oluştur</span>. Tedarikçi seçmezseniz talepteki tercih edilen tedarikçi kullanılır.</li>
+        <li><b>Mal kabul yapın.</b> <b>Satın Alma Siparişleri</b> ekranında <span class="dgm">Mal kabul</span>. Stok kartı ve miktar girerseniz stok girişi de yazılır ve bağlı malzeme ihtiyacının teslim alınan miktarı güncellenir.</li>
+      </ol>
+
+      <div class="not ipucu">
+        <b>Malzeme ihtiyacı nereden çıkar?</b>
+        <p>
+          İş kalemine <b>Ürün Reçetesi</b> tanımladıysanız, reçete satırındaki
+          <span class="dgm">Reçeteyi patlat</span> düğmesi miktar ve fire payını kullanarak
+          <b>Malzeme İhtiyaç Planı</b>nı kendiliğinden oluşturur. Oradan ihtiyaçları
+          <span class="dgm">Stoktan ayır</span> ile rezerve eder, eksik kalanı
+          <span class="dgm">Satın alma talebi aç</span> ile satın almaya gönderirsiniz.
+          Üretim başlarken <span class="dgm">Üretime ver</span>, iptal olursa
+          <span class="dgm">Rezervasyonu bırak</span> kullanılır.
+        </p>
+      </div>
+    </section>
+
+    <!-- 11 -->
+    <section class="bolum" id="uretim">
+      <div class="sira">Operasyon</div>
+      <h2>Üretim ve kalite</h2>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/20-uretim.png" alt="Üretim emirleri listesi" loading="lazy"></div>
+        <figcaption>Üretim ekranı. Emirler iç üretim ve dış imalat ayrımıyla birlikte izlenir.</figcaption>
+      </figure>
+
+      <ol class="adimlar">
+        <li><b>Üretim emri açın.</b> Hangi projenin hangi iş kalemi, ne miktarda, hangi atölyede, hangi tarihlerde.</li>
+        <li><span class="dgm">Üretime sal</span> deyin. Program bu sırada iş kaleminin güncel revizyonunun onaylı olduğunu kontrol eder — onaysız çizimle üretime başlanmasını engeller.</li>
+        <li><b>Durumu ilerletin.</b> <span class="dgm">Üretim durumunu değiştir</span> ile emir şu yolu izler: <b>Salındı → Malzeme bekliyor → Üretimde → Kalite kontrol → Tamamlandı</b>. Gerekirse <b>Duraklatıldı</b> veya <b>İptal</b>. Tamamlarken üretilen miktarı yazın; boş bırakırsanız planlanan miktarın tamamı üretilmiş sayılır.</li>
+        <li><b>Operasyonları takip edin.</b> <b>Üretim Operasyonları</b> ekranında kesim, bantlama, montaj gibi adımlar tek tek ilerletilir. Tamamlarken gerçekleşen süreyi dakika olarak girin; boş bırakırsanız başlangıçtan bu yana geçen süre yazılır.</li>
+        <li><b>Sorunları kaydedin.</b> <b>Üretim Sorunları</b> ekranında sorunu açın; kapatırken <b>yeniden işlem</b> ve <b>hurda</b> miktarını girin. Bu rakamlar projenin kârlılığına doğrudan yansır — kâr kaybının nereden geldiğini gösteren tek yer burasıdır.</li>
+        <li><b>Kalite kontrolü yapın.</b> <b>Kalite Kontrolleri</b> ekranında girdi / üretim içi / final / saha kontrolü kaydedilir ve <span class="dgm">Sonuçlandır</span> ile kapatılır. Montaj aşamasına geçebilmek için <b>final kalite kontrolünün geçmiş olması</b> şarttır.</li>
+      </ol>
+
+      <div class="not ipucu">
+        <b>Atölye doluyor mu?</b>
+        <p>
+          <b>İş Merkezi Yükü</b> ekranı, seçtiğiniz tarih aralığında her iş merkezinin kapasitesini,
+          planlanan dakikayı ve doluluk yüzdesini yan yana gösterir. Kapasitesi aşan merkezler
+          üstte uyarı olarak listelenir. Üretim planı yapmadan <b>önce</b> buraya bakın.
+        </p>
+      </div>
+    </section>
+
+    <!-- 12 -->
+    <section class="bolum" id="finans">
+      <div class="sira">Finans</div>
+      <h2>Para: finans hareketleri ve hakedişler</h2>
+
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/18-finans.png" alt="Proje finansları listesi" loading="lazy"></div>
+        <figcaption>Proje Finansları ekranı. Her satır bir gelir veya gider hareketidir ve bir projeye bağlıdır.</figcaption>
+      </figure>
+
+      <h3>Finans hareketi</h3>
+      <ol class="adimlar">
+        <li><span class="dgm">+ Yeni finans hareketi</span> ile tutarı, tarihi, türünü (gelir/gider) ve hangi projeye ait olduğunu girin.</li>
+        <li>Kayıt önce <b>onay bekler</b> durumunda açılır.</li>
+        <li>Yetkili kullanıcı <span class="dgm">Onayla</span> der.</li>
+        <li>Onaylanan hareket <b>artık değiştirilemez ve silinemez.</b> Yanlışsa <span class="dgm">Ters kayıt</span> ile eşit tutarlı bir düzeltme kaydı açılır ve nedeni yazılır. Orijinal kayıt durur.</li>
+      </ol>
+      <div class="not bilgi">
+        <b>Neden böyle?</b>
+        <p>
+          Muhasebede geçmişi silmek değil, düzeltmek esastır. Bu yüzden program onaylanmış bir
+          hareketi değiştirmenize izin vermez; kimin ne zaman ne düzelttiği görünür kalır.
+        </p>
+      </div>
+
+      <h3>Resmi / proje içi ayrımı</h3>
+      <p>
+        <b>Faturalar &amp; Ön Muhasebe</b> ekranının üstünde <span class="dgm">Tümü</span> ·
+        <span class="dgm">Resmi</span> · <span class="dgm">Proje içi / gayri resmi</span> sekmeleri vardır.
+        Bu sekmeler yalnız hassas finans verisini görme yetkisi olan kullanıcılara açılır.
+      </p>
+
+      <h3>Hakediş süreci</h3>
+      <p>Sözleşmesi hakedişli olan projelerde <b>Hakedişler</b> ekranı dört adımlı bir zincir izler:</p>
+      <ol class="adimlar">
+        <li><span class="dgm">Onaya gönder</span> — dönemin tutarları kilitlenir.</li>
+        <li><span class="dgm">Onayla</span> (veya gerekçeyle <span class="dgm">Reddet</span>).</li>
+        <li><span class="dgm">Faturalandı</span> — hakediş, projenin faturasına bağlanır.</li>
+        <li><span class="dgm">Ödendi</span> — hakediş, onaylı bir finans hareketine bağlanır ve kapanır.</li>
+      </ol>
+    </section>
+
+    <!-- 13 -->
+    <section class="bolum" id="bildirim">
+      <div class="sira">Günlük kullanım</div>
+      <h2>Bildirimler</h2>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/13-bildirimler.png" alt="Bildirimler ekranı" loading="lazy"></div>
+        <figcaption>Bildirimler, kişisel iş kutunuzdur — herkesin bildirimi kendine özeldir.</figcaption>
+      </figure>
+      <ul class="duz">
+        <li><b>Bildirimin üstüne basın</b> → okundu sayılır ve sizi ilgili kayda götürür.</li>
+        <li><span class="dgm">Kapat</span> → bildirimi listeden kaldırır, hiçbir yere gitmez.</li>
+        <li><span class="dgm">Yenile</span> → yeni bildirim var mı diye bakar.</li>
+      </ul>
+      <p>
+        Bildirimler kendiliğinden oluşur: proje aşaması değiştiğinde, size görev atandığında,
+        onayınızı bekleyen bir kayıt olduğunda.
+      </p>
+    </section>
+
+    <!-- 14 -->
+    <section class="bolum" id="yonetim">
+      <div class="sira">Yönetim</div>
+      <h2>Kullanıcılar, roller ve yetkiler</h2>
+      <p>Bu bölüm firma sahibi ve yöneticiler içindir.</p>
+
+      <h3>Kullanıcı eklemek</h3>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/16-kullanicilar.png" alt="Kullanıcılar ekranı" loading="lazy"></div>
+        <figcaption><b>Yönetim → Kullanıcılar</b>. Firmadaki kişiler, unvanları ve rolleri.</figcaption>
+      </figure>
+      <ol class="adimlar">
+        <li><span class="dgm">+ Yeni kullanıcı daveti</span> ile kişiyi ekleyin: telefon, ad, unvan ve rol.</li>
+        <li>Program bir <b>geçici şifre</b> üretir. Bu şifre yalnız bir kez gösterilir; kişiye güvenli bir kanaldan (elden veya telefonla) iletin.</li>
+        <li>Kişi ilk girişinde kendi şifresini belirler.</li>
+        <li>Bir kullanıcı şifresini unutursa, bu ekranın üstünde beliren <b>şifre sıfırlama talepleri</b> panelinden ona yeni bir geçici şifre verirsiniz.</li>
+      </ol>
+
+      <h3>Roller ve yetkiler</h3>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/14-roller.png" alt="Roller listesi" loading="lazy"></div>
+        <figcaption>Kurulumla birlikte hazır roller gelir. Sistem rolleri silinemez ama yetkileri düzenlenebilir.</figcaption>
+      </figure>
+      <p>
+        Bir rol satırındaki <b>bina simgesine</b> basarak o rolün yetkilerini açarsınız.
+        Yetkiler, hangi bölüme ait olduklarına göre gruplanmıştır.
+      </p>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/15-rol-yetkileri.png" alt="Rol yetkileri penceresi, gruplanmış onay kutuları" loading="lazy"></div>
+        <figcaption>Her kutu bir yetkidir. Soluk ve kilitli görünenler, işaretlediğiniz üst bir yetkiden kendiliğinden gelir.</figcaption>
+      </figure>
+      <div class="not dikkat">
+        <b>Maliyet ve ücret yetkileri ayrıdır</b>
+        <p>
+          Bir kişinin projeyi görmesi, maliyetleri de görmesi anlamına gelmez. <b>Maliyet görme</b> ve
+          <b>ücret görme</b> yetkileri ayrı kutulardır ve ayrıca işaretlenmelidir. Personelin maaşını
+          yalnız bu yetkiye sahip kullanıcılar görebilir.
+        </p>
+      </div>
+
+      <h3>Yedekler</h3>
+      <figure class="sahne">
+        <div class="cerceve"><img src="kilavuz/gorseller/17-yedekler.png" alt="Yedekler ekranı" loading="lazy"></div>
+        <figcaption>Otomatik yedekler burada listelenir; <span class="dgm">Şimdi yedekle</span> ile anlık yedek de alabilirsiniz.</figcaption>
+      </figure>
+      <p>
+        Büyük bir veri girişinden veya toplu düzeltmeden <b>önce</b> elle bir yedek almak iyi bir
+        alışkanlıktır. Yedek listesinde her satırın durumu, kapsadığı kayıt sayısı ve kimin tetiklediği görünür.
+      </p>
+
+      <h3>Denetim kayıtları</h3>
+      <p>
+        <b>Yönetim → Denetim Kayıtları</b> kimin ne zaman hangi kaydı değiştirdiğini tutar.
+        Salt okunurdur; hiç kimse — firma sahibi dahil — bu kayıtları düzenleyemez veya silemez.
+        "Bu teklifi kim onaylamış?" sorusunun cevabı buradadır.
+      </p>
+
+      <h3>API erişim anahtarları</h3>
+      <p>
+        Başka bir programı Capproje'ye bağlamak için kullanılır. Anahtar oluşturulduğunda gizli
+        değer <b>yalnız bir kez</b> gösterilir; kaybederseniz yenisini üretmeniz gerekir.
+        Şüpheli bir durumda <span class="dgm">İptal et</span> deyin — o anahtarı kullanan bağlantı
+        anında erişimini kaybeder.
+      </p>
+    </section>
+
+    <!-- 15 -->
+    <section class="bolum" id="sss">
+      <div class="sira">Yardım</div>
+      <h2>Karşılaşabileceğiniz uyarılar ve anlamları</h2>
+      <dl class="sss">
+        <dt>Bir kaydı açtım ama durumunu değiştiremiyorum</dt>
+        <dd>
+          <span class="hata-metni">Durum değişikliği yalnız ilgili iş akışı endpoint'i üzerinden yapılabilir.</span>
+          Durum, düzenleme formundan değil <b>satır sonundaki düğmelerden</b> değişir. Formu kapatın,
+          satırdaki <span class="dgm">Onayla</span> / <span class="dgm">Aşamayı değiştir</span> gibi düğmeyi kullanın.
+        </dd>
+
+        <dt>Yeni kayıt açarken istediğim durumu seçemiyorum</dt>
+        <dd>
+          <span class="hata-metni">Bu başlangıç durumu yalnız ilgili iş akışı endpoint'i ile oluşturulabilir.</span>
+          Kayıtlar zincirin başından açılır. Örneğin bir projeyi doğrudan "Üretim" aşamasında
+          açamazsınız; <b>Talep</b> olarak açıp aşamaları ilerletirsiniz.
+        </dd>
+
+        <dt>Aşamayı ilerletemiyorum</dt>
+        <dd>
+          <span class="hata-metni">Bu aşamaya geçmeden önce zorunlu proje koşulları tamamlanmalıdır.</span>
+          Komuta merkezindeki <b>Aşama kapıları</b> bölümüne bakın; hangi şartın eksik olduğu orada yazar.
+          İstisna gerekiyorsa yalnız firma sahibi, en az 10 karakterlik gerekçeyle geçebilir.
+        </dd>
+
+        <dt>Kaydı silemiyorum</dt>
+        <dd>
+          Kayıt başka kayıtlarda kullanılıyordur — örneğin projesi olan bir müşteri silinemez.
+          Önce bağlı kayıtları kaldırın veya kaydı silmek yerine durumunu <b>pasif</b> yapın.
+        </dd>
+
+        <dt>Kayıt oluşturulamadı diyor</dt>
+        <dd>
+          <span class="hata-metni">Kayıt oluşturulamadı; numara veya ilişkili kayıtları kontrol edin.</span>
+          Girdiğiniz kod veya numara firmada zaten kullanılıyordur. Proje kodu, teklif numarası,
+          sipariş numarası gibi alanlar firma içinde benzersiz olmak zorundadır.
+        </dd>
+
+        <dt>Giriş yaptım ama tekrar giriş ekranına düşüyorum</dt>
+        <dd>
+          <span class="hata-metni">Giriş doğrulandı ancak oturum tarayıcıda saklanamadı.</span>
+          Tarayıcınız bu site için çerezleri engelliyordur. Gizli sekmede veya çerez engelleyici bir
+          eklentiyle çalışıyorsanız normal sekmeye geçin ve siteye izin verin.
+        </dd>
+
+        <dt>Bir bölüm menüde hiç görünmüyor</dt>
+        <dd>Rolünüzde o bölümün okuma yetkisi yoktur. Yöneticinizden <b>Roller &amp; Yetkiler</b> ekranından eklemesini isteyin.</dd>
+
+        <dt>Rakamlar başka bir kullanıcınınkinden farklı</dt>
+        <dd>Ana sayfa ve listeler yetkinize göre süzülür. Maliyet ve ücret yetkisi olmayan kullanıcı bu tutarları göremez; bu bir hata değildir.</dd>
+
+        <dt>Yanlışlıkla "Prototipe dön" dedim</dt>
+        <dd>Tasarım önizlemesine geçtiniz; verinize bir şey olmaz. Sayfayı yenileyin, programa geri dönersiniz.</dd>
+      </dl>
+    </section>
+
+    <!-- 16 -->
+    <section class="bolum" id="dizin">
+      <div class="sira">Başvuru</div>
+      <h2>Bütün ekranlar, tek listede</h2>
+      <p>Menüde bir şey ararken "bu neydi?" derseniz buraya bakın.</p>
+
+      <h3>Genel</h3>
+      <div class="tablo-kutu dizin">
+        <table>
+          <thead><tr><th>Ekran</th><th>Ne işe yarar</th></tr></thead>
+          <tbody>
+            <tr><td><b>Ana Sayfa</b></td><td>Firmanın genel durumu, bekleyen kararlar, günün öncelikleri.</td></tr>
+            <tr><td><b>Bildirimler</b></td><td>Size özel iş kutusu: atanan görevler, onay bekleyenler, aşama değişiklikleri.</td></tr>
+            <tr><td><b>Saha Modu</b></td><td>Telefondan tek dokunuşla saha kaydı: fotoğraf, keşif, ölçü, kalite, eksik, görüşme, görev.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Müşteri &amp; Proje</h3>
+      <div class="tablo-kutu dizin">
+        <table>
+          <thead><tr><th>Ekran</th><th>Ne işe yarar</th></tr></thead>
+          <tbody>
+            <tr><td><b>Müşteriler</b></td><td>Müşteri, karar verici, vergi ve ticari çalışma bilgileri.</td></tr>
+            <tr><td><b>Projeler</b></td><td>Tekliften montaj kapanışına kadar proje portföyü. Komuta merkezi buradan açılır.</td></tr>
+            <tr><td><b>Keşifler</b></td><td>Saha keşif randevusu, sorumlu, konum ve onay süreci.</td></tr>
+            <tr><td><b>Keşif Metrajları</b></td><td>Keşfe bağlı mahal, eleman ve ölçü bazlı metraj satırları.</td></tr>
+            <tr><td><b>Satış &amp; Teklif</b></td><td>Teklifler, revizyonları, kabul/ret ve kayıp nedenleri.</td></tr>
+            <tr><td><b>Teklif Kalemleri</b></td><td>Teklifin ürün, miktar, satış fiyatı ve maliyet kırılımı.</td></tr>
+            <tr><td><b>Sözleşmeler</b></td><td>Ödeme modeli, avans, teminat, garanti ve imza yaşam döngüsü.</td></tr>
+            <tr><td><b>Tasarım Revizyonları</b></td><td>2D/3D çizimlerin iç kontrolü ve müşteri onay revizyonları.</td></tr>
+            <tr><td><b>Proje Toplantıları</b></td><td>Haftalık proje, üretim ve saha toplantılarının karar kaydı.</td></tr>
+            <tr><td><b>Toplantı Aksiyonları</b></td><td>Toplantı kararlarının sorumlu, termin ve gerçekleşme takibi.</td></tr>
+            <tr><td><b>İletişim Günlüğü</b></td><td>Telefon, e-posta, WhatsApp, toplantı ve saha görüşmelerinin proje bazlı günlüğü.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Operasyon</h3>
+      <div class="tablo-kutu dizin">
+        <table>
+          <thead><tr><th>Ekran</th><th>Ne işe yarar</th></tr></thead>
+          <tbody>
+            <tr><td><b>İş Kalemleri</b></td><td>Proje, mahal ve ürün kırılımında ölçü, malzeme, üretim ve fiyat bilgisi.</td></tr>
+            <tr><td><b>Proje Görevleri</b></td><td>Proje iş planı, sorumlular, bağımlılıklar ve ilerleme.</td></tr>
+            <tr><td><b>Satın Alma</b></td><td>Malzeme talepleri, teklif toplama ve onay.</td></tr>
+            <tr><td><b>Tedarikçi Teklifleri</b></td><td>Aynı talebe gelen teklifleri fiyat, termin ve kalite olarak karşılaştırma.</td></tr>
+            <tr><td><b>Satın Alma Siparişleri</b></td><td>Onaylı taleplerden açılan siparişler ve mal kabul.</td></tr>
+            <tr><td><b>Tedarikçiler</b></td><td>Malzeme ve dış imalat tedarikçileri, yetkililer ve performans.</td></tr>
+            <tr><td><b>Stok Kartları</b></td><td>Malzeme kartı, rezerv, minimum seviye ve tercih edilen tedarikçi.</td></tr>
+            <tr><td><b>Malzeme İhtiyaç Planı</b></td><td>Proje ve iş kalemi bazında ihtiyaç, stok rezervasyonu ve eksik satın alma bağlantısı.</td></tr>
+            <tr><td><b>Stok Hareketleri</b></td><td>Giriş, çıkış, rezerv ve sayım düzeltmelerinin kesin kaydı.</td></tr>
+            <tr><td><b>Üretim</b></td><td>İç üretim ve dış imalat emirleri.</td></tr>
+            <tr><td><b>Ürün Reçeteleri</b></td><td>Bir adet iş kalemi için gereken malzemeler; fire payıyla malzeme planına dönüşür.</td></tr>
+            <tr><td><b>İş Merkezleri</b></td><td>Atölye ve dış imalat merkezleri, günlük kapasite ve saatlik maliyet.</td></tr>
+            <tr><td><b>İş Merkezi Yükü</b></td><td>Planlanan süre ile kapasiteyi karşılaştırır; darboğazı önceden gösterir.</td></tr>
+            <tr><td><b>Üretim Operasyonları</b></td><td>Üretim emrinin operasyon sırası, iş merkezi ve süre planı.</td></tr>
+            <tr><td><b>Üretim Sorunları</b></td><td>Sorun, yeniden işlem ve hurda kaydı; kâr kaybının kaynağı.</td></tr>
+            <tr><td><b>Kalite Kontrolleri</b></td><td>Girdi, üretim içi, final ve saha kontrolleri ile düzeltici faaliyetler.</td></tr>
+            <tr><td><b>Montaj</b></td><td>Saha hazırlığı, ekip planı, eksikler ve teslim tutanakları.</td></tr>
+            <tr><td><b>Teslim &amp; Kabul</b></td><td>Müşteri teslimi, kabul imzası, memnuniyet puanı ve kapanış.</td></tr>
+            <tr><td><b>Teslim Eksikleri</b></td><td>Teslimde belirlenen eksiklerin sorumlu, termin ve kabul takibi.</td></tr>
+            <tr><td><b>Ekip &amp; Kapasite</b></td><td>Ekiplerin, iş merkezlerinin ve dış kaynakların tarih bazlı kapasite planı.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Finans</h3>
+      <div class="tablo-kutu dizin">
+        <table>
+          <thead><tr><th>Ekran</th><th>Ne işe yarar</th></tr></thead>
+          <tbody>
+            <tr><td><b>Proje Finansları</b></td><td>Proje gelir, gider ve tahmini kârlılık hareketleri.</td></tr>
+            <tr><td><b>Faturalar &amp; Ön Muhasebe</b></td><td>Cari, fatura ve ödeme takibi; resmi kayıtlar muhasebe programında kalır.</td></tr>
+            <tr><td><b>Kasa &amp; Banka</b></td><td>Kasa, banka ve diğer ödeme hesaplarının güncel bakiyeleri.</td></tr>
+            <tr><td><b>Hakedişler</b></td><td>Sözleşmeye bağlı dönemsel hakediş, kesinti, fatura ve tahsilat süreci.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>İnsan Kaynakları</h3>
+      <div class="tablo-kutu dizin">
+        <table>
+          <thead><tr><th>Ekran</th><th>Ne işe yarar</th></tr></thead>
+          <tbody>
+            <tr><td><b>Personel</b></td><td>Özlük, görev ve çalışma durumu.</td></tr>
+            <tr><td><b>Puantaj</b></td><td>Günlük giriş-çıkış, normal çalışma ve fazla mesai.</td></tr>
+            <tr><td><b>İzinler</b></td><td>İzin talepleri, süreleri ve onay durumları.</td></tr>
+            <tr><td><b>Bordro Hazırlık</b></td><td>Resmi bordroya aktarılacak dönemsel ücret, mesai ve kesinti girdileri.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Yönetim</h3>
+      <div class="tablo-kutu dizin">
+        <table>
+          <thead><tr><th>Ekran</th><th>Ne işe yarar</th></tr></thead>
+          <tbody>
+            <tr><td><b>Dosyalar</b></td><td>Projeye, mahalle, iş kalemine, revizyona, kaliteye veya montaja bağlı fotoğraf ve belgeler.</td></tr>
+            <tr><td><b>Kullanıcılar</b></td><td>Firma kullanıcılarını ekleyin ve rollerini belirleyin.</td></tr>
+            <tr><td><b>Roller &amp; Yetkiler</b></td><td>Her rolün hangi ekranı görüp neyi değiştirebileceğini yönetin.</td></tr>
+            <tr><td><b>Denetim Kayıtları</b></td><td>Kim, ne zaman, hangi kaydı değiştirdi — salt okunur işlem izi.</td></tr>
+            <tr><td><b>Yedekler</b></td><td>Otomatik yedekleri izleyin veya anlık yedek alın.</td></tr>
+            <tr><td><b>API Erişim Anahtarları</b></td><td>Başka programların Capproje'ye bağlanması için anahtar üretin ve iptal edin.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <p class="dipnot">
+      Bu kılavuzdaki ekran görüntüleri, örnek bir firma verisiyle (Öztürk Ahşap Mobilya) alınmıştır;
+      gördüğünüz müşteri, proje ve tutarlar gerçek değildir. Programda yaptığımız bir değişiklikten
+      sonra bu sayfanın da güncellenmesi gerekir.
+    </p>
+
+  </main>
+</div>
+
+<dialog id="buyutec" aria-label="Büyütülmüş ekran görüntüsü">
+  <button type="button" id="buyutec-kapat">Kapat</button>
+  <img id="buyutec-resim" alt="">
+</dialog>
+
+<script src="kilavuz/kilavuz.js"></script>
+</body>
+</html>

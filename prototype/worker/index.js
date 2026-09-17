@@ -3129,6 +3129,13 @@ async function fetchHandler(request, env, context) {
     }
   }
 
+  // Kullanım kılavuzu düz bir sayfadır, uygulamanın parçası değildir. Uzantısız
+  // adres tek sayfa uygulamasına düşeceği için buradan dosyaya yönlendiriliyor;
+  // müşteriye ".html" uzantılı bir adres vermek zorunda kalmayalım.
+  if (["/kilavuz", "/kilavuz/"].includes(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
+    return new Response(null, { status: 308, headers: { location: "/kilavuz.html" } });
+  }
+
   const response = await env.ASSETS.fetch(request);
   const acceptsHtml = request.headers.get("accept")?.includes("text/html");
   if (response.status !== 404 || !acceptsHtml || !["GET", "HEAD"].includes(request.method)) return secureStaticResponse(response);
