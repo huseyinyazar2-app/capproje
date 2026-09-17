@@ -132,10 +132,10 @@ export const RESOURCE_SLUGS = Object.freeze({
 });
 
 const FIELD_MAPS = Object.freeze({
-  projects: { customerName: "customer_id", projectManager: "manager_user_id", progress: "progress_percent", startDate: "planned_start_date", targetDate: "planned_end_date", contractAmount: "contract_amount_minor", photoConsent: "photo_consent", address: "site_address" },
-  offers: { referenceNo: "offer_number", projectName: "project_id", customerName: "customer_id", totalAmount: "grand_total_minor", validUntil: "valid_until", lossReason: "rejection_reason" },
-  purchases: { number: "request_number", projectId: "project_id", itemName: "description", supplierName: "preferred_supplier_id", requiredAt: "needed_by", estimatedAmount: "estimated_amount_minor", specification: "notes" },
-  production: { code: "order_number", projectId: "project_id", itemName: "work_item_id", workCenter: "workshop", assignee: "assigned_team", plannedStart: "planned_start", plannedEnd: "planned_end", outsourced: "production_type", tradeType: "trade_type", notes: "instructions" },
+  projects: { customerId: "customer_id", projectManager: "manager_user_id", progress: "progress_percent", startDate: "planned_start_date", targetDate: "planned_end_date", contractAmount: "contract_amount_minor", photoConsent: "photo_consent", address: "site_address" },
+  offers: { referenceNo: "offer_number", projectId: "project_id", customerId: "customer_id", totalAmount: "grand_total_minor", validUntil: "valid_until", lossReason: "rejection_reason" },
+  purchases: { number: "request_number", projectId: "project_id", itemName: "description", preferredSupplierId: "preferred_supplier_id", requiredAt: "needed_by", estimatedAmount: "estimated_amount_minor", specification: "notes" },
+  production: { code: "order_number", projectId: "project_id", workItemId: "work_item_id", workCenter: "workshop", assignee: "assigned_team", plannedStart: "planned_start", plannedEnd: "planned_end", outsourced: "production_type", tradeType: "trade_type", notes: "instructions" },
   installations: { code: "installation_number", projectId: "project_id", teamName: "team_json", scheduledAt: "planned_start", contactName: "acceptance_contact", notes: "issue_notes", siteReadiness: "metadata_json" },
   finance: { projectId: "project_id", transactionNo: "transaction_number", transactionDate: "transaction_date", dueDate: "due_date", amount: "amount_minor" },
   accounting: { documentNo: "invoice_number", customerId: "customer_id", supplierId: "supplier_id", transactionDate: "issue_date", dueDate: "due_date", amount: "grand_total_minor", datasoftStatus: "datasoft_status", description: "notes" },

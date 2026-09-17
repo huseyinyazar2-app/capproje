@@ -432,6 +432,32 @@ function decodeRow(row) {
   return decoded;
 }
 
+// Bağlı kaydın gösterilecek adını hangi sütundan alacağımız. Liste yanıtları
+// yalnız yabancı anahtarı taşıdığı için arayüzde "Müşteri" sütununda müşterinin
+// adı yerine ham kimliği görünüyordu.
+const referenceNameSources = {
+  projects: "name", customers: "name", suppliers: "name",
+  work_items: "description", inventory_items: "name",
+};
+
+// Satır başına sorgu açmadan, referans edilen her tablo için tek geçişte.
+async function attachReferenceNames(env, principal, config, rows, serialized) {
+  if (!rows.length) return;
+  for (const [column, table] of Object.entries(config.refs || {})) {
+    const source = referenceNameSources[table];
+    if (!source) continue;
+    const ids = [...new Set(rows.map((row) => row[column]).filter(Boolean))];
+    if (!ids.length) continue;
+    const named = await all(env.DB.prepare(`SELECT id,${source} AS label FROM ${table} WHERE tenant_id=? AND id IN (${ids.map(() => "?").join(",")})`).bind(principal.tenantId, ...ids));
+    const labelById = new Map(named.map((item) => [item.id, item.label]));
+    const key = `${column.replace(/_id$/, "")}_name`;
+    for (let index = 0; index < rows.length; index += 1) {
+      const label = labelById.get(rows[index][column]);
+      if (label) serialized[index][key] = label;
+    }
+  }
+}
+
 function serializeRow(row, slug, principal) {
   const result = decodeRow(row);
   if (!result) return result;
@@ -1085,6 +1111,7 @@ async function listResource(request, env, principal, slug, config) {
   const totalRow = await one(env.DB.prepare(`SELECT COUNT(*) AS total FROM ${config.table} WHERE ${where}`).bind(...bindings));
   const rows = await all(env.DB.prepare(`SELECT * FROM ${config.table} WHERE ${where} ORDER BY ${config.table === "audit_logs" ? "created_at" : "updated_at"} DESC LIMIT ? OFFSET ?`).bind(...bindings, pageSize, (page - 1) * pageSize));
   const serialized = rows.map((row) => serializeRow(row, slug, principal));
+  await attachReferenceNames(env, principal, config, rows, serialized);
   if (slug === "memberships" && rows.length) {
     // Satır başına sorgu yerine tek geçişte tüm rolleri çekiyoruz.
     const placeholders = rows.map(() => "?").join(",");
@@ -1118,6 +1145,7 @@ async function getResource(env, principal, slug, config, resourceId) {
   if (!row && slug === "memberships") row = await one(env.DB.prepare("SELECT * FROM memberships WHERE user_id=? AND tenant_id=?").bind(resourceId, principal.tenantId));
   if (!row) return problem(404, "not_found", "Kayıt bulunamadı.");
   const serialized = serializeRow(row, slug, principal);
+  await attachReferenceNames(env, principal, config, [row], [serialized]);
   if (slug === "memberships") {
     const user = await one(env.DB.prepare("SELECT full_name,email FROM users WHERE id=?").bind(row.user_id));
     serialized.user_name = user?.full_name || null;

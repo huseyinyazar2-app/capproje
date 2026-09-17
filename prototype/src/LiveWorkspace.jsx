@@ -124,7 +124,7 @@ const configs = {
     fields: [
       field("code", "Proje kodu", "text", { required: true, placeholder: "CP-26001" }),
       field("name", "Proje adı", "text", { required: true }),
-      field("customerName", "Müşteri kayıt ID", "text"),
+      field("customerId", "Müşteri kayıt ID", "text"),
       field("projectManager", "Proje yöneticisi kullanıcı ID"),
       field("status", "Başlangıç aşaması", "select", { required: true, options: ["Talep", "Keşif"] }),
       field("progress", "İlerleme (%)", "number", { min: 0, max: 100 }),
@@ -139,7 +139,7 @@ const configs = {
     columns: [["referenceNo", "Teklif No"], ["projectName", "Proje"], ["customerName", "Müşteri"], ["revision", "Rev."], ["totalAmount", "Tutar", "money"], ["status", "Durum", "status"], ["validUntil", "Geçerlilik", "date"]],
     fields: [
       field("referenceNo", "Teklif numarası", "text", { required: true }), field("revision", "Revizyon", "number", { min: 0 }),
-      field("projectName", "Proje kayıt ID", "text"), field("customerName", "Müşteri kayıt ID", "text"),
+      field("projectId", "Proje kayıt ID", "text"), field("customerId", "Müşteri kayıt ID", "text"),
       field("status", "Durum", "select", { required: true, options: ["Taslak", "Maliyet çalışılıyor", "Sunuldu", "Revizyon istendi", "Kabul edildi", "Kaybedildi"] }),
       field("totalAmount", "Teklif toplamı", "number", { required: true }), field("currency", "Para birimi", "select", { options: ["TRY", "USD", "EUR"] }),
       field("validUntil", "Geçerlilik tarihi", "date"), field("lossReason", "Kayıp / revizyon nedeni"),
@@ -148,10 +148,10 @@ const configs = {
   },
   purchases: {
     description: "Malzeme taleplerini, teklifleri, sipariş ve teslimatı yönetin",
-    columns: [["number", "Talep No"], ["projectName", "Proje"], ["itemName", "Malzeme"], ["supplierName", "Tedarikçi"], ["quantity", "Miktar"], ["requiredAt", "İhtiyaç", "date"], ["status", "Durum", "status"]],
+    columns: [["number", "Talep No"], ["projectName", "Proje"], ["itemName", "Malzeme"], ["preferredSupplierName", "Tedarikçi"], ["quantity", "Miktar"], ["requiredAt", "İhtiyaç", "date"], ["status", "Durum", "status"]],
     fields: [
       field("number", "Talep numarası", "text", { required: true }), field("projectId", "Proje ID", "text", { required: true }),
-      field("itemName", "Malzeme / hizmet", "text", { required: true }), field("supplierName", "Önerilen tedarikçi ID"),
+      field("itemName", "Malzeme / hizmet", "text", { required: true }), field("preferredSupplierId", "Önerilen tedarikçi ID"),
       field("quantity", "Miktar", "number", { required: true, min: 0 }), field("unit", "Birim", "select", { options: ["adet", "m²", "mtül", "kg", "takım", "paket"] }),
       field("requiredAt", "İhtiyaç tarihi", "date"), field("status", "Durum", "select", { options: ["Taslak", "Onay bekliyor", "Onaylandı", "Sipariş verildi", "Kısmi teslim", "Teslim edildi", "İptal"] }),
       field("estimatedAmount", "Tahmini tutar", "number", { permission: { resource: "cost", action: "view" } }), field("currency", "Para birimi", "select", { options: ["TRY", "USD", "EUR"] }),
@@ -160,10 +160,10 @@ const configs = {
   },
   production: {
     description: "İç üretim ve dış imalat emirlerini kapasiteyle birlikte izleyin",
-    columns: [["code", "İş Emri"], ["projectName", "Proje"], ["itemName", "Ürün / Mahal"], ["workCenter", "İş Merkezi"], ["assignee", "Sorumlu"], ["plannedEnd", "Planlanan Bitiş", "date"], ["status", "Durum", "status"]],
+    columns: [["code", "İş Emri"], ["projectName", "Proje"], ["workItemName", "Ürün / Mahal"], ["workCenter", "İş Merkezi"], ["assignee", "Sorumlu"], ["plannedEnd", "Planlanan Bitiş", "date"], ["status", "Durum", "status"]],
     fields: [
       field("code", "İş emri kodu", "text", { required: true }), field("projectId", "Proje ID", "text", { required: true }),
-      field("itemName", "İş kalemi kayıt ID", "text"), field("workCenter", "İş merkezi", "select", { options: ["Kesim", "CNC", "Kenar Bantlama", "Montaj", "Cila", "Dış İmalat"] }),
+      field("workItemId", "İş kalemi kayıt ID", "text"), field("workCenter", "İş merkezi", "select", { options: ["Kesim", "CNC", "Kenar Bantlama", "Montaj", "Cila", "Dış İmalat"] }),
       field("assignee", "Sorumlu / ekip"), field("status", "Durum", "select", { options: ["Planlandı", "Malzeme bekliyor", "Üretimde", "Kalite kontrolde", "Tamamlandı", "Durduruldu"] }),
       field("plannedStart", "Planlanan başlangıç", "date"), field("plannedEnd", "Planlanan bitiş", "date"),
       field("quantity", "Miktar", "number", { min: 0 }), field("outsourced", "Üretim tipi", "select", { options: ["İç üretim", "Dış imalat"] }),
@@ -549,10 +549,6 @@ for (const [moduleId, config] of Object.entries(configs)) {
     return item;
   });
 }
-// "Üretim emrindeki iş kalemi" alanı adı gereği eşleşmiyor; elle bağlanır.
-configs.production.fields = configs.production.fields.map((item) => item.name === "itemName"
-  ? { ...item, type: "reference", referenceResource: "workItems", label: "İş kalemi" }
-  : item);
 
 const protectFields = (config, names, resource, action = "read") => {
   const protectedNames = new Set(names);
