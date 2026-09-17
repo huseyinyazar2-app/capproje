@@ -155,7 +155,7 @@ const projectTransitions = {
 const projectStageDefinitions = [
   ["lead", "Talep"], ["discovery", "Keşif"], ["estimating", "Teklif Hazırlığı"], ["offered", "Teklif"],
   ["contracted", "Sözleşme"], ["design", "Tasarım"], ["procurement", "Satın Alma"],
-  ["production", "Üretim & Kalite"], ["installation", "Montaj"], ["acceptance", "Teslim"], ["completed", "Kapanış"],
+  ["production", "Üretim & Kalite"], ["installation", "Montaj"], ["acceptance", "Teslim"], ["completed", "Tamamlandı"],
 ];
 const projectPrimaryNext = {
   lead: "discovery", discovery: "estimating", estimating: "offered", offered: "contracted", contracted: "design",

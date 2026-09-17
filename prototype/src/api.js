@@ -180,7 +180,7 @@ const FIELD_MAPS = Object.freeze({
 // Etiket → sunucu durum kodu. Kodlar worker/index.js içindeki statusEnums ve
 // 0012 migration'ındaki tetikleyicilerle birebir aynı kümedir.
 const STATUS_VALUES = Object.freeze({
-  projects: { Potansiyel: "lead", Keşif: "discovery", Maliyetlendirme: "estimating", Teklif: "offered", Sözleşme: "contracted", Tasarım: "design", "Satın Alma": "procurement", Üretim: "production", Montaj: "installation", Kabul: "acceptance", Beklemede: "on_hold", Tamamlandı: "completed", Kaybedildi: "lost", İptal: "cancelled" },
+  projects: { Talep: "lead", Keşif: "discovery", "Teklif Hazırlığı": "estimating", Teklif: "offered", Sözleşme: "contracted", Tasarım: "design", "Satın Alma": "procurement", "Üretim & Kalite": "production", Montaj: "installation", Teslim: "acceptance", Beklemede: "on_hold", Tamamlandı: "completed", Kaybedildi: "lost", İptal: "cancelled" },
   offers: { Taslak: "draft", "Maliyet çalışılıyor": "costing", Sunuldu: "sent", "Onay bekliyor": "pending", "Revizyon istendi": "revision_requested", "Kabul edildi": "accepted", Kaybedildi: "rejected", "Süresi doldu": "expired", İptal: "cancelled" },
   purchases: { Taslak: "draft", "Onay bekliyor": "pending", Onaylandı: "approved", Reddedildi: "rejected", "Sipariş verildi": "ordered", "Kısmi teslim": "partial", "Teslim edildi": "received", İptal: "cancelled" },
   purchaseOrders: { Taslak: "draft", "Sipariş verildi": "ordered", "Kısmi teslim": "partial", "Teslim alındı": "received", İptal: "cancelled" },

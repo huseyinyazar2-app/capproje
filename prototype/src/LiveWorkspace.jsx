@@ -37,7 +37,12 @@ import { ErrorBoundary } from "./ErrorBoundary.jsx";
 
 const money = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 });
 const date = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "short", year: "numeric" });
-const projectStageLabels = { lead: "Talep", discovery: "Keşif", estimating: "Teklif Hazırlığı", offered: "Teklif", contracted: "Sözleşme", design: "Tasarım", procurement: "Satın Alma", production: "Üretim & Kalite", installation: "Montaj", acceptance: "Teslim", completed: "Kapanış", on_hold: "Beklemede", lost: "Kaybedildi", cancelled: "İptal" };
+// Proje aşamalarının tek sözlüğü. Aynı aşama listede, kanban sütununda, aşama
+// değiştirme penceresinde ve komuta merkezinde aynı kelimeyle görünmeli;
+// vaktiyle iki ayrı liste vardı ve kullanıcı aynı aşamayı iki farklı adla
+// görüyordu. Kelimeler worker/index.js içindeki projectStageDefinitions ve
+// api.js içindeki STATUS_VALUES.projects ile birebir aynı olmalıdır.
+const projectStageLabels = { lead: "Talep", discovery: "Keşif", estimating: "Teklif Hazırlığı", offered: "Teklif", contracted: "Sözleşme", design: "Tasarım", procurement: "Satın Alma", production: "Üretim & Kalite", installation: "Montaj", acceptance: "Teslim", completed: "Tamamlandı", on_hold: "Beklemede", lost: "Kaybedildi", cancelled: "İptal" };
 
 const modules = [
   { id: "dashboard", group: "Genel", title: "Ana Sayfa", icon: House, resource: "dashboard", singular: "kayıt" },
@@ -121,7 +126,7 @@ const configs = {
       field("name", "Proje adı", "text", { required: true }),
       field("customerName", "Müşteri kayıt ID", "text"),
       field("projectManager", "Proje yöneticisi kullanıcı ID"),
-      field("status", "Başlangıç aşaması", "select", { required: true, options: ["Potansiyel", "Keşif"] }),
+      field("status", "Başlangıç aşaması", "select", { required: true, options: ["Talep", "Keşif"] }),
       field("progress", "İlerleme (%)", "number", { min: 0, max: 100 }),
       field("startDate", "Başlangıç", "date"), field("targetDate", "Hedef teslim", "date"),
       field("contractAmount", "Sözleşme tutarı", "number"),
@@ -466,7 +471,7 @@ Object.assign(configs, {
 // listedeki iş akışı düğmeleriyle değişir; önceden forma konan seçenekler
 // sunucudan 409 dönüyordu.
 const workflowStatusOptions = {
-  projects: ["Potansiyel"],
+  projects: ["Talep"],
   offers: ["Taslak", "Sunuldu", "Onay bekliyor"],
   purchases: ["Taslak", "Onay bekliyor"],
   purchaseOrders: ["draft"],
@@ -567,7 +572,7 @@ Object.assign(configs.projects, {
   subtitleField: "code",
   dateField: "targetDate",
   boardField: "status",
-  boardColumns: ["Potansiyel", "Keşif", "Maliyetlendirme", "Teklif", "Sözleşme", "Tasarım", "Satın Alma", "Üretim", "Montaj", "Kabul", "Beklemede", "Tamamlandı", "Kaybedildi", "İptal"],
+  boardColumns: ["Talep", "Keşif", "Teklif Hazırlığı", "Teklif", "Sözleşme", "Tasarım", "Satın Alma", "Üretim & Kalite", "Montaj", "Teslim", "Beklemede", "Tamamlandı", "Kaybedildi", "İptal"],
 });
 Object.assign(configs.projectTasks, {
   views: operationalViews,
@@ -676,7 +681,7 @@ const enumLabels = {
 };
 
 function localizedEnum(value) {
-  return enumLabels[String(value)] || projectStatusLabels?.[String(value)] || value;
+  return enumLabels[String(value)] || projectStageLabels[String(value)] || value;
 }
 
 // Sunucudaki üst yetki eşlemesinin arayüz karşılığı; rol editöründe ayrıntılı
@@ -708,8 +713,7 @@ const projectTransitions = {
   on_hold: ["discovery", "estimating", "offered", "contracted", "design", "procurement", "production", "installation", "acceptance", "cancelled"],
 };
 
-const projectStatusLabels = { lead: "Potansiyel", discovery: "Keşif", estimating: "Maliyetlendirme", offered: "Teklif", contracted: "Sözleşme", design: "Tasarım", procurement: "Satın Alma", production: "Üretim", installation: "Montaj", acceptance: "Kabul", on_hold: "Beklemede", completed: "Tamamlandı", lost: "Kaybedildi", cancelled: "İptal" };
-const projectStatusCodes = Object.fromEntries(Object.entries(projectStatusLabels).map(([code, label]) => [label, code]));
+const projectStatusCodes = Object.fromEntries(Object.entries(projectStageLabels).map(([code, label]) => [label, code]));
 
 function coreWorkflowActions(module, row, session) {
   const status = module.id === "projects" ? projectStatusCodes[row.status] || row.status : row.status;
@@ -723,7 +727,7 @@ function coreWorkflowActions(module, row, session) {
     return actions;
   }
   if (module.id === "projects" && hasCapability(session, "projects.transition")) {
-    const options = (projectTransitions[status] || []).map((value) => ({ value, label: projectStatusLabels[value] || value }));
+    const options = (projectTransitions[status] || []).map((value) => ({ value, label: projectStageLabels[value] || value }));
     return options.length ? [{ key: "transition", label: "Aşamayı değiştir", title: "Proje aşamasını değiştir", message: "Yalnız izin verilen sıradaki aşamalar seçilebilir.", options }] : [];
   }
   if (module.id === "workItems" && ["draft", "review", "changes_requested"].includes(row.revisionStatus) && hasCapability(session, "work-items.revision.approve")) return [{ key: "approve-revision", label: "Revizyonu onayla", title: "Üretim revizyonunu onayla", message: "Bu revizyon üretime salınabilir hale gelecek.", tone: "success" }];
