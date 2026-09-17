@@ -32,7 +32,7 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { api, ApiError, demoAuthEnabled, permissionAllows } from "./api";
+import { api, ApiError, demoAuthEnabled, permissionAllows, statusCodeFor } from "./api";
 import { ErrorBoundary } from "./ErrorBoundary.jsx";
 
 const money = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 });
@@ -709,17 +709,15 @@ const projectTransitions = {
   on_hold: ["discovery", "estimating", "offered", "contracted", "design", "procurement", "production", "installation", "acceptance", "cancelled"],
 };
 
-const projectStatusCodes = Object.fromEntries(Object.entries(projectStageLabels).map(([code, label]) => [label, code]));
-
 function coreWorkflowActions(module, row, session) {
-  const status = module.id === "projects" ? projectStatusCodes[row.status] || row.status : row.status;
+  const status = statusCodeFor(module.id, row.status);
   if (module.id === "offers") {
     const actions = [];
-    if (["draft", "sent", "pending", "Taslak", "Sunuldu"].includes(status) && hasCapability(session, "offers.approve")) {
+    if (["draft", "sent", "pending"].includes(status) && hasCapability(session, "offers.approve")) {
       actions.push({ key: "accept", label: "Kabul et", title: "Teklifi kabul et", message: "Teklif kabul edildi olarak işaretlenecek.", tone: "success" });
       actions.push({ key: "reject", label: "Reddet", title: "Teklifi reddet", message: "Teklif reddedilecek. Müşteri kayıp nedenini yazın.", reasonRequired: true, tone: "danger" });
     }
-    if (["accepted", "Kabul edildi"].includes(status) && hasCapability(session, "offers.convert")) actions.push({ key: "convert-to-project", label: "Projeye dönüştür", title: "Yeni proje oluştur", message: "Teklif tutarı ve müşteri bağlantısıyla sözleşmeli proje oluşturulacak.", tone: "success" });
+    if (status === "accepted" && hasCapability(session, "offers.convert")) actions.push({ key: "convert-to-project", label: "Projeye dönüştür", title: "Yeni proje oluştur", message: "Teklif tutarı ve müşteri bağlantısıyla sözleşmeli proje oluşturulacak.", tone: "success" });
     return actions;
   }
   if (module.id === "projects" && hasCapability(session, "projects.transition")) {
@@ -772,8 +770,8 @@ function coreWorkflowActions(module, row, session) {
   }
   if (module.id === "leaves" && status === "pending" && hasCapability(session, "leaves.approve")) return [{ key: "approve", label: "Onayla", title: "İzin talebini onayla", message: "Personelin izin talebi onaylanacak.", tone: "success" }, { key: "reject", label: "Reddet", title: "İzin talebini reddet", message: "Ret nedeni personele ait karar kaydında tutulacak.", reasonRequired: true, tone: "danger" }];
   if (module.id === "finance") {
-    if (["draft", "planned", "pending", "Planlandı", "Onay bekliyor"].includes(status) && hasCapability(session, "financial-transactions.approve")) return [{ key: "approve", label: "Onayla", title: "Finans hareketini onayla", message: "Onaylanan finans kaydı değiştirilemez; düzeltme ters kayıtla yapılır.", tone: "success" }];
-    if (["approved", "Onaylandı"].includes(status) && hasCapability(session, "financial-transactions.reverse")) return [{ key: "reverse", label: "Ters kayıt", title: "Finans hareketini ters kaydet", message: "Orijinal hareket korunacak ve eşit tutarlı ters kayıt oluşturulacak.", reasonRequired: true, tone: "danger" }];
+    if (["draft", "planned", "pending"].includes(status) && hasCapability(session, "financial-transactions.approve")) return [{ key: "approve", label: "Onayla", title: "Finans hareketini onayla", message: "Onaylanan finans kaydı değiştirilemez; düzeltme ters kayıtla yapılır.", tone: "success" }];
+    if (status === "approved" && hasCapability(session, "financial-transactions.reverse")) return [{ key: "reverse", label: "Ters kayıt", title: "Finans hareketini ters kaydet", message: "Orijinal hareket korunacak ve eşit tutarlı ters kayıt oluşturulacak.", reasonRequired: true, tone: "danger" }];
   }
   return [];
 }
@@ -781,7 +779,7 @@ function coreWorkflowActions(module, row, session) {
 function workflowActions(module, row, session) {
   const core = coreWorkflowActions(module, row, session);
   if (core.length) return core;
-  const status = row.status;
+  const status = statusCodeFor(module.id, row.status);
   const transition = (options, capability, title) => hasCapability(session, capability) && options.length ? [{ key: "transition", label: "Aşamayı değiştir", title, message: "Yalnız geçerli sıradaki aşama seçilebilir.", options: options.map((value) => ({ value, label: localizedEnum(value) })) }] : [];
   if (module.id === "siteSurveys") {
     const next = { draft: ["in_progress", "cancelled"], in_progress: ["completed", "cancelled"], completed: ["approved", "in_progress"] };
@@ -1748,7 +1746,7 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
   function mayDelete(row) {
     if (!canDelete || row._offlineQueued) return false;
     if (module.id === "roles" && row.isSystem) return false;
-    if (module.id === "finance" && ["approved", "reversed", "Onaylandı"].includes(row.status)) return false;
+    if (module.id === "finance" && ["approved", "reversed"].includes(statusCodeFor(module.id, row.status))) return false;
     return true;
   }
 

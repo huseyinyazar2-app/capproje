@@ -801,4 +801,12 @@ export function permissionAllows(session, action, resource) {
   );
 }
 
+// Listelerdeki durum, okunabilir olsun diye Türkçeye çevrilerek geliyor. İş
+// akışı kuralları ise sunucudaki kodlarla yazılı; karşılaştırmadan önce durum
+// bu fonksiyonla koda geri çevrilmelidir. Aksi halde "Onay bekliyor" hiçbir
+// zaman "pending" ile eşleşmez ve onay düğmeleri hiç görünmez.
+export function statusCodeFor(resource, value) {
+  return STATUS_VALUES[resource]?.[String(value)] || value;
+}
+
 export const demoAuthEnabled = DEMO_AUTH_ENABLED;
