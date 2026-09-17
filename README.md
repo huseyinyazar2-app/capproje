@@ -39,7 +39,9 @@ Boş bir kurulumda her ekran boştur ve programın ne yaptığı anlaşılmaz. A
 betik, bir marangoz atölyesinin gerçek iş akışını taklit eden, birbirine bağlı
 örnek veri yazar: on iki proje farklı aşamalarda (talepten kapanışa), müşteri,
 tedarikçi, keşif, teklif, sözleşme, tasarım, reçete, satın alma, üretim, kalite,
-montaj, teslim, finans ve insan kaynakları kayıtlarıyla birlikte.
+montaj, teslim, finans ve insan kaynakları kayıtlarıyla birlikte. Ekip sohbeti de
+dolar; bazı mesajlara gerçek kayıtlar iliştirilmiştir, tıklanınca o kaydın üzerine
+gidilir.
 
 ```bash
 cd prototype
@@ -51,9 +53,38 @@ Betik aynı veriyi ikinci kez yazmaz; yarıda kalırsa tekrar çalıştırılabi
 Tanıtım verisi gerçek müşteri kayıtlarıyla karışmasın diye ayrı bir firmada
 (tenant) çalıştırılması önerilir.
 
-Kullanım kılavuzu `/kilavuz` adresinde yayınlanır; kaynağı
-`prototype/public/kilavuz.html` ve ekran görüntüleri `prototype/public/kilavuz/`
-altındadır.
+Betik ayrıca sekiz kişilik bir ekip kurar ve ekip sohbetini bu kişilerin
+ağzından yazar. Tanıtımı yapan kişi, ekranların rolden role nasıl değiştiğini
+göstermek için bu hesaplarla giriş yapabilir:
+
+| Kişi | Telefon | Rol |
+| --- | --- | --- |
+| Fatma Koç | 0534 111 22 01 | Mimar |
+| Melis Arda | 0534 111 22 09 | Proje Yöneticisi |
+| Zeynep Erdoğan | 0534 111 22 03 | Satın Alma |
+| Selin Kurt | 0534 111 22 05 | Finans |
+| Ahmet Yılmaz | 0534 111 22 00 | Üretim |
+| Hasan Aydın | 0534 111 22 02 | Montaj |
+| Derya Güneş | 0534 111 22 07 | İnsan Kaynakları |
+| Emre Polat | 0534 111 22 06 | Salt Okunur |
+
+Hepsinin şifresi `Capproje2026!Demo`'dur. **Bu hesaplar yalnız tanıtım içindir;**
+gerçek veri tutan bir kurulumda betiği çalıştırmayın, çalıştırdıysanız bu
+kullanıcıları Yönetim → Kullanıcılar ekranından devre dışı bırakın.
+
+## Kullanım kılavuzu
+
+Kılavuz `/kilavuz` adresinde yayınlanır; kaynağı `prototype/public/kilavuz.html`
+ve ekran görüntüleri `prototype/public/kilavuz/gorseller/` altındadır. Arayüz
+değiştiğinde görüntüler tek komutla yenilenir:
+
+```bash
+cd prototype
+CAPPROJE_URL=http://127.0.0.1:3000 CAPPROJE_TOKEN=cap_... node scripts/kilavuz-goruntuleri.mjs
+```
+
+Betik Playwright ister (`npm i -D playwright && npx playwright install chromium`)
+ve demo verinin yüklü olduğu bir kurulumda çalıştırılmalıdır.
 
 ## Ubuntu sunucu hedefi
 

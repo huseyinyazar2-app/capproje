@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
   Bell,
+  BookOpen,
   Buildings,
   CalendarBlank,
   Camera,
@@ -19,8 +20,10 @@ import {
   Handshake,
   House,
   Kanban,
+  LinkSimple,
   ListBullets,
   MagnifyingGlass,
+  PaperPlaneTilt,
   PencilSimple,
   Plus,
   ShoppingCart,
@@ -32,11 +35,43 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { api, ApiError, demoAuthEnabled, permissionAllows, statusCodeFor } from "./api";
+import { api, ApiError, demoAuthEnabled, permissionAllows, RESOURCE_SLUGS, statusCodeFor } from "./api";
 import { ErrorBoundary } from "./ErrorBoundary.jsx";
 
-const money = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 });
-const date = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "short", year: "numeric" });
+// Sayı ve tarih biçimleri tek yerde. Türkiye'de binlik ayracı nokta, küsürat
+// ayracı virgüldür; tarih gün.ay.yıl yazılır. Bunları her ekranda yeniden
+// kurmak yerine buradan geçirmek, bir ekranın diğerinden farklı görünmesini
+// engeller.
+const moneyWhole = new Intl.NumberFormat("tr-TR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const moneyKurus = new Intl.NumberFormat("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const numberDigits = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 2 });
+const dateOnly = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric" });
+const dateWithTime = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+// Muhasebede para birimi "TRY" diye değil "TL" diye yazılır.
+const currencyLabels = { TRY: "TL", USD: "$", EUR: "€", GBP: "£" };
+// Kuruşu olmayan tutarlarda ",00" yazmak listeyi gereksiz kalabalıklaştırıyor;
+// kuruş varsa da yuvarlayıp gizlemek yanlış olur.
+const money = {
+  format: (value, currency = "TRY") => {
+    const tutar = Number(value) || 0;
+    const bicim = Math.abs(tutar % 1) > 0.0001 ? moneyKurus : moneyWhole;
+    return `${bicim.format(tutar)} ${currencyLabels[currency] || currency}`;
+  },
+};
+
+// "2026-07-22", "2026-07-22T17:36" ve tam ISO damgası aynı işi görür; hangisi
+// geldiyse ona göre saat gösterilir. Yalnız tarih taşıyan bir değer yerel
+// geceyarısı kabul edilmelidir, yoksa saat farkı yüzünden bir gün geriye kayar.
+const isoLike = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
+function formatDateValue(value, forceTime) {
+  const text = String(value).trim();
+  if (!isoLike.test(text)) return null;
+  const parsed = new Date(text.length === 10 ? `${text}T00:00:00` : text);
+  if (Number.isNaN(parsed.valueOf())) return null;
+  const carriesTime = text.length > 10 && !(parsed.getHours() === 0 && parsed.getMinutes() === 0);
+  return (forceTime ?? carriesTime) ? dateWithTime.format(parsed) : dateOnly.format(parsed);
+}
 // Proje aşamalarının tek sözlüğü. Aynı aşama listede, kanban sütununda, aşama
 // değiştirme penceresinde ve komuta merkezinde aynı kelimeyle görünmeli;
 // vaktiyle iki ayrı liste vardı ve kullanıcı aynı aşamayı iki farklı adla
@@ -47,6 +82,7 @@ const projectStageLabels = { lead: "Talep", discovery: "Keşif", estimating: "Te
 const modules = [
   { id: "dashboard", group: "Genel", title: "Ana Sayfa", icon: House, resource: "dashboard", singular: "kayıt" },
   { id: "notifications", group: "Genel", title: "Bildirimler", icon: Bell, resource: "notifications", singular: "bildirim", authenticated: true },
+  { id: "chat", group: "Genel", title: "Ekip Sohbeti", icon: ChatCircleText, resource: "chat", singular: "mesaj" },
   { id: "fieldMode", group: "Genel", title: "Saha Modu", icon: Camera, resource: "field-mode", singular: "saha kaydı", authenticated: true },
   { id: "customers", group: "Müşteri & Proje", title: "Müşteriler", icon: UsersThree, resource: "customers", singular: "müşteri" },
   { id: "projects", group: "Müşteri & Proje", title: "Projeler", icon: FolderSimple, resource: "projects", singular: "proje" },
@@ -111,6 +147,20 @@ const accountsIndex = modules.findIndex((item) => item.id === "accounts");
 modules.splice(accountsIndex + 1, 0,
   { id: "progressPayments", group: "Finans", title: "Hakedişler", icon: CurrencyCircleDollar, resource: "progressPayments", singular: "hakediş" },
 );
+
+// Bir kaydın doğrudan adresi. Kopyalanıp sohbete, e-postaya ya da mesaja
+// yapıştırıldığında karşı taraf listeyi tarayıp aramak zorunda kalmadan aynı
+// kaydın üzerine düşer. Adres çubuğu da her zaman bulunulan yeri gösterir.
+function recordLink(moduleId, recordId) {
+  const base = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+  return `${base}#/${moduleId}${recordId ? `/${recordId}` : ""}`;
+}
+
+function parseRecordLink(hash) {
+  const match = /^#\/([A-Za-z]+)(?:\/([A-Za-z0-9_-]{1,64}))?\/?$/.exec(hash || "");
+  if (!match || !modules.some((item) => item.id === match[1])) return null;
+  return { moduleId: match[1], recordId: match[2] || null };
+}
 
 const field = (name, label, type = "text", extra = {}) => ({ name, label, type, ...extra });
 
@@ -199,7 +249,7 @@ const configs = {
   accounting: {
     description: "Cari, kasa/banka, fatura ve ödeme takibi; resmi kayıtlar Datasoft'ta kalır",
     query: { official: true }, officialScope: true,
-    columns: [["documentNo", "Belge No"], ["customerId", "Müşteri ID"], ["supplierId", "Tedarikçi ID"], ["direction", "Yön"], ["amount", "Tutar", "money"], ["dueDate", "Vade", "date"], ["status", "Durum", "status"]],
+    columns: [["documentNo", "Belge No"], ["customerId", "Müşteri"], ["supplierId", "Tedarikçi"], ["direction", "Yön"], ["amount", "Tutar", "money"], ["dueDate", "Vade", "date"], ["status", "Durum", "status"]],
     fields: [
       field("direction", "Fatura yönü", "select", { required: true, options: ["Satış", "Alış"] }),
       field("documentNo", "Fatura / belge numarası", "text", { required: true }), field("customerId", "Müşteri ID"), field("supplierId", "Tedarikçi ID"),
@@ -241,27 +291,27 @@ const configs = {
   },
   attendance: {
     description: "Günlük giriş-çıkış, normal çalışma ve fazla mesai kayıtları",
-    columns: [["employeeId", "Personel ID"], ["workDate", "Tarih", "date"], ["checkIn", "Giriş"], ["checkOut", "Çıkış"], ["regularMinutes", "Normal dk"], ["overtimeMinutes", "Fazla dk"], ["status", "Durum", "status"]],
+    columns: [["employeeId", "Personel"], ["workDate", "Tarih", "date"], ["checkIn", "Giriş"], ["checkOut", "Çıkış"], ["regularMinutes", "Normal dk"], ["overtimeMinutes", "Fazla dk"], ["status", "Durum", "status"]],
     fields: [field("employeeId", "Personel ID", "text", { required: true }), field("workDate", "Çalışma tarihi", "date", { required: true }), field("checkIn", "Giriş saati", "time"), field("checkOut", "Çıkış saati", "time"), field("regularMinutes", "Normal çalışma (dk)", "number"), field("overtimeMinutes", "Fazla mesai (dk)", "number"), field("location", "Çalışma yeri"), field("source", "Kayıt kaynağı", "select", { options: ["manual", "mobile", "device"] }), field("status", "Durum", "select", { options: ["present", "absent", "leave", "remote"] }), field("notes", "Not", "textarea", { wide: true })],
   },
   leaves: {
     description: "Personel izin talepleri, süreleri ve onay durumları",
-    columns: [["employeeId", "Personel ID"], ["leaveType", "İzin Türü"], ["startDate", "Başlangıç", "date"], ["endDate", "Bitiş", "date"], ["dayCount", "Gün"], ["status", "Durum", "status"]],
+    columns: [["employeeId", "Personel"], ["leaveType", "İzin Türü"], ["startDate", "Başlangıç", "date"], ["endDate", "Bitiş", "date"], ["dayCount", "Gün"], ["status", "Durum", "status"]],
     fields: [field("employeeId", "Personel ID", "text", { required: true }), field("leaveType", "İzin türü", "select", { required: true, options: ["annual", "medical", "unpaid", "excuse", "birth"] }), field("startDate", "Başlangıç", "date", { required: true }), field("endDate", "Bitiş", "date", { required: true }), field("dayCount", "Gün sayısı", "number", { required: true, min: 0 }), field("status", "Durum", "select", { options: ["pending", "approved", "rejected", "cancelled"] }), field("reason", "İzin açıklaması", "textarea", { wide: true })],
   },
   payroll: {
     description: "Resmi bordroya aktarılacak dönemsel ücret, mesai ve kesinti girdileri",
-    columns: [["employeeId", "Personel ID"], ["period", "Dönem"], ["baseSalary", "Brüt Ücret", "money"], ["overtimeAmount", "Mesai", "money"], ["netPreview", "Net Önizleme", "money"], ["status", "Durum", "status"]],
+    columns: [["employeeId", "Personel"], ["period", "Dönem"], ["baseSalary", "Brüt Ücret", "money"], ["overtimeAmount", "Mesai", "money"], ["netPreview", "Net Önizleme", "money"], ["status", "Durum", "status"]],
     fields: [field("employeeId", "Personel ID", "text", { required: true }), field("period", "Dönem (YYYY-AA)", "month", { required: true }), field("baseSalary", "Brüt ücret", "number", { permission: { resource: "salary", action: "view" } }), field("overtimeAmount", "Fazla mesai", "number", { permission: { resource: "salary", action: "view" } }), field("bonusAmount", "Prim", "number", { permission: { resource: "salary", action: "view" } }), field("allowanceAmount", "Yan hak", "number", { permission: { resource: "salary", action: "view" } }), field("deductionAmount", "Kesinti", "number", { permission: { resource: "salary", action: "view" } }), field("advanceAmount", "Avans", "number", { permission: { resource: "salary", action: "view" } }), field("netPreview", "Net önizleme", "number", { permission: { resource: "salary", action: "view" } }), field("currency", "Para birimi", "select", { options: ["TRY", "USD", "EUR"] }), field("status", "Durum", "select", { options: ["draft", "approved", "exported"] }), field("notes", "Notlar", "textarea", { wide: true })],
   },
   files: {
     description: "Proje, mahal, iş kalemi, revizyon, kalite ve montaj adımına bağlı fotoğraf ve belgeler",
-    columns: [["fileName", "Dosya"], ["projectId", "Proje ID"], ["spaceName", "Mahal"], ["captureStage", "Aşama"], ["category", "Kategori"], ["visibility", "Görünürlük"], ["takenAt", "Çekim", "date"]],
+    columns: [["fileName", "Dosya"], ["projectId", "Proje"], ["spaceName", "Mahal"], ["captureStage", "Aşama"], ["category", "Kategori"], ["visibility", "Görünürlük"], ["takenAt", "Çekim", "date"]],
     fields: [], uploadOnly: true,
   },
   memberships: {
     description: "Firma kullanıcılarını davet edin ve rollerini belirleyin",
-    columns: [["userId", "Kullanıcı ID"], ["title", "Görev"], ["roleNames", "Roller"], ["status", "Durum", "status"]],
+    columns: [["userId", "Kullanıcı"], ["title", "Görev"], ["roleNames", "Roller"], ["status", "Durum", "status"]],
     fields: [field("email", "E-posta", "email", { required: true }), field("fullName", "Ad soyad", "text", { required: true }), field("phone", "Giriş telefonu", "tel", { required: true, placeholder: "05xx xxx xx xx" }), field("temporaryPassword", "Geçici giriş şifresi", "password", { required: true, placeholder: "En az 8 karakter" }), field("roleIds", "Roller", "multiselect", { required: true, optionsResource: "roles", wide: true, help: "Kullanıcıya bir veya birden fazla görev rolü verebilirsiniz." }), field("title", "Firma içi görev")],
   },
   roles: {
@@ -271,21 +321,21 @@ const configs = {
   },
   auditLogs: {
     description: "Kim, ne zaman, hangi kaydı değiştirdi: salt okunur işlem izi",
-    columns: [["createdAt", "Tarih", "date"], ["action", "İşlem"], ["entityType", "Modül"], ["entityId", "Kayıt ID"], ["userId", "Kullanıcı ID"], ["ipAddress", "IP"]], fields: [],
+    columns: [["createdAt", "Tarih", "datetime"], ["action", "İşlem", "auditAction"], ["entityType", "Modül", "resourceName"], ["userId", "Kullanıcı"], ["ipAddress", "IP"]], fields: [],
   },
   offerItems: {
     description: "Teklifin ürün, miktar, satış fiyatı ve maliyet kırılımı",
-    columns: [["itemCode", "Kalem Kodu"], ["offerId", "Teklif ID"], ["description", "Açıklama"], ["quantity", "Miktar"], ["unit", "Birim"], ["unitPrice", "Birim Fiyat", "money"], ["total", "Toplam", "money"]],
+    columns: [["itemCode", "Kalem Kodu"], ["offerId", "Teklif"], ["description", "Açıklama"], ["quantity", "Miktar"], ["unit", "Birim"], ["unitPrice", "Birim Fiyat", "money"], ["total", "Toplam", "money"]],
     fields: [field("offerId", "Teklif ID", "text", { required: true }), field("parentId", "Üst kalem ID"), field("itemCode", "Kalem kodu"), field("description", "Açıklama", "text", { required: true }), field("unit", "Birim"), field("quantity", "Miktar", "number", { min: 0 }), field("unitPrice", "Birim satış fiyatı", "number"), field("costPrice", "Birim maliyet", "number", { permission: { resource: "cost", action: "view" } }), field("discountRate", "İndirim (%)", "number", { min: 0, max: 100 }), field("taxRate", "KDV (%)", "number", { min: 0, max: 100 }), field("total", "Toplam", "number"), field("sortOrder", "Sıra", "number")],
   },
   projectTasks: {
     description: "Proje iş planı, sorumlular, bağımlılıklar ve ilerleme",
-    columns: [["title", "Görev"], ["projectId", "Proje ID"], ["department", "Bölüm"], ["assigneeUserId", "Sorumlu ID"], ["plannedEnd", "Hedef", "date"], ["progress", "İlerleme", "percent"], ["status", "Durum", "status"]],
+    columns: [["title", "Görev"], ["projectId", "Proje"], ["department", "Bölüm"], ["assigneeUserId", "Sorumlu"], ["plannedEnd", "Hedef", "date"], ["progress", "İlerleme", "percent"], ["status", "Durum", "status"]],
     fields: [field("projectId", "Proje ID", "text", { required: true }), field("parentId", "Üst görev ID"), field("title", "Görev başlığı", "text", { required: true }), field("assigneeUserId", "Sorumlu kullanıcı ID"), field("department", "Bölüm"), field("status", "Durum", "select", { options: ["todo", "in_progress", "blocked", "completed"] }), field("priority", "Öncelik", "select", { options: ["low", "normal", "high", "urgent"] }), field("plannedStart", "Planlanan başlangıç", "date"), field("plannedEnd", "Planlanan bitiş", "date"), field("progress", "İlerleme (%)", "number", { min: 0, max: 100 }), field("dependencyIds", "Bağımlı görev ID'leri", "text", { placeholder: "Virgülle ayırın" }), field("description", "Açıklama", "textarea", { wide: true })],
   },
   purchaseOrders: {
     description: "Onaylı taleplerden açılan tedarikçi siparişleri ve teslim durumu",
-    columns: [["orderNumber", "Sipariş No"], ["projectId", "Proje ID"], ["supplierId", "Tedarikçi ID"], ["orderDate", "Sipariş", "date"], ["expectedDate", "Teslim", "date"], ["grandTotal", "Toplam", "money"], ["status", "Durum", "status"]],
+    columns: [["orderNumber", "Sipariş No"], ["projectId", "Proje"], ["supplierId", "Tedarikçi"], ["orderDate", "Sipariş", "date"], ["expectedDate", "Teslim", "date"], ["grandTotal", "Toplam", "money"], ["status", "Durum", "status"]],
     fields: [field("orderNumber", "Sipariş numarası", "text", { required: true }), field("requestId", "Talep ID"), field("projectId", "Proje ID"), field("supplierId", "Tedarikçi ID", "text", { required: true }), field("orderDate", "Sipariş tarihi", "date"), field("expectedDate", "Beklenen teslim", "date"), field("currency", "Para birimi", "select", { options: ["TRY", "USD", "EUR"] }), field("subtotal", "Ara toplam", "number"), field("taxTotal", "Vergi toplamı", "number"), field("grandTotal", "Genel toplam", "number"), field("status", "Durum", "select", { options: ["draft", "ordered", "partial", "received", "cancelled"] }), field("deliveryAddress", "Teslimat adresi", "textarea", { wide: true }), field("notes", "Notlar", "textarea", { wide: true })],
   },
   accounts: {
@@ -300,27 +350,27 @@ const configs = {
 Object.assign(configs, {
   siteSurveys: {
     description: "Müşteri sahasındaki keşif randevusu, sorumlu, konum ve onay süreci",
-    columns: [["surveyNumber", "Keşif No"], ["projectId", "Proje ID"], ["customerId", "Müşteri ID"], ["surveyDate", "Keşif Tarihi", "date"], ["location", "Konum"], ["status", "Durum", "status"]],
+    columns: [["surveyNumber", "Keşif No"], ["projectId", "Proje"], ["customerId", "Müşteri"], ["surveyDate", "Keşif Tarihi", "date"], ["location", "Konum"], ["status", "Durum", "status"]],
     fields: [field("surveyNumber", "Keşif numarası", "text", { required: true }), field("projectId", "Proje ID"), field("customerId", "Müşteri ID"), field("surveyDate", "Keşif tarihi", "date", { required: true }), field("location", "Keşif konumu"), field("surveyorUserId", "Keşfi yapan kullanıcı ID"), field("customerContact", "Müşteri saha yetkilisi"), field("status", "Durum", "select", { options: ["draft", "in_progress", "completed", "approved", "cancelled"] }), field("notes", "Keşif notları", "textarea", { wide: true })],
   },
   surveyMeasurements: {
     description: "Onay öncesi keşiflere bağlı mahal, eleman ve ölçü bazlı metraj satırları",
-    columns: [["siteSurveyId", "Keşif ID"], ["spaceName", "Mahal"], ["elementType", "Eleman"], ["itemCode", "Kalem Kodu"], ["quantity", "Miktar"], ["unit", "Birim"]],
+    columns: [["siteSurveyId", "Keşif"], ["spaceName", "Mahal"], ["elementType", "Eleman"], ["itemCode", "Kalem Kodu"], ["quantity", "Miktar"], ["unit", "Birim"]],
     fields: [field("siteSurveyId", "Keşif ID", "text", { required: true }), field("spaceName", "Mahal", "text", { required: true }), field("elementType", "Eleman türü", "text", { required: true }), field("itemCode", "Kalem kodu"), field("description", "Açıklama"), field("width", "Genişlik (mm)", "number"), field("height", "Yükseklik (mm)", "number"), field("depth", "Derinlik (mm)", "number"), field("length", "Uzunluk (mm)", "number"), field("quantity", "Miktar", "number", { min: 0 }), field("unit", "Birim", "text", { required: true }), field("material", "Malzeme"), field("finish", "Yüzey / renk"), field("sortOrder", "Sıra", "number"), field("notes", "Ölçüm notu", "textarea", { wide: true })],
   },
   contracts: {
     description: "Tekliften doğan sözleşme, ödeme modeli, teminat ve imza yaşam döngüsü",
-    columns: [["contractNumber", "Sözleşme No"], ["projectId", "Proje ID"], ["customerId", "Müşteri ID"], ["paymentModel", "Ödeme Modeli"], ["contractAmount", "Tutar", "money"], ["effectiveDate", "Başlangıç", "date"], ["status", "Durum", "status"]],
+    columns: [["contractNumber", "Sözleşme No"], ["projectId", "Proje"], ["customerId", "Müşteri"], ["paymentModel", "Ödeme Modeli"], ["contractAmount", "Tutar", "money"], ["effectiveDate", "Başlangıç", "date"], ["status", "Durum", "status"]],
     fields: [field("contractNumber", "Sözleşme numarası", "text", { required: true }), field("projectId", "Proje ID", "text", { required: true }), field("customerId", "Müşteri ID", "text", { required: true }), field("offerId", "Kaynak teklif ID"), field("paymentModel", "Ödeme modeli", "select", { required: true, options: ["progress_payment", "advance_balance", "custom"] }), field("paymentSchedule", "Ödeme planı", "textarea", { wide: true, placeholder: "Taksitleri virgülle veya JSON olarak girin" }), field("currency", "Para birimi", "select", { options: ["TRY", "USD", "EUR"] }), field("contractAmount", "Sözleşme tutarı", "number"), field("advanceRate", "Avans oranı (%)", "number", { min: 0, max: 100 }), field("advanceAmount", "Avans tutarı", "number"), field("retentionRate", "Teminat kesintisi (%)", "number", { min: 0, max: 100 }), field("retentionAmount", "Teminat tutarı", "number"), field("warrantyMonths", "Garanti süresi (ay)", "number", { min: 0 }), field("warrantyAmount", "Garanti teminatı", "number"), field("effectiveDate", "Yürürlük tarihi", "date"), field("plannedStartDate", "Planlanan başlangıç", "date"), field("plannedEndDate", "Planlanan bitiş", "date"), field("signedByCustomer", "Müşteri imza yetkilisi"), field("signedByCompany", "Firma imza yetkilisi"), field("photoConsent", "Fotoğraf kullanım izni", "select", { options: ["not_requested", "denied", "internal_only", "marketing_allowed"] }), field("status", "Durum", "select", { options: ["draft", "pending_signature", "signed", "active", "completed", "terminated", "cancelled"] }), field("notes", "Sözleşme notları", "textarea", { wide: true })],
   },
   designRevisions: {
     description: "2D/3D çizim dosyalarının iç kontrolü ve müşteri onay revizyonları",
-    columns: [["projectId", "Proje ID"], ["drawingType", "Çizim Türü"], ["title", "Başlık"], ["revisionNumber", "Revizyon"], ["fileId", "Dosya ID"], ["status", "Durum", "status"]],
+    columns: [["projectId", "Proje"], ["drawingType", "Çizim Türü"], ["title", "Başlık"], ["revisionNumber", "Revizyon"], ["fileId", "Dosya"], ["status", "Durum", "status"]],
     fields: [field("projectId", "Proje ID", "text", { required: true }), field("workItemId", "İş kalemi ID"), field("drawingType", "Çizim türü", "select", { required: true, options: ["2d", "3d", "shop_drawing"] }), field("title", "Revizyon başlığı", "text", { required: true }), field("revisionNumber", "Revizyon numarası", "number", { min: 0 }), field("fileId", "Çizim dosyası ID"), field("supersedesId", "Yerine geçtiği revizyon ID"), field("status", "Durum", "select", { options: ["draft", "internal_review", "client_review", "approved", "rejected", "superseded"] }), field("rejectionReason", "Ret / değişiklik nedeni"), field("notes", "Tasarım notları", "textarea", { wide: true })],
   },
   progressPayments: {
     description: "Sözleşmeye bağlı dönemsel hakediş, kesinti, fatura ve tahsilat süreci",
-    columns: [["progressNumber", "Hakediş No"], ["projectId", "Proje ID"], ["contractId", "Sözleşme ID"], ["periodEnd", "Dönem Sonu", "date"], ["netPayable", "Net Hakediş", "money"], ["status", "Durum", "status"]],
+    columns: [["progressNumber", "Hakediş No"], ["projectId", "Proje"], ["contractId", "Sözleşme"], ["periodEnd", "Dönem Sonu", "date"], ["netPayable", "Net Hakediş", "money"], ["status", "Durum", "status"]],
     fields: [field("progressNumber", "Hakediş numarası", "text", { required: true }), field("projectId", "Proje ID", "text", { required: true }), field("contractId", "Sözleşme ID", "text", { required: true }), field("periodStart", "Dönem başlangıcı", "date", { required: true }), field("periodEnd", "Dönem sonu", "date", { required: true }), field("currency", "Para birimi", "select", { options: ["TRY", "USD", "EUR"] }), field("previousWork", "Önceki imalat toplamı", "number"), field("currentWork", "Bu dönem imalat", "number"), field("cumulativeWork", "Kümülatif imalat", "number"), field("deduction", "Kesinti", "number"), field("retention", "Teminat kesintisi", "number"), field("tax", "Vergi", "number"), field("netPayable", "Net hakediş", "number"), field("status", "Durum", "select", { options: ["draft", "pending", "approved", "rejected", "invoiced", "paid", "cancelled"] }), field("invoiceId", "Fatura ID"), field("paymentTransactionId", "Ödeme hareketi ID"), field("rejectionReason", "Ret nedeni"), field("notes", "Hakediş notları", "textarea", { wide: true })],
   },
   inventoryItems: {
@@ -330,7 +380,7 @@ Object.assign(configs, {
   },
   stockMovements: {
     description: "Projeye bağlı giriş, çıkış, rezerv ve sayım düzeltmelerinin kesin kaydı",
-    columns: [["movementNumber", "Hareket No"], ["inventoryItemId", "Stok Kartı ID"], ["projectId", "Proje ID"], ["movementType", "Hareket"], ["movementDate", "Tarih", "date"], ["quantity", "Miktar"], ["totalCost", "Toplam Maliyet", "money"], ["status", "Durum", "status"]],
+    columns: [["movementNumber", "Hareket No"], ["inventoryItemId", "Stok Kartı"], ["projectId", "Proje"], ["movementType", "Hareket"], ["movementDate", "Tarih", "date"], ["quantity", "Miktar"], ["totalCost", "Toplam Maliyet", "money"], ["status", "Durum", "status"]],
     fields: [field("movementNumber", "Hareket numarası", "text", { required: true }), field("inventoryItemId", "Stok kartı ID", "text", { required: true }), field("projectId", "Proje ID"), field("movementType", "Hareket türü", "select", { required: true, options: ["receipt", "issue", "adjustment_in", "adjustment_out", "project_issue", "project_return"] }), field("movementDate", "Hareket tarihi", "date", { required: true }), field("quantity", "Miktar", "number", { required: true }), field("unitCost", "Birim maliyet", "number", { permission: { resource: "cost", action: "view" } }), field("totalCost", "Toplam maliyet", "number", { permission: { resource: "cost", action: "view" } }), field("status", "Durum", "select", { options: ["draft", "posted", "cancelled"] }), field("sourceType", "Kaynak türü"), field("sourceId", "Kaynak kayıt ID"), field("reference", "Referans"), field("notes", "Hareket notu", "textarea", { wide: true })],
   },
 });
@@ -338,42 +388,42 @@ Object.assign(configs, {
 Object.assign(configs, {
   projectMeetings: {
     description: "Haftalık proje, üretim ve saha toplantılarının karar ve yayın akışı",
-    columns: [["meetingDate", "Tarih", "date"], ["meetingType", "Toplantı Türü"], ["title", "Başlık"], ["projectId", "Proje ID"], ["facilitatorUserId", "Yöneten"], ["status", "Durum", "status"]],
+    columns: [["meetingDate", "Tarih", "date"], ["meetingType", "Toplantı Türü"], ["title", "Başlık"], ["projectId", "Proje"], ["facilitatorUserId", "Yöneten"], ["status", "Durum", "status"]],
     fields: [field("projectId", "Proje ID"), field("meetingType", "Toplantı türü", "select", { required: true, options: ["weekly_project", "weekly_production", "coordination", "site"] }), field("meetingDate", "Toplantı tarihi", "date", { required: true }), field("title", "Toplantı başlığı", "text", { required: true }), field("facilitatorUserId", "Toplantı yöneticisi kullanıcı ID"), field("attendees", "Katılımcılar", "textarea", { wide: true, placeholder: "Virgülle ayırın" }), field("summary", "Kararlar ve toplantı özeti", "textarea", { wide: true }), field("status", "Durum", "select", { options: ["draft", "published", "closed"] })],
   },
   meetingActions: {
     description: "Toplantılarda alınan kararların sorumlu, termin ve gerçekleşme takibi",
-    columns: [["title", "Aksiyon"], ["meetingId", "Toplantı ID"], ["projectId", "Proje ID"], ["ownerUserId", "Sorumlu"], ["dueDate", "Termin", "date"], ["priority", "Öncelik"], ["status", "Durum", "status"]],
+    columns: [["title", "Aksiyon"], ["meetingId", "Toplantı"], ["projectId", "Proje"], ["ownerUserId", "Sorumlu"], ["dueDate", "Termin", "date"], ["priority", "Öncelik"], ["status", "Durum", "status"]],
     fields: [field("meetingId", "Toplantı ID", "text", { required: true }), field("projectId", "Proje ID"), field("title", "Aksiyon", "text", { required: true }), field("description", "Açıklama", "textarea", { wide: true }), field("ownerUserId", "Sorumlu kullanıcı ID"), field("dueDate", "Termin", "date"), field("priority", "Öncelik", "select", { options: ["low", "normal", "high", "urgent"] }), field("status", "Durum", "select", { options: ["open", "in_progress", "completed", "cancelled"] })],
   },
   qualityInspections: {
     description: "Girdi, üretim, final ve saha kalite kontrolleri ile düzeltici faaliyetler",
-    columns: [["inspectionNumber", "Kontrol No"], ["projectId", "Proje ID"], ["inspectionType", "Kontrol Türü"], ["inspectionDate", "Tarih", "date"], ["result", "Sonuç", "status"], ["status", "Durum", "status"]],
+    columns: [["inspectionNumber", "Kontrol No"], ["projectId", "Proje"], ["inspectionType", "Kontrol Türü"], ["inspectionDate", "Tarih", "date"], ["result", "Sonuç", "status"], ["status", "Durum", "status"]],
     fields: [field("inspectionNumber", "Kontrol numarası", "text", { required: true }), field("projectId", "Proje ID", "text", { required: true }), field("workItemId", "İş kalemi ID"), field("productionOrderId", "Üretim emri ID"), field("installationId", "Montaj ID"), field("inspectionType", "Kontrol türü", "select", { required: true, options: ["incoming", "in_process", "final", "site"] }), field("inspectionDate", "Kontrol tarihi", "date", { required: true }), field("inspectorUserId", "Kontrol sorumlusu kullanıcı ID"), field("result", "Sonuç", "select", { options: ["pending", "pass", "conditional", "fail"] }), field("checklist", "Kontrol listesi", "textarea", { wide: true, placeholder: "Virgülle ayırın" }), field("defectNotes", "Uygunsuzluk / kusur", "textarea", { wide: true }), field("correctiveAction", "Düzeltici faaliyet", "textarea", { wide: true }), field("correctiveDueDate", "Düzeltme termini", "date"), field("status", "Durum", "select", { options: ["draft", "completed", "closed"] })],
   },
   handovers: {
     description: "Müşteri teslimi, kabul imzası, memnuniyet puanı ve kapanış takibi",
-    columns: [["handoverNumber", "Teslim No"], ["projectId", "Proje ID"], ["handoverDate", "Teslim Tarihi", "date"], ["customerContact", "Müşteri Yetkilisi"], ["satisfactionScore", "Memnuniyet"], ["status", "Durum", "status"]],
+    columns: [["handoverNumber", "Teslim No"], ["projectId", "Proje"], ["handoverDate", "Teslim Tarihi", "date"], ["customerContact", "Müşteri Yetkilisi"], ["satisfactionScore", "Memnuniyet"], ["status", "Durum", "status"]],
     fields: [field("handoverNumber", "Teslim numarası", "text", { required: true }), field("projectId", "Proje ID", "text", { required: true }), field("installationId", "Montaj ID"), field("handoverDate", "Teslim tarihi", "date", { required: true }), field("customerContact", "Müşteri teslim yetkilisi", "text", { required: true }), field("satisfactionScore", "Memnuniyet puanı (1-5)", "number", { min: 1, max: 5 }), field("customerSignatureFileId", "Müşteri imza dosyası ID"), field("acceptanceNotes", "Teslim / kabul notları", "textarea", { wide: true }), field("status", "Durum", "select", { options: ["draft", "punch_open", "accepted", "rejected", "closed"] })],
   },
   handoverPunchItems: {
     description: "Teslim sırasında belirlenen eksik ve kusurların sorumlu, termin ve kabul takibi",
-    columns: [["title", "Eksik / Kusur"], ["handoverId", "Teslim ID"], ["responsibleUserId", "Sorumlu"], ["dueDate", "Termin", "date"], ["severity", "Önem"], ["status", "Durum", "status"]],
+    columns: [["title", "Eksik / Kusur"], ["handoverId", "Teslim"], ["responsibleUserId", "Sorumlu"], ["dueDate", "Termin", "date"], ["severity", "Önem"], ["status", "Durum", "status"]],
     fields: [field("handoverId", "Teslim ID", "text", { required: true }), field("title", "Eksik / kusur başlığı", "text", { required: true }), field("description", "Açıklama", "textarea", { wide: true }), field("responsibleUserId", "Sorumlu kullanıcı ID"), field("dueDate", "Tamamlama termini", "date"), field("severity", "Önem", "select", { options: ["low", "normal", "high", "critical"] }), field("status", "Durum", "select", { options: ["open", "in_progress", "resolved", "accepted", "cancelled"] })],
   },
   projectCommunications: {
     description: "Telefon, e-posta, WhatsApp, toplantı ve saha görüşmelerinin proje bazlı karar ve takip günlüğü",
-    columns: [["occurredAt", "Tarih", "date"], ["projectId", "Proje ID"], ["channel", "Kanal"], ["contactName", "Görüşülen Kişi"], ["subject", "Konu"], ["nextFollowUpAt", "Takip", "date"], ["status", "Durum", "status"]],
+    columns: [["occurredAt", "Tarih", "date"], ["projectId", "Proje"], ["channel", "Kanal"], ["contactName", "Görüşülen Kişi"], ["subject", "Konu"], ["nextFollowUpAt", "Takip", "date"], ["status", "Durum", "status"]],
     fields: [field("projectId", "Proje ID", "text", { required: true }), field("customerId", "Müşteri ID"), field("channel", "İletişim kanalı", "select", { required: true, options: ["phone", "email", "whatsapp", "meeting", "site", "other"] }), field("direction", "Yön", "select", { options: ["inbound", "outbound", "internal"] }), field("contactName", "Görüşülen kişi"), field("subject", "Konu", "text", { required: true }), field("occurredAt", "Görüşme tarihi ve saati", "datetime-local", { required: true }), field("nextFollowUpAt", "Sonraki takip tarihi", "datetime-local"), field("ownerUserId", "Takip sorumlusu kullanıcı ID"), field("status", "Takip durumu", "select", { options: ["open", "follow_up", "closed"] }), field("summary", "Görüşme özeti", "textarea", { wide: true }), field("decision", "Alınan karar / taahhüt", "textarea", { wide: true })],
   },
   resourceAssignments: {
     description: "Proje ekiplerinin, iş merkezlerinin ve dış kaynakların tarih bazlı kapasite planı",
-    columns: [["resourceName", "Kaynak / Ekip"], ["resourceType", "Tür"], ["projectId", "Proje ID"], ["role", "Rol / İş"], ["plannedStart", "Başlangıç", "date"], ["plannedEnd", "Bitiş", "date"], ["allocationPercent", "Kapasite", "percent"], ["status", "Durum", "status"]],
+    columns: [["resourceName", "Kaynak / Ekip"], ["resourceType", "Tür"], ["projectId", "Proje"], ["role", "Rol / İş"], ["plannedStart", "Başlangıç", "date"], ["plannedEnd", "Bitiş", "date"], ["allocationPercent", "Kapasite", "percent"], ["status", "Durum", "status"]],
     fields: [field("projectId", "Proje ID", "text", { required: true }), field("employeeId", "Personel ID"), field("resourceType", "Kaynak türü", "select", { required: true, options: ["employee", "team", "work_center", "subcontractor"] }), field("resourceName", "Personel / ekip / iş merkezi", "text", { required: true }), field("role", "Projede görevi"), field("plannedStart", "Planlanan başlangıç", "date", { required: true }), field("plannedEnd", "Planlanan bitiş", "date", { required: true }), field("allocationPercent", "Kapasite kullanımı (%)", "number", { min: 1, max: 100 }), field("status", "Durum", "select", { options: ["planned", "confirmed", "active", "completed", "cancelled"] }), field("notes", "Planlama notu", "textarea", { wide: true })],
   },
   materialRequirements: {
     description: "Proje ve iş kalemi bazında ihtiyaç, stok rezervasyonu ve eksik satın alma bağlantısı",
-    columns: [["itemCode", "Malzeme Kodu"], ["description", "Malzeme / Açıklama"], ["projectId", "Proje ID"], ["requiredQuantity", "İhtiyaç"], ["reservedQuantity", "Stoktan Ayrılan"], ["orderedQuantity", "Tedarike Bağlanan"], ["neededBy", "İhtiyaç Tarihi", "date"], ["status", "Durum", "status"]],
+    columns: [["itemCode", "Malzeme Kodu"], ["description", "Malzeme / Açıklama"], ["projectId", "Proje"], ["requiredQuantity", "İhtiyaç"], ["reservedQuantity", "Stoktan Ayrılan"], ["orderedQuantity", "Tedarike Bağlanan"], ["neededBy", "İhtiyaç Tarihi", "date"], ["status", "Durum", "status"]],
     fields: [field("projectId", "Proje ID", "text", { required: true }), field("workItemId", "İş kalemi ID"), field("inventoryItemId", "Stok kartı ID"), field("preferredSupplierId", "Tercih edilen tedarikçi ID"), field("itemCode", "Malzeme kodu"), field("description", "Malzeme / teknik açıklama", "text", { required: true }), field("requiredQuantity", "İhtiyaç miktarı", "number", { required: true, min: 0.001, step: "any" }), field("unit", "Birim", "select", { required: true, options: ["adet", "m", "m²", "m³", "kg", "lt", "plaka", "takım"] }), field("neededBy", "En geç ihtiyaç tarihi", "date"), field("status", "Plan durumu", "select", { options: ["draft", "shortage", "covered", "cancelled"] }), field("notes", "Kalite, desen, renk ve tedarik notları", "textarea", { wide: true })],
   },
 });
@@ -612,6 +662,31 @@ Object.assign(configs.resourceAssignments, {
   boardColumns: ["planned", "confirmed", "active", "completed", "cancelled"],
 });
 
+// Sunucu, bağlı kayıtların adını "<alan>Name" anahtarıyla da gönderir. Kullanıcıya
+// gösterilecek olan odur: "Müşteri" satırında cus_75188281-83c1-… değil, müşterinin
+// adı yazmalı. Adı çözülemeyen bir kimlik ise hiç gösterilmez; okunamayan kırk
+// karakterlik bir dizi kimseye bir şey anlatmaz.
+const identifierField = /(Id|By)$/;
+
+function relatedName(record, key) {
+  const candidates = key.endsWith("Id") ? [`${key.slice(0, -2)}Name`, `${key}Name`] : [`${key}Name`];
+  for (const candidate of candidates) {
+    const label = record?.[candidate];
+    if (label != null && label !== "") return label;
+  }
+  return null;
+}
+
+// Bir alanın kullanıcıya gösterilecek hâli: varsa bağlı kaydın adı, yoksa kendisi.
+// Adı olmayan kimlik alanları boş görünür.
+function presentedValue(record, key) {
+  const label = relatedName(record, key);
+  if (label != null) return label;
+  const raw = recordValue(record, key);
+  if (key !== "id" && identifierField.test(key) && typeof raw === "string" && /^[a-z]{2,4}_[0-9a-f-]{16,}$/i.test(raw)) return null;
+  return raw;
+}
+
 function recordValue(record, key) {
   if (key === "fullName") return record.fullName || [record.firstName, record.lastName].filter(Boolean).join(" ");
   if (key === "projectName") return record.projectName || record.project?.name || "—";
@@ -620,19 +695,31 @@ function recordValue(record, key) {
 }
 
 function formatValue(value, type, record) {
-  if (value == null || value === "") return "—";
-  if (type === "money") return money.format(Number(value) || 0).replace("₺", record.currency && record.currency !== "TRY" ? record.currency : "₺");
-  if (type === "date") {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.valueOf()) ? value : date.format(parsed);
+  // "null" ve "undefined" metinleri, boş bir alanın JSON'a çevrilmesinden
+  // arta kalır; kullanıcıya gösterilecek bir bilgi değildir.
+  if (value == null || value === "" || value === "null" || value === "undefined") return "—";
+  if (typeof value === "boolean") return value ? "Evet" : "Hayır";
+  if (Array.isArray(value)) return value.length ? value.map((item) => formatValue(item, undefined, record)).join(", ") : "—";
+  if (typeof value === "object") {
+    const parts = Object.entries(value).filter(([, item]) => item != null && item !== "");
+    return parts.length ? parts.map(([key, item]) => `${localizedEnum(key)}: ${formatValue(item, undefined, record)}`).join(" · ") : "—";
   }
-  if (type === "percent") return `%${value}`;
+  if (type === "money") return money.format(value, record?.currency);
+  if (type === "date") return formatDateValue(value) ?? String(value);
+  if (type === "datetime") return formatDateValue(value, true) ?? String(value);
+  if (type === "auditAction") return localizedAuditAction(value);
+  if (type === "resourceName") return resourceTitles[String(value)] || localizedEnum(String(value));
+  if (type === "percent") return `%${numberDigits.format(Number(value) || 0)}`;
   if (type === "bytes") {
     const bytes = Number(value) || 0;
-    return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return bytes >= 1048576 ? `${numberDigits.format(bytes / 1048576)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
   }
-  if (typeof value === "boolean") return value ? "Evet" : "Hayır";
-  return String(value);
+  if (typeof value === "number") return numberDigits.format(value);
+  const asDate = formatDateValue(value);
+  if (asDate) return asDate;
+  // Sunucu durum ve tür alanlarını kendi kodlarıyla gönderir; "inbound" ya da
+  // "meeting" kullanıcıya hiçbir şey anlatmaz, Türkçesi yazılmalıdır.
+  return localizedEnum(String(value));
 }
 
 function statusTone(value = "") {
@@ -674,10 +761,56 @@ const enumLabels = {
   selected: "Seçildi", expired: "Süresi doldu", skipped: "Atlandı",
   quality: "Kalite", machine: "Makine / tezgah", drawing: "Çizim", manpower: "İş gücü", supplier: "Tedarikçi",
   blacklisted: "Kara listede",
+  "2d": "2B çizim", "3d": "3B görsel", announcement: "Duyuru", archived: "Arşivlendi",
+  consumed: "Kullanıldı", customer: "Müşteri", deleted: "Silindi", dismissed: "Yok sayıldı",
+  failed: "Başarısız", fulfilled: "Temin edildi", handover: "Teslim", marketing: "Pazarlama",
+  material: "Malzeme", password: "Şifre", phone_otp: "SMS kodu", project: "Proje",
+  read: "Okundu", unread: "Okunmadı", suppressed: "Gösterilmedi", suspended: "Askıya alındı",
+  cost_forecast: "Maliyet tahmini", advance: "Avans",
+  full_time: "Tam zamanlı", part_time: "Yarı zamanlı", contract: "Sözleşme", intern: "Stajyer",
+  photo: "Fotoğraf", invoice: "Fatura", warning: "Uyarı", stage: "Aşama", info: "Bilgi",
+  quality_evidence: "Kalite kanıtı", installation_evidence: "Montaj kanıtı", handover_evidence: "Teslim kanıtı",
+  // Para birimi kodu muhasebede TRY diye değil TL diye yazılır.
+  TRY: "TL",
 };
 
+// Denetim kaydı modülü sunucudaki adıyla saklar ("purchase-requests");
+// kullanıcı onu menüdeki adıyla tanır ("Satın Alma").
+const resourceTitles = {
+  ...Object.fromEntries(modules.map((item) => [RESOURCE_SLUGS[item.resource] || item.resource, item.title])),
+  // Menüde ayrı bir ekranı olmayan, yalnız denetim kaydında görünen kaynaklar.
+  users: "Kullanıcı hesapları", tokens: "API anahtarları", backups: "Yedekler",
+  permissions: "Yetkiler", sessions: "Oturumlar",
+  "chat-channels": "Ekip Sohbeti", "chat-messages": "Ekip Sohbeti",
+};
+
+const auditActionLabels = {
+  create: "Kayıt oluşturdu", update: "Kaydı düzenledi", delete: "Kaydı sildi",
+  upload: "Dosya yükledi", export: "Dışa aktardı", invite: "Kullanıcı davet etti",
+  transition: "Aşama değiştirdi", approve: "Onayladı", reject: "Reddetti",
+  release: "Üretime saldı", complete: "Tamamladı", receive: "Mal kabulü yaptı",
+  order: "Sipariş oluşturdu", post: "Stok hareketini kesinleştirdi", reverse: "Ters kayıt oluşturdu",
+  select: "Tedarikçi teklifini seçti", publish: "Yayınladı", resolve: "Çözüme kapattı",
+  convert: "Projeye dönüştürdü", sign: "İmzaladı", accept: "Kabul etti",
+  "password.change": "Şifresini değiştirdi", "password.reset": "Şifre sıfırladı",
+  "permissions.update": "Yetkileri güncelledi", "session.revoke": "Oturumu sonlandırdı",
+  "token.create": "API anahtarı oluşturdu", "token.revoke": "API anahtarını iptal etti",
+  "token.rotate": "API anahtarını yeniledi", "revision.approve": "Revizyonu onayladı",
+  "backup.completed": "Yedek tamamlandı", "backup.failed": "Yedek başarısız oldu",
+  reserve: "Stok rezerve etti", submit: "Onaya gönderdi", "create-order": "Sipariş oluşturdu",
+  "explode-bom": "Reçeteyi patlattı", "revision.reject": "Revizyonu reddetti",
+};
+
+// "purchase-requests.approve" gibi kaynak önekli kodlarda anlamı taşıyan son
+// parçadır; her kaynak için ayrı satır yazmak sözlüğü gereksiz şişirirdi.
+function localizedAuditAction(value) {
+  const text = String(value || "");
+  return auditActionLabels[text] || auditActionLabels[text.split(".").pop()] || text;
+}
+
 function localizedEnum(value) {
-  return enumLabels[String(value)] || projectStageLabels[String(value)] || value;
+  const text = String(value);
+  return enumLabels[text] || projectStageLabels[text] || text;
 }
 
 // Sunucudaki üst yetki eşlemesinin arayüz karşılığı; rol editöründe ayrıntılı
@@ -888,7 +1021,7 @@ function Table({ rows, config, canEdit, onEdit, onDetail, canDelete, onDelete, o
   const hasActions = canEdit || Boolean(onDetail) || Boolean(onDelete) || Boolean(onPermissions) || Boolean(getWorkflowActions);
   return <div className="live-table-wrap"><table className="live-table"><thead><tr>{config.columns.map(([, label]) => <th key={label}>{label}</th>)}{hasActions && <th aria-label="İşlem" />}</tr></thead><tbody>{rows.map((row, index) => {
     const actions = row._offlineQueued ? [] : getWorkflowActions?.(row) || [];
-    return <tr className={row._offlineQueued ? "offline-queued" : ""} key={row.id || index}>{config.columns.map(([key, , type]) => <td key={key}>{type === "status" ? <Status>{recordValue(row, key)}</Status> : formatValue(recordValue(row, key), type, row)}</td>)}{hasActions && <td><div className="live-row-actions">{row._offlineQueued && <span className="live-offline-chip"><CloudArrowUp /> Kuyrukta</span>}{onDetail && (config.detailLabel ? <button className="live-workflow-button" onClick={() => onDetail(row)}>{config.detailLabel}</button> : <button className="live-icon-button" onClick={() => onDetail(row)} title="Detayı aç"><ClipboardText /></button>)}{actions.map((action) => <button className={`live-workflow-button ${action.tone || ""}`} key={action.key} onClick={() => onWorkflow(row, action)}>{action.label}</button>)}{onPermissions && <button className="live-icon-button" onClick={() => onPermissions(row)} title="Rol yetkileri"><Buildings /></button>}{canEdit && !row._offlineQueued && <button className="live-icon-button" onClick={() => onEdit(row)} title="Düzenle"><PencilSimple /></button>}{onDelete && canDelete?.(row) && <button className="live-icon-button danger" onClick={() => onDelete(row)} title="Sil"><X /></button>}</div></td>}</tr>;
+    return <tr className={row._offlineQueued ? "offline-queued" : ""} key={row.id || index}>{config.columns.map(([key, , type]) => <td key={key}>{type === "status" ? <Status>{recordValue(row, key)}</Status> : formatValue(presentedValue(row, key), type, row)}</td>)}{hasActions && <td><div className="live-row-actions">{row._offlineQueued && <span className="live-offline-chip"><CloudArrowUp /> Kuyrukta</span>}{onDetail && (config.detailLabel ? <button className="live-workflow-button" onClick={() => onDetail(row)}>{config.detailLabel}</button> : <button className="live-icon-button" onClick={() => onDetail(row)} title="Detayı aç"><ClipboardText /></button>)}{actions.map((action) => <button className={`live-workflow-button ${action.tone || ""}`} key={action.key} onClick={() => onWorkflow(row, action)}>{action.label}</button>)}{onPermissions && <button className="live-icon-button" onClick={() => onPermissions(row)} title="Rol yetkileri"><Buildings /></button>}{canEdit && !row._offlineQueued && <button className="live-icon-button" onClick={() => onEdit(row)} title="Düzenle"><PencilSimple /></button>}{onDelete && canDelete?.(row) && <button className="live-icon-button danger" onClick={() => onDelete(row)} title="Sil"><X /></button>}</div></td>}</tr>;
   })}</tbody></table></div>;
 }
 
@@ -1131,7 +1264,14 @@ function FileUploadModal({ saving, serverError, onClose, onSave }) {
     onSave(contextualValues);
   };
   const requiresEntityId = values.entityType !== "projects";
-  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true" aria-labelledby="file-upload-title"><header><div><small>BAĞLAMSAL DOSYA MERKEZİ</small><h2 id="file-upload-title">Fotoğraf veya belge yükle</h2><p>Dosyayı projedeki gerçek işi, mahali ve süreç adımıyla ilişkilendirin.</p></div><button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></header><form onSubmit={submit}><div className="live-form-grid"><label><span>Proje ID <em>*</em></span><input required value={values.projectId} onChange={(event) => setValues({ ...values, projectId: event.target.value })} /></label><label><span>Bağlı kayıt türü <em>*</em></span><select value={values.entityType} onChange={(event) => setValues({ ...values, entityType: event.target.value, entityId: "" })}><option value="projects">Projenin geneli</option><option value="offers">Teklif</option><option value="work-items">İş kalemi / ürün</option><option value="design-revisions">Tasarım revizyonu</option><option value="production-orders">Üretim emri</option><option value="quality-inspections">Kalite kontrolü</option><option value="installations">Montaj</option><option value="handovers">Teslim & kabul</option></select></label>{requiresEntityId && <label><span>Bağlı kayıt ID <em>*</em></span><input required value={values.entityId} onChange={(event) => setValues({ ...values, entityId: event.target.value })} /></label>}<label><span>Mahal / konum</span><input value={values.spaceName} placeholder="Örn. Lobi, 204 numaralı oda" onChange={(event) => setValues({ ...values, spaceName: event.target.value })} /></label><label><span>Süreç aşaması</span><select value={values.captureStage} onChange={(event) => setValues({ ...values, captureStage: event.target.value })}><option value="discovery">Keşif</option><option value="design">Tasarım</option><option value="procurement">Satın alma</option><option value="production">Üretim</option><option value="quality">Kalite</option><option value="installation">Montaj</option><option value="handover">Teslim</option><option value="other">Diğer</option></select></label><label><span>Çekim / belge tarihi</span><input type="datetime-local" value={values.takenAt} onChange={(event) => setValues({ ...values, takenAt: event.target.value })} /></label><label><span>Kategori</span><select value={values.category} onChange={(event) => setValues({ ...values, category: event.target.value })}><option value="photo">Fotoğraf</option><option value="drawing">Çizim</option><option value="contract">Sözleşme</option><option value="quality_evidence">Kalite kanıtı</option><option value="installation_evidence">Montaj kanıtı</option><option value="handover_evidence">Teslim kanıtı</option><option value="report">Rapor</option><option value="other">Diğer</option></select></label><label><span>Görünürlük</span><select value={values.visibility} onChange={(event) => setValues({ ...values, visibility: event.target.value })}><option value="internal">Yalnız firma içi</option><option value="customer">Müşteriyle paylaşılabilir</option><option value="marketing">Pazarlamada kullanılabilir</option></select></label><label className="wide"><span>Dosya <em>*</em></span><input required type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" onChange={(event) => setValues({ ...values, file: event.target.files?.[0] || null })} /><small>Telefonda bu alan kameradan çekim veya galeriden seçim sunar.</small></label><label className="wide"><span>Açıklama / kusur / yapılan işlem</span><textarea rows="3" value={values.description} placeholder="Fotoğrafta ne görüldüğünü ve gerekiyorsa alınan aksiyonu yazın." onChange={(event) => setValues({ ...values, description: event.target.value })} /></label></div>{serverError && <div className="live-form-alert"><WarningCircle />{serverError.message}</div>}<footer><button type="button" className="live-button secondary" onClick={onClose}>Vazgeç</button><button className="live-button primary" disabled={saving || !values.file || !values.projectId || (requiresEntityId && !values.entityId)}>{saving ? "Yükleniyor…" : "Dosyayı bağlamıyla yükle"}</button></footer></form></section></div>;
+  // Kullanıcıya kırk karakterlik bir kimlik yazdırmak yerine kaydı listeden
+  // seçtiriyoruz; kimliği zaten kimse ezbere bilmiyor.
+  const entityResources = {
+    offers: "offers", "work-items": "workItems", "design-revisions": "designRevisions",
+    "production-orders": "production", "quality-inspections": "qualityInspections",
+    installations: "installations", handovers: "handovers",
+  };
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true" aria-labelledby="file-upload-title"><header><div><small>BAĞLAMSAL DOSYA MERKEZİ</small><h2 id="file-upload-title">Fotoğraf veya belge yükle</h2><p>Dosyayı projedeki gerçek işi, mahali ve süreç adımıyla ilişkilendirin.</p></div><button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></header><form onSubmit={submit}><div className="live-form-grid"><label><span>Proje <em>*</em></span><ReferenceField item={{ name: "projectId", referenceResource: "projects", label: "Proje" }} value={values.projectId} onChange={(next) => setValues({ ...values, projectId: next })} /></label><label><span>Bağlı kayıt türü <em>*</em></span><select value={values.entityType} onChange={(event) => setValues({ ...values, entityType: event.target.value, entityId: "" })}><option value="projects">Projenin geneli</option><option value="offers">Teklif</option><option value="work-items">İş kalemi / ürün</option><option value="design-revisions">Tasarım revizyonu</option><option value="production-orders">Üretim emri</option><option value="quality-inspections">Kalite kontrolü</option><option value="installations">Montaj</option><option value="handovers">Teslim & kabul</option></select></label>{requiresEntityId && <label><span>Bağlı kayıt <em>*</em></span><ReferenceField item={{ name: "entityId", referenceResource: entityResources[values.entityType] || "projects", label: "Bağlı kayıt" }} value={values.entityId} onChange={(next) => setValues({ ...values, entityId: next })} /></label>}<label><span>Mahal / konum</span><input value={values.spaceName} placeholder="Örn. Lobi, 204 numaralı oda" onChange={(event) => setValues({ ...values, spaceName: event.target.value })} /></label><label><span>Süreç aşaması</span><select value={values.captureStage} onChange={(event) => setValues({ ...values, captureStage: event.target.value })}><option value="discovery">Keşif</option><option value="design">Tasarım</option><option value="procurement">Satın alma</option><option value="production">Üretim</option><option value="quality">Kalite</option><option value="installation">Montaj</option><option value="handover">Teslim</option><option value="other">Diğer</option></select></label><label><span>Çekim / belge tarihi</span><input type="datetime-local" value={values.takenAt} onChange={(event) => setValues({ ...values, takenAt: event.target.value })} /></label><label><span>Kategori</span><select value={values.category} onChange={(event) => setValues({ ...values, category: event.target.value })}><option value="photo">Fotoğraf</option><option value="drawing">Çizim</option><option value="contract">Sözleşme</option><option value="quality_evidence">Kalite kanıtı</option><option value="installation_evidence">Montaj kanıtı</option><option value="handover_evidence">Teslim kanıtı</option><option value="report">Rapor</option><option value="other">Diğer</option></select></label><label><span>Görünürlük</span><select value={values.visibility} onChange={(event) => setValues({ ...values, visibility: event.target.value })}><option value="internal">Yalnız firma içi</option><option value="customer">Müşteriyle paylaşılabilir</option><option value="marketing">Pazarlamada kullanılabilir</option></select></label><label className="wide"><span>Dosya <em>*</em></span><input required type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" onChange={(event) => setValues({ ...values, file: event.target.files?.[0] || null })} /><small>Telefonda bu alan kameradan çekim veya galeriden seçim sunar.</small></label><label className="wide"><span>Açıklama / kusur / yapılan işlem</span><textarea rows="3" value={values.description} placeholder="Fotoğrafta ne görüldüğünü ve gerekiyorsa alınan aksiyonu yazın." onChange={(event) => setValues({ ...values, description: event.target.value })} /></label></div>{serverError && <div className="live-form-alert"><WarningCircle />{serverError.message}</div>}<footer><button type="button" className="live-button secondary" onClick={onClose}>Vazgeç</button><button className="live-button primary" disabled={saving || !values.file || !values.projectId || (requiresEntityId && !values.entityId)}>{saving ? "Yükleniyor…" : "Dosyayı bağlamıyla yükle"}</button></footer></form></section></div>;
 }
 
 function QuickPhotoModal({ projectId, saving, serverError, onClose, onSave }) {
@@ -1327,7 +1467,7 @@ function WorkCenterLoadView({ online }) {
   </section>;
 }
 
-function ProjectCommandCenterModal({ record, onClose, onNavigate, onCostBreakdown }) {
+function ProjectCommandCenterModal({ record, onClose, onNavigate, onCostBreakdown, onShare }) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
   const load = () => {
     setState({ loading: true, data: null, error: null });
@@ -1336,10 +1476,10 @@ function ProjectCommandCenterModal({ record, onClose, onNavigate, onCostBreakdow
   useEffect(() => { load(); }, [record.id]);
   const data = state.data;
   const jump = (moduleId) => { onClose(); onNavigate?.(moduleId); };
-  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal live-project-center" role="dialog" aria-modal="true"><header><div><small>PROJE KOMUTA MERKEZİ</small><h2>{data?.project?.name || record.name}</h2><p>{data?.project?.code || record.code} · {projectStageLabels[data?.project?.status] || data?.project?.status || record.status}</p></div><button className="live-icon-button" onClick={onClose}><X /></button></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-project-center-body"><div className="live-project-stage-rail" aria-label="Proje aşamaları">{data.stages.map((stage, index) => <div className={stage.state} key={stage.status}><i>{stage.state === "complete" ? <Check /> : index + 1}</i><span><b>{stage.label}</b><small>{stage.state === "complete" ? "Tamamlandı" : stage.state === "current" ? "Aktif aşama" : stage.score ? `%${stage.score} hazır` : "Bekliyor"}</small></span></div>)}</div><section className="live-project-summary"><article className="readiness"><small>SONRAKİ AŞAMAYA HAZIRLIK</small><strong>%{data.readiness}</strong><span><i style={{ width: `${data.readiness}%` }} /></span><p>{data.nextStatus ? `${projectStageLabels[data.nextStatus] || data.nextStatus} aşaması için` : "Proje süreci tamamlandı"}</p></article><article><small>AÇIK GÖREV</small><strong>{data.facts.openTasks || 0}</strong><p>{data.facts.overdueTasks ? `${data.facts.overdueTasks} gecikmiş görev` : "Gecikmiş görev yok"}</p><button onClick={() => jump("projectTasks")}>Görevlere git</button></article><article><small>PROJE DOSYASI</small><strong>{data.facts.fileTotal || 0}</strong><p>Fotoğraf, çizim ve belgeler</p><button onClick={() => jump("files")}>Dosyaları aç</button></article><article><small>TAHMİNİ KÂR</small><strong>{money.format((data.finance.estimatedProfitMinor || 0) / 100)}</strong><p>{data.finance.marginPercent == null ? "Sözleşme bedeli bekleniyor" : `%${data.finance.marginPercent} tahmini marj`}</p><div className="live-summary-actions"><button onClick={() => jump("finance")}>Finansı aç</button>{onCostBreakdown && <button onClick={onCostBreakdown}>Maliyet kırılımı</button>}</div></article></section><div className="live-project-columns"><section><header><div><small>SIRADAKİ DOĞRU İŞLER</small><h3>Projenin ilerlemesi için</h3></div></header><div className="live-next-actions">{data.nextActions.length ? data.nextActions.map((item, index) => <article key={`${item.module}-${index}`} className={item.priority}><span>{index + 1}</span><div><b>{item.title}</b><small>{item.priority === "high" ? "Zorunlu koşul" : "Önerilen kontrol"}</small></div><button onClick={() => jump(item.module)}>Aç</button></article>) : <div className="live-compact-empty">Bu proje için bekleyen işlem bulunmuyor.</div>}</div></section><section><header><div><small>AŞAMA KAPILARI</small><h3>Kontrol sonucu</h3></div></header><div className="live-gate-list">{[...data.blockers, ...data.warnings].length ? [...data.blockers, ...data.warnings].map((item) => <button key={item.id} className={item.severity} onClick={() => jump(item.module)}><span>{item.severity === "blocker" ? <WarningCircle /> : "!"}</span><div><b>{item.label}</b><small>{item.severity === "blocker" ? "Tamamlanmadan geçiş engellenir" : "Geçişte kullanıcı uyarılır"}</small></div></button>) : <div className="live-project-ready"><Check /><span><b>Geçişe hazır</b><small>Sonraki aşama için zorunlu eksik yok.</small></span></div>}</div></section></div><section className="live-project-operational"><header><div><small>OPERASYON BAĞLANTILARI</small><h3>Tek projede birleşen kayıtlar</h3></div></header><div><button onClick={() => jump("siteSurveys")}><strong>{data.facts.surveyApproved || 0}</strong><span>Onaylı keşif</span></button><button onClick={() => jump("designRevisions")}><strong>{data.facts.designApproved || 0}</strong><span>Onaylı tasarım</span></button><button onClick={() => jump("production")}><strong>{data.facts.productionDone || 0}/{data.facts.productionTotal || 0}</strong><span>Üretim tamamlanma</span></button><button onClick={() => jump("qualityInspections")}><strong>{data.facts.finalQualityPass || 0}</strong><span>Final kalite geçişi</span></button><button onClick={() => jump("installations")}><strong>{data.facts.installationDone || 0}/{data.facts.installationTotal || 0}</strong><span>Montaj tamamlanma</span></button><button onClick={() => jump("handovers")}><strong>{data.facts.handoverAccepted || 0}</strong><span>Müşteri kabulü</span></button></div></section></div>}</section></div>;
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal live-project-center" role="dialog" aria-modal="true"><header><div><small>PROJE KOMUTA MERKEZİ</small><h2>{data?.project?.name || record.name}</h2><p>{data?.project?.code || record.code} · {projectStageLabels[data?.project?.status] || data?.project?.status || record.status}</p></div><div className="live-modal-actions"><RecordLinkActions moduleId="projects" recordId={record.id} label={[data?.project?.code || record.code, data?.project?.name || record.name].filter(Boolean).join(" · ")} onShare={onShare} /><button className="live-icon-button" onClick={onClose}><X /></button></div></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-project-center-body"><div className="live-project-stage-rail" aria-label="Proje aşamaları">{data.stages.map((stage, index) => <div className={stage.state} key={stage.status}><i>{stage.state === "complete" ? <Check /> : index + 1}</i><span><b>{stage.label}</b><small>{stage.state === "complete" ? "Tamamlandı" : stage.state === "current" ? "Aktif aşama" : stage.score ? `%${stage.score} hazır` : "Bekliyor"}</small></span></div>)}</div><section className="live-project-summary"><article className="readiness"><small>SONRAKİ AŞAMAYA HAZIRLIK</small><strong>%{data.readiness}</strong><span><i style={{ width: `${data.readiness}%` }} /></span><p>{data.nextStatus ? `${projectStageLabels[data.nextStatus] || data.nextStatus} aşaması için` : "Proje süreci tamamlandı"}</p></article><article><small>AÇIK GÖREV</small><strong>{data.facts.openTasks || 0}</strong><p>{data.facts.overdueTasks ? `${data.facts.overdueTasks} gecikmiş görev` : "Gecikmiş görev yok"}</p><button onClick={() => jump("projectTasks")}>Görevlere git</button></article><article><small>PROJE DOSYASI</small><strong>{data.facts.fileTotal || 0}</strong><p>Fotoğraf, çizim ve belgeler</p><button onClick={() => jump("files")}>Dosyaları aç</button></article><article><small>TAHMİNİ KÂR</small><strong>{money.format((data.finance.estimatedProfitMinor || 0) / 100)}</strong><p>{data.finance.marginPercent == null ? "Sözleşme bedeli bekleniyor" : `%${data.finance.marginPercent} tahmini marj`}</p><div className="live-summary-actions"><button onClick={() => jump("finance")}>Finansı aç</button>{onCostBreakdown && <button onClick={onCostBreakdown}>Maliyet kırılımı</button>}</div></article></section><div className="live-project-columns"><section><header><div><small>SIRADAKİ DOĞRU İŞLER</small><h3>Projenin ilerlemesi için</h3></div></header><div className="live-next-actions">{data.nextActions.length ? data.nextActions.map((item, index) => <article key={`${item.module}-${index}`} className={item.priority}><span>{index + 1}</span><div><b>{item.title}</b><small>{item.priority === "high" ? "Zorunlu koşul" : "Önerilen kontrol"}</small></div><button onClick={() => jump(item.module)}>Aç</button></article>) : <div className="live-compact-empty">Bu proje için bekleyen işlem bulunmuyor.</div>}</div></section><section><header><div><small>AŞAMA KAPILARI</small><h3>Kontrol sonucu</h3></div></header><div className="live-gate-list">{[...data.blockers, ...data.warnings].length ? [...data.blockers, ...data.warnings].map((item) => <button key={item.id} className={item.severity} onClick={() => jump(item.module)}><span>{item.severity === "blocker" ? <WarningCircle /> : "!"}</span><div><b>{item.label}</b><small>{item.severity === "blocker" ? "Tamamlanmadan geçiş engellenir" : "Geçişte kullanıcı uyarılır"}</small></div></button>) : <div className="live-project-ready"><Check /><span><b>Geçişe hazır</b><small>Sonraki aşama için zorunlu eksik yok.</small></span></div>}</div></section></div><section className="live-project-operational"><header><div><small>OPERASYON BAĞLANTILARI</small><h3>Tek projede birleşen kayıtlar</h3></div></header><div><button onClick={() => jump("siteSurveys")}><strong>{data.facts.surveyApproved || 0}</strong><span>Onaylı keşif</span></button><button onClick={() => jump("designRevisions")}><strong>{data.facts.designApproved || 0}</strong><span>Onaylı tasarım</span></button><button onClick={() => jump("production")}><strong>{data.facts.productionDone || 0}/{data.facts.productionTotal || 0}</strong><span>Üretim tamamlanma</span></button><button onClick={() => jump("qualityInspections")}><strong>{data.facts.finalQualityPass || 0}</strong><span>Final kalite geçişi</span></button><button onClick={() => jump("installations")}><strong>{data.facts.installationDone || 0}/{data.facts.installationTotal || 0}</strong><span>Montaj tamamlanma</span></button><button onClick={() => jump("handovers")}><strong>{data.facts.handoverAccepted || 0}</strong><span>Müşteri kabulü</span></button></div></section></div>}</section></div>;
 }
 
-function RecordDetailModal({ module, record, session, onClose }) {
+function RecordDetailModal({ module, record, session, onClose, onShare }) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
   const load = () => {
     setState({ loading: true, data: null, error: null });
@@ -1349,15 +1489,26 @@ function RecordDetailModal({ module, record, session, onClose }) {
   const config = configs[module.id];
   const permittedFields = config.fields.filter((item) => !item.permission || permissionAllows(session, item.permission.action, item.permission.resource));
   const blockedFields = new Set(config.fields.filter((item) => item.permission && !permissionAllows(session, item.permission.action, item.permission.resource)).map((item) => item.name));
-  const detailFields = [...permittedFields, ...config.columns.filter(([name]) => !blockedFields.has(name) && !permittedFields.some((item) => item.name === name)).map(([name, label, type]) => ({ name, label, type }))];
+  const coveredReferences = new Set(permittedFields.filter((item) => item.name.endsWith("Id")).map((item) => `${item.name.slice(0, -2)}Name`));
+  const detailFields = [...permittedFields, ...config.columns
+    .filter(([name]) => !blockedFields.has(name) && !coveredReferences.has(name) && !permittedFields.some((item) => item.name === name))
+    .map(([name, label, type]) => ({ name, label, type }))];
   const data = state.data || record;
+  // Sohbette ve pencere başlığında görünecek ad. Tarih, tutar ve durum sütunları
+  // kaydı tanıtmaz; ayırt edici olan kod, ad ve konu gibi metin sütunlarıdır.
+  const linkLabel = (config.columns || [])
+    .filter(([, , type]) => !["date", "datetime", "money", "percent", "status"].includes(type))
+    .map(([name]) => formatValue(presentedValue(data, name), undefined, data))
+    .filter((part) => part && part !== "—")
+    .slice(0, 2).join(" · ") || module.singular;
+  const linkActions = <RecordLinkActions moduleId={module.id} recordId={data.id} label={linkLabel} onShare={onShare} />;
   if (module.id === "files") {
     const contentUrl = api.fileContentUrl(data.id);
     const isImage = ["image/avif", "image/gif", "image/jpeg", "image/png", "image/webp"].includes(String(data.contentType || "").toLowerCase());
     const isPdf = data.contentType === "application/pdf" || String(data.fileName || "").toLowerCase().endsWith(".pdf");
-    return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal live-file-detail" role="dialog" aria-modal="true"><header><div><small>DOSYA KANITI</small><h2>{data.fileName || "Dosya"}</h2><p>{data.spaceName || "Proje geneli"} · {localizedEnum(data.captureStage) || data.captureStage || "Diğer"}</p></div><button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-file-detail-body"><div className="live-file-preview">{isImage ? <img src={contentUrl} alt={data.description || data.fileName || "Proje fotoğrafı"} /> : isPdf ? <iframe src={contentUrl} title={data.fileName || "PDF belgesi"} /> : <div><ClipboardText /><b>Bu dosya tarayıcı içinde önizlenemiyor.</b><small>Güvenli görüntüleme bağlantısını kullanabilirsiniz.</small></div>}</div><aside><small>BAĞLAM</small><h3>{data.description || "Açıklama girilmemiş"}</h3><dl><div><dt>Proje ID</dt><dd>{data.projectId || "—"}</dd></div>{data.workItemId && <div><dt>İş kalemi ID</dt><dd>{data.workItemId}</dd></div>}{data.designRevisionId && <div><dt>Tasarım revizyonu ID</dt><dd>{data.designRevisionId}</dd></div>}{data.qualityInspectionId && <div><dt>Kalite kontrolü ID</dt><dd>{data.qualityInspectionId}</dd></div>}{data.installationId && <div><dt>Montaj ID</dt><dd>{data.installationId}</dd></div>}<div><dt>Mahal</dt><dd>{data.spaceName || "Proje geneli"}</dd></div><div><dt>Aşama</dt><dd>{localizedEnum(data.captureStage) || data.captureStage || "—"}</dd></div><div><dt>Kategori</dt><dd>{localizedEnum(data.category) || data.category || "—"}</dd></div><div><dt>Görünürlük</dt><dd>{localizedEnum(data.visibility) || data.visibility || "—"}</dd></div><div><dt>Çekim tarihi</dt><dd>{formatValue(data.takenAt || data.createdAt, "date", data)}</dd></div></dl><a className="live-button primary" href={contentUrl} target="_blank" rel="noreferrer">Dosyayı tam boy aç</a></aside></div>}</section></div>;
+    return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal live-file-detail" role="dialog" aria-modal="true"><header><div><small>DOSYA KANITI</small><h2>{data.fileName || "Dosya"}</h2><p>{data.spaceName || "Proje geneli"} · {localizedEnum(data.captureStage) || data.captureStage || "Diğer"}</p></div><div className="live-modal-actions">{linkActions}<button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></div></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-file-detail-body"><div className="live-file-preview">{isImage ? <img src={contentUrl} alt={data.description || data.fileName || "Proje fotoğrafı"} /> : isPdf ? <iframe src={contentUrl} title={data.fileName || "PDF belgesi"} /> : <div><ClipboardText /><b>Bu dosya tarayıcı içinde önizlenemiyor.</b><small>Güvenli görüntüleme bağlantısını kullanabilirsiniz.</small></div>}</div><aside><small>BAĞLAM</small><h3>{data.description || "Açıklama girilmemiş"}</h3><dl><div><dt>Proje</dt><dd>{formatValue(presentedValue(data, "projectId"), undefined, data)}</dd></div>{data.workItemId && <div><dt>İş kalemi</dt><dd>{formatValue(presentedValue(data, "workItemId"), undefined, data)}</dd></div>}{data.designRevisionId && <div><dt>Tasarım revizyonu</dt><dd>{formatValue(presentedValue(data, "designRevisionId"), undefined, data)}</dd></div>}{data.qualityInspectionId && <div><dt>Kalite kontrolü</dt><dd>{formatValue(presentedValue(data, "qualityInspectionId"), undefined, data)}</dd></div>}{data.installationId && <div><dt>Montaj</dt><dd>{formatValue(presentedValue(data, "installationId"), undefined, data)}</dd></div>}<div><dt>Mahal</dt><dd>{data.spaceName || "Proje geneli"}</dd></div><div><dt>Aşama</dt><dd>{localizedEnum(data.captureStage) || data.captureStage || "—"}</dd></div><div><dt>Kategori</dt><dd>{localizedEnum(data.category) || data.category || "—"}</dd></div><div><dt>Görünürlük</dt><dd>{localizedEnum(data.visibility) || data.visibility || "—"}</dd></div><div><dt>Çekim tarihi</dt><dd>{formatValue(data.takenAt || data.createdAt, "date", data)}</dd></div></dl><a className="live-button primary" href={contentUrl} target="_blank" rel="noreferrer">Dosyayı tam boy aç</a></aside></div>}</section></div>;
   }
-  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>KAYIT DETAYI</small><h2>{module.singular}</h2></div><button className="live-icon-button" onClick={onClose}><X /></button></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-detail-grid">{detailFields.map((item) => <div className={item.wide ? "wide" : ""} key={item.name}><small>{item.label}</small>{item.type === "status" || item.name === "status" ? <Status>{recordValue(data, item.name)}</Status> : <b>{typeof recordValue(data, item.name) === "object" ? JSON.stringify(recordValue(data, item.name)) : formatValue(recordValue(data, item.name), item.type, data)}</b>}</div>)}<div><small>Kayıt ID</small><b className="live-breakable">{data.id}</b></div></div>}</section></div>;
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>KAYIT DETAYI</small><h2>{module.singular}</h2><p>{linkLabel}</p></div><div className="live-modal-actions">{linkActions}<button className="live-icon-button" onClick={onClose}><X /></button></div></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-detail-grid">{detailFields.map((item) => <div className={item.wide ? "wide" : ""} key={item.name}><small>{item.label}</small>{item.type === "status" || item.name === "status" ? <Status>{recordValue(data, item.name)}</Status> : <b>{formatValue(presentedValue(data, item.name), item.type, data)}</b>}</div>)}</div>}</section></div>;
 }
 
 function DeleteConfirmModal({ module, record, saving, error, onClose, onConfirm }) {
@@ -1436,7 +1587,7 @@ function BackupView({ online }) {
     try { await api.createBackup(); await load(); }
     catch (error) { setState((current) => ({ ...current, creating: false, error })); }
   };
-  return <section className="live-panel"><header className="live-toolbar"><div><small>VERİ GÜVENLİĞİ</small><h2>Yedekler</h2><p>Günlük otomatik yedekleri izleyin veya anlık yedek oluşturun.</p></div><button className="live-button primary" onClick={create} disabled={state.creating || !online}><ArrowClockwise /> {state.creating ? "Oluşturuluyor…" : "Şimdi yedekle"}</button></header>{state.loading ? <LoadingState /> : state.error?.status === 403 ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={load} /> : state.rows.length ? <div className="live-table-wrap"><table className="live-table"><thead><tr><th>Oluşturulma</th><th>Durum</th><th>Kayıt Sayısı</th><th>Tetikleyen</th><th>Tamamlanma</th></tr></thead><tbody>{state.rows.map((row) => <tr key={row.id}><td>{formatValue(row.createdAt, "date", row)}</td><td><Status>{row.status}</Status></td><td>{row.rowCount ?? "—"}</td><td>{row.triggeredBy || "sistem"}</td><td>{formatValue(row.completedAt, "date", row)}</td></tr>)}</tbody></table></div> : <EmptyState title="yedek" canCreate={online} onCreate={create} />}</section>;
+  return <section className="live-panel"><header className="live-toolbar"><div><small>VERİ GÜVENLİĞİ</small><h2>Yedekler</h2><p>Günlük otomatik yedekleri izleyin veya anlık yedek oluşturun.</p></div><button className="live-button primary" onClick={create} disabled={state.creating || !online}><ArrowClockwise /> {state.creating ? "Oluşturuluyor…" : "Şimdi yedekle"}</button></header>{state.loading ? <LoadingState /> : state.error?.status === 403 ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={load} /> : state.rows.length ? <div className="live-table-wrap"><table className="live-table"><thead><tr><th>Oluşturulma</th><th>Durum</th><th>Kayıt Sayısı</th><th>Tetikleyen</th><th>Tamamlanma</th></tr></thead><tbody>{state.rows.map((row) => <tr key={row.id}><td>{formatValue(row.createdAt, "date", row)}</td><td><Status>{row.status}</Status></td><td>{formatValue(row.rowCount, undefined, row)}</td><td>{row.triggeredByName || "Otomatik yedek"}</td><td>{formatValue(row.completedAt, "date", row)}</td></tr>)}</tbody></table></div> : <EmptyState title="yedek" canCreate={online} onCreate={create} />}</section>;
 }
 
 function TokenView({ online }) {
@@ -1569,7 +1720,7 @@ function Dashboard({ session, onNavigate, refreshKey }) {
   const attention = data.attention || {};
   return <>
     <div className="live-hero"><div><small>PROJE OPERASYON MERKEZİ</small><h2>Günaydın, {session?.user?.firstName || session?.user?.name?.split(" ")[0] || "ekip"}</h2><p>Projelerin aşamaları, bekleyen kararlar ve bugünün öncelikleri.</p></div><button onClick={() => onNavigate("projects")}>Proje portföyünü aç</button></div>
-    {metricItems.length ? <div className="live-metric-grid">{metricItems.slice(0, 6).map((item, index) => <article key={item.key || item.label || index}><small>{item.label || item.title}</small><strong>{typeof item.value === "number" && /amount|revenue|cost|tutar|ciro/i.test(item.key || item.label) ? money.format(item.value) : item.value}</strong>{item.note && <span>{item.note}</span>}</article>)}</div> : <div className="live-metric-grid">{modules.slice(1, 5).map((item) => <button key={item.id} onClick={() => onNavigate(item.id)}><item.icon /><span><strong>{item.title}</strong><small>Kayıtları görüntüle</small></span></button>)}</div>}
+    {metricItems.length ? <div className="live-metric-grid">{metricItems.slice(0, 6).map((item, index) => <article key={item.key || item.label || index}><small>{item.label || item.title}</small><strong>{typeof item.value === "number" && /amount|revenue|cost|tutar|ciro/i.test(item.key || item.label) ? money.format(item.value) : formatValue(item.value, undefined, item)}</strong>{item.note && <span>{item.note}</span>}</article>)}</div> : <div className="live-metric-grid">{modules.slice(1, 5).map((item) => <button key={item.id} onClick={() => onNavigate(item.id)}><item.icon /><span><strong>{item.title}</strong><small>Kayıtları görüntüle</small></span></button>)}</div>}
     <section className="live-panel live-pipeline-panel"><header><div><small>PROJE AŞAMALARI</small><h3>Portföy hangi aşamada?</h3></div><button className="live-button secondary" onClick={() => onNavigate("projects")}>Tüm projeler</button></header><div className="live-dashboard-pipeline">{pipeline.length ? pipeline.map((stage) => <button key={stage.status} onClick={() => onNavigate("projects")}><span>{stage.count}</span><b>{projectStageLabels[stage.status] || stage.status}</b><small>proje</small></button>) : <div className="live-compact-empty">Aşama dağılımı için proje kaydı bekleniyor.</div>}</div></section>
     <div className="live-attention-grid"><button onClick={() => onNavigate("projectTasks")} className={attention.overdueTasks ? "danger" : ""}><WarningCircle /><span><small>GECİKMİŞ GÖREV</small><strong>{attention.overdueTasks || 0}</strong></span></button><button onClick={() => onNavigate("purchases")}><ShoppingCart /><span><small>SATIN ALMA ONAYI</small><strong>{attention.pendingPurchases || 0}</strong></span></button><button onClick={() => onNavigate("designRevisions")}><PencilSimple /><span><small>TASARIM ONAYI</small><strong>{attention.pendingDesigns || 0}</strong></span></button><button onClick={() => onNavigate("qualityInspections")} className={attention.qualityIssues ? "danger" : ""}><Check /><span><small>KALİTE UYARISI</small><strong>{attention.qualityIssues || 0}</strong></span></button><button onClick={() => onNavigate("materialRequirements")} className={attention.materialShortages ? "danger" : ""}><WarningCircle /><span><small>MALZEME EKSİĞİ</small><strong>{attention.materialShortages || 0}</strong></span></button><button onClick={() => onNavigate("resourceAssignments")} className={attention.capacityConflicts ? "danger" : ""}><UsersThree /><span><small>KAPASİTE ÇAKIŞMASI</small><strong>{attention.capacityConflicts || 0}</strong></span></button></div>
     <section className="live-panel"><header><div><small>SON HAREKETLER</small><h3>Ekip aktivitesi</h3></div></header>{activities.length ? <div className="live-activity-list">{activities.slice(0, 8).map((activity, index) => <article key={activity.id || index}><span className="live-activity-dot" /><div><b>{activity.name || activity.title || activity.action || "Kayıt güncellendi"}</b><small>{activity.code ? `${projectStageLabels[activity.status] || activity.status} · %${activity.progressPercent || 0}` : activity.description || activity.userName || activity.createdBy || "Sistem"}</small></div><time>{formatValue(activity.updatedAt || activity.createdAt || activity.date, "date", activity)}</time></article>)}</div> : <div className="live-compact-empty">Henüz görüntülenecek hareket bulunmuyor.</div>}</section>
@@ -1587,15 +1738,15 @@ function GlobalSearch({ onNavigate }) {
     }, 250);
     return () => clearTimeout(timer);
   }, [query]);
-  function choose(row) { setQuery(""); onNavigate(row.module); }
-  return <div className="live-global-search"><MagnifyingGlass /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Proje, müşteri, teklif, ürün veya belge ara…" aria-label="Tüm uygulamada ara" />{query && <button onClick={() => setQuery("")} aria-label="Aramayı temizle"><X /></button>}{query.trim().length >= 2 && <div className="live-global-results">{state.loading ? <div className="live-search-message"><span className="live-spinner small" /> Aranıyor…</div> : state.error ? <div className="live-search-message danger">Arama şu an tamamlanamadı.</div> : state.rows.length ? state.rows.map((row) => <button key={`${row.module}-${row.id}`} onClick={() => choose(row)}><span><b>{row.title || row.code || "Kayıt"}</b><small>{row.code ? `${row.code} · ` : ""}{row.subtitle || row.module}</small></span><em>{modules.find((item) => item.id === row.module)?.title || row.module}</em></button>) : <div className="live-search-message">Eşleşen kayıt bulunamadı.</div>}</div>}</div>;
+  function choose(row) { setQuery(""); onNavigate(row.module, { recordId: row.id }); }
+  return <div className="live-global-search"><MagnifyingGlass /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Proje, müşteri, teklif, ürün veya belge ara…" aria-label="Tüm uygulamada ara" />{query && <button onClick={() => setQuery("")} aria-label="Aramayı temizle"><X /></button>}{query.trim().length >= 2 && <div className="live-global-results">{state.loading ? <div className="live-search-message"><span className="live-spinner small" /> Aranıyor…</div> : state.error ? <div className="live-search-message danger">Arama şu an tamamlanamadı.</div> : state.rows.length ? state.rows.map((row) => <button key={`${row.module}-${row.id}`} onClick={() => choose(row)}><span><b>{row.title || row.code || "Kayıt"}</b><small>{row.code ? `${row.code} · ` : ""}{row.subtitle ? localizedEnum(row.subtitle) : modules.find((item) => item.id === row.module)?.title || row.module}</small></span><em>{modules.find((item) => item.id === row.module)?.title || row.module}</em></button>) : <div className="live-search-message">Eşleşen kayıt bulunamadı.</div>}</div>}</div>;
 }
 
 function NotificationsView({ onNavigate }) {
   const [state, setState] = useState({ loading: true, rows: [], error: null, unread: 0 });
   const load = () => { setState((current) => ({ ...current, loading: true, error: null })); api.notifications().then((result) => setState({ loading: false, rows: result.data, error: null, unread: result.meta?.unread || 0 })).catch((error) => setState({ loading: false, rows: [], error, unread: 0 })); };
   useEffect(() => { load(); }, []);
-  async function openNotification(item) { if (item.status === "unread") await api.markNotification(item.id); if (item.module) onNavigate(item.module); else load(); }
+  async function openNotification(item) { if (item.status === "unread") await api.markNotification(item.id); if (item.module) onNavigate(item.module, { recordId: item.recordId }); else load(); }
   async function dismiss(item) { await api.markNotification(item.id, "dismissed"); load(); }
   return <section className="live-panel live-notifications"><header className="live-toolbar"><div><small>KİŞİSEL İŞ KUTUSU</small><h2>Bildirimler</h2><p>{state.unread ? `${state.unread} okunmamış bildirim var.` : "Bekleyen yeni bildiriminiz yok."}</p></div><button className="live-button secondary" onClick={load}><ArrowClockwise /> Yenile</button></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : state.rows.length ? <div className="live-notification-list">{state.rows.map((item) => <article className={item.status === "unread" ? "unread" : ""} key={item.id}><span><Bell /></span><button onClick={() => openNotification(item)}><b>{item.title}</b><p>{item.message || "İlgili kaydı kontrol edin."}</p><small>{formatValue(item.createdAt, "date")}{item.dueAt ? ` · Hedef ${formatValue(item.dueAt, "date")}` : ""}</small></button><button className="live-dismiss" onClick={() => dismiss(item)}>Kapat</button></article>)}</div> : <EmptyState title="bildirim" />}</section>;
 }
@@ -1625,7 +1776,7 @@ function OfflineQueueControl({ state, online, onSynced }) {
   return <><button className={`live-queue-button ${state.failed ? "danger" : total ? "pending" : ""}`} onClick={() => setOpen(true)} title="Çevrimdışı işlem kuyruğu" aria-label={`Çevrimdışı işlem kuyruğu, ${total} kayıt`}><CloudArrowUp /><span>Kuyruk</span>{total > 0 && <b>{total}</b>}</button>{open && <div className="live-modal-backdrop" role="presentation"><section className="live-modal compact live-queue-modal"><header><div><small>MOBİL GÜVENLİ EŞİTLEME</small><h2>Çevrimdışı işlem kuyruğu</h2><p>Yalnız güvenli yeni kayıtlar saklanır; onay, silme, dosya ve finans işlemleri çevrimdışında çalışmaz.</p></div><button className="live-icon-button" onClick={() => setOpen(false)}><X /></button></header>{state.error ? <div className="live-form-alert"><WarningCircle />{state.error.message}</div> : total ? <div className="live-queue-list">{state.items.map((item) => <article key={item.id}><span className={`live-queue-state ${item.status}`}><CloudArrowUp /></span><div><b>{moduleLabel(item.resource)} · Yeni kayıt</b><small>{formatValue(item.createdAt, "date")} · {item.status === "syncing" ? "Eşitleniyor" : item.status === "failed" ? "İnceleme gerekli" : "Bağlantı bekleniyor"}</small>{item.errorMessage && <em>{item.errorMessage}</em>}</div><div>{item.status === "failed" && <button className="live-workflow-button" disabled={!online || working} onClick={() => sync(item.id)}>Tekrar dene</button>}<button className="live-icon-button danger" disabled={working || item.status === "syncing"} onClick={() => setDiscardItem(item)} title="Kuyruktan kaldır"><X /></button></div></article>)}</div> : <div className="live-view-empty"><Check /><b>Bekleyen işlem yok</b><small>Çevrimdışı oluşturulan güvenli kayıtlar burada görünecek.</small></div>}<footer><small>Kayıtlar bu cihazda en fazla 7 gün tutulur ve yalnız aynı kullanıcı ile firma kapsamında eşitlenir.</small>{total > 0 && <button className="live-button primary" disabled={!online || working || state.syncing} onClick={() => sync()}><ArrowClockwise /> {working || state.syncing ? "Eşitleniyor…" : "Şimdi eşitle"}</button>}</footer></section></div>}{discardItem && <WorkflowConfirmModal workflow={{ row: { id: discardItem.localId }, action: { title: "Bekleyen kaydı kuyruktan kaldır", message: "Bu cihazda bekleyen kayıt silinecek ve sunucuya gönderilmeyecek.", tone: "danger" } }} saving={working} error={null} onClose={() => setDiscardItem(null)} onConfirm={discard} />}</>;
 }
 
-function ResourceView({ module, session, online, refreshKey, onDataChanged, onNavigate }) {
+function ResourceView({ module, session, online, refreshKey, onDataChanged, onNavigate, onShare, focusRecordId, onFocusHandled }) {
   let config = configs[module.id];
   const canViewOfficial = permissionAllows(session, "read", "finance.sensitive");
   const blockedColumns = new Set(config.fields.filter((item) => item.permission && !permissionAllows(session, item.permission.action, item.permission.resource)).map((item) => item.name));
@@ -1647,6 +1798,15 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
   const [exporting, setExporting] = useState(false);
   const [costProject, setCostProject] = useState(null);
   const [deleteError, setDeleteError] = useState(null);
+  // Paylaşılan bir bağlantıyla gelindiyse ilgili kaydın detayı kendiliğinden
+  // açılır. Detay penceresi kaydı zaten kimliğinden yüklediği için burada
+  // listeyi beklemek gerekmez; kayıt listenin ikinci sayfasında bile olsa açılır.
+  useEffect(() => {
+    if (!focusRecordId) return;
+    setDetailRecord({ id: focusRecordId });
+  }, [focusRecordId]);
+  // Pencere kapanınca adres yeniden yalnız bölümü gösterir.
+  const closeDetail = () => { setDetailRecord(null); onFocusHandled?.(); };
   const offlineCreateAllowed = api.canQueueOffline(module.resource);
   const canCreate = !module.readOnly && (online || offlineCreateAllowed) && permissionAllows(session, "create", module.resource) && (module.id !== "accounting" || canViewOfficial);
   const canEdit = online && !module.readOnly && !module.noEdit && permissionAllows(session, "update", module.resource);
@@ -1766,7 +1926,7 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
     }
   }
 
-  return <><section className="live-panel"><header className="live-toolbar"><div><small>{module.id === "projects" ? "PROJE PORTFÖYÜ" : "CANLI KAYITLAR"}</small><h2>{module.title}</h2><p>{module.id === "projects" ? "Talep, keşif, teklif, sözleşme, üretim ve teslim aşamalarını tek zincirde yönetin." : config.description}</p></div><div className="live-toolbar-actions">{canExport && <button className="live-button secondary" onClick={exportCsv} disabled={exporting}>{exporting ? "Hazırlanıyor…" : <><CloudArrowUp /> CSV indir</>}</button>}{canCreate && <button className="live-button primary" onClick={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })}><Plus /> Yeni {module.singular}</button>}</div></header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button className="live-search-submit">Ara</button>{availableViews.length > 1 && <ViewSwitcher available={availableViews} value={activeView} onChange={setView} />}</form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><ResourceDataView view={activeView} rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>{module.id === "projects" ? "Detay düğmesi proje komuta merkezini açar" : "Tenant kapsamındaki güncel veriler"}</small></footer></> : <EmptyState title={module.singular} canCreate={canCreate} onCreate={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && (module.id === "projects" ? <ProjectCommandCenterModal record={detailRecord} onClose={() => setDetailRecord(null)} onNavigate={onNavigate} onCostBreakdown={() => { setCostProject(detailRecord); setDetailRecord(null); }} /> : module.id === "purchases" ? <QuotationComparisonModal record={detailRecord} session={session} online={online} onClose={() => setDetailRecord(null)} onChanged={() => { load(); onDataChanged?.(); }} /> : <RecordDetailModal module={module} record={detailRecord} session={session} onClose={() => setDetailRecord(null)} />)}{costProject && <CostBreakdownModal record={costProject} onClose={() => setCostProject(null)} />}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
+  return <><section className="live-panel"><header className="live-toolbar"><div><small>{module.id === "projects" ? "PROJE PORTFÖYÜ" : "CANLI KAYITLAR"}</small><h2>{module.title}</h2><p>{module.id === "projects" ? "Talep, keşif, teklif, sözleşme, üretim ve teslim aşamalarını tek zincirde yönetin." : config.description}</p></div><div className="live-toolbar-actions">{canExport && <button className="live-button secondary" onClick={exportCsv} disabled={exporting}>{exporting ? "Hazırlanıyor…" : <><CloudArrowUp /> CSV indir</>}</button>}{canCreate && <button className="live-button primary" onClick={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })}><Plus /> Yeni {module.singular}</button>}</div></header>{config.officialScope && <div className="live-filter-tabs"><button className={officialFilter === "all" ? "active" : ""} onClick={() => setOfficialFilter("all")}>Tümü</button><button className={officialFilter === "official" ? "active" : ""} onClick={() => setOfficialFilter("official")}>Resmi</button><button className={officialFilter === "unofficial" ? "active" : ""} onClick={() => setOfficialFilter("unofficial")}>Proje içi / gayri resmi</button></div>}<form className="live-search" onSubmit={(event) => { event.preventDefault(); load(); }}><MagnifyingGlass /><input aria-label="Kayıtlarda ara" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kod, ad, müşteri veya durum ara…" /><button className="live-search-submit">Ara</button>{availableViews.length > 1 && <ViewSwitcher available={availableViews} value={activeView} onChange={setView} />}</form>{state.loading ? <LoadingState /> : state.error?.status === 403 || state.error?.code === "forbidden" ? <PermissionDeniedState /> : state.error ? <ErrorState error={state.error} retry={() => load()} /> : state.rows.length ? <><ResourceDataView view={activeView} rows={state.rows} config={config} canEdit={canEdit} onEdit={setModal} onDetail={setDetailRecord} canDelete={mayDelete} onDelete={(row) => { setDeleteError(null); setDeleteRecord(row); }} onPermissions={canManagePermissions ? setPermissionRole : null} getWorkflowActions={online ? (row) => workflowActions(module, row, session) : null} onWorkflow={(row, action) => { setWorkflowError(null); setWorkflow({ row, action }); }} /><footer className="live-table-footer"><span>{config.officialScope ? state.rows.length : state.meta?.total ?? state.rows.length} kayıt</span><small>{module.id === "projects" ? "Detay düğmesi proje komuta merkezini açar" : "Tenant kapsamındaki güncel veriler"}</small></footer></> : <EmptyState title={module.singular} canCreate={canCreate} onCreate={() => setModal({ _idempotencyKey: api.newIdempotencyKey(module.resource) })} />}</section>{modal && (module.id === "files" ? <FileUploadModal saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} /> : <RecordModal module={module} record={modal.id ? modal : null} session={session} saving={saving} serverError={saveError} onClose={() => setModal(null)} onSave={save} />)}{detailRecord && (module.id === "projects" ? <ProjectCommandCenterModal record={detailRecord} onClose={closeDetail} onNavigate={onNavigate} onShare={onShare} onCostBreakdown={() => { setCostProject(detailRecord); setDetailRecord(null); }} /> : module.id === "purchases" ? <QuotationComparisonModal record={detailRecord} session={session} online={online} onClose={closeDetail} onChanged={() => { load(); onDataChanged?.(); }} /> : <RecordDetailModal module={module} record={detailRecord} session={session} onShare={onShare} onClose={closeDetail} />)}{costProject && <CostBreakdownModal record={costProject} onClose={() => setCostProject(null)} />}{deleteRecord && <DeleteConfirmModal module={module} record={deleteRecord} saving={deleting} error={deleteError} onClose={() => setDeleteRecord(null)} onConfirm={confirmDelete} />}{permissionRole && <RolePermissionsModal role={permissionRole} online={online} onClose={() => setPermissionRole(null)} />}{workflow && <WorkflowConfirmModal workflow={workflow} saving={workflowSaving} error={workflowError} onClose={() => setWorkflow(null)} onConfirm={runWorkflow} />}</>;
 }
 
 function Login({ error, loading, onSubmit, onPasswordLogin }) {
@@ -1927,6 +2087,232 @@ function SecuritySettingsModal({ onClose }) {
   return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>HESAP GÜVENLİĞİ</small><h2>Şifre ve oturumlar</h2></div><button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></header><form onSubmit={submit}><div className="live-form-grid"><label className="wide"><span>Mevcut şifre <em>*</em></span><input type="password" required autoComplete="current-password" value={values.current} onChange={(event) => setValues({ ...values, current: event.target.value })} /></label><label><span>Yeni şifre <em>*</em></span><input type="password" required autoComplete="new-password" value={values.next} onChange={(event) => setValues({ ...values, next: event.target.value })} /></label><label><span>Yeni şifre (tekrar) <em>*</em></span><input type="password" required autoComplete="new-password" value={values.repeat} onChange={(event) => setValues({ ...values, repeat: event.target.value })} /></label></div>{localError && <div className="live-form-alert"><WarningCircle />{localError}</div>}{state.notice && <div className="live-field-note success"><Check />{state.notice}</div>}{state.error && <div className="live-form-alert"><WarningCircle />{state.error.message}</div>}<footer><button className="live-button primary" disabled={state.saving || Boolean(localError) || !values.current || !values.next}>{state.saving ? "Kaydediliyor…" : "Şifremi değiştir"}</button></footer></form><div className="live-session-list"><h3>Açık oturumlar</h3>{state.loadingSessions ? <LoadingState /> : state.sessions.length ? <>{state.sessions.map((item) => <article key={item.id}><div><b>{item.current ? "Bu cihaz" : "Diğer cihaz"}</b><small>Son kullanım {formatValue(item.lastSeenAt, "date", item)} · {item.authMethod === "password" ? "Şifreyle" : "SMS ile"} giriş</small></div>{!item.current && <button className="live-workflow-button danger" onClick={() => revoke(item.id)}>Kapat</button>}</article>)}{state.sessions.length > 1 && <button className="live-button secondary" onClick={() => revoke("others")}>Diğer tüm oturumları kapat</button>}</> : <small>Açık oturum bulunamadı.</small>}</div></section></div>;
 }
 
+// Kaydın yanında duran iki kısayol: adresini kopyala, ya da doğrudan sohbete
+// iliştir. Amaç "hangi projeydi, nerede o kayıt" yazışmasını ortadan kaldırmak.
+function RecordLinkActions({ moduleId, recordId, label, onShare }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    const link = recordLink(moduleId, recordId);
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Panoya erişim izni yoksa (güvenli olmayan bağlantı, eski tarayıcı)
+      // bağlantıyı hiç vermemektense kullanıcıya elle kopyalatmak yeğdir.
+      window.prompt("Bağlantıyı kopyalayın", link);
+    }
+  }
+  return <div className="live-record-links">
+    <button type="button" className="live-workflow-button" onClick={copy}><LinkSimple /> {copied ? "Kopyalandı" : "Bağlantıyı kopyala"}</button>
+    {onShare && <button type="button" className="live-workflow-button" onClick={() => onShare({ moduleId, recordId, label })}><ChatCircleText /> Sohbette paylaş</button>}
+  </div>;
+}
+
+// Sekme görünürken üç saniye, arka plandayken hiç. Sohbet uzun süre sessiz
+// kalırsa aralık kendiliğinden açılır; boşa sorulan her istek sunucuya yüktür.
+const CHAT_POLL_MS = 3000;
+const CHAT_QUIET_POLL_MS = 15000;
+const CHAT_QUIET_AFTER = 20;
+
+function ChatMessage({ message, previous, onOpenLink }) {
+  // Aynı kişinin peş peşe mesajlarında adı tekrar yazmak konuşmayı okunmaz
+  // hâle getiriyor; ad yalnız konuşan değiştiğinde görünür.
+  const sameAuthor = previous?.author_user_id === message.author_user_id;
+  const linkedModule = message.link_module ? modules.find((item) => item.id === message.link_module) : null;
+  return <article className={`live-chat-message ${message.mine ? "mine" : ""} ${sameAuthor ? "joined" : ""}`}>
+    {!sameAuthor && <b>{message.mine ? "Siz" : message.author_name}</b>}
+    <p>{message.body}</p>
+    {linkedModule && <button type="button" className="live-chat-link" onClick={() => onOpenLink(message)}>
+      <linkedModule.icon /><span><small>{linkedModule.title}</small><em>{message.link_label || "Kaydı aç"}</em></span><CaretRight />
+    </button>}
+    <time dateTime={message.created_at}>{new Date(message.created_at).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}</time>
+  </article>;
+}
+
+function NewChannelForm({ onCancel, onCreate, saving, error }) {
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState("team");
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState("");
+  useEffect(() => { api.referenceOptions("projects", { pageSize: 50 }).then(setProjects).catch(() => setProjects([])); }, []);
+  return <form className="live-chat-new-channel" onSubmit={(event) => { event.preventDefault(); onCreate({ name: name.trim(), kind, projectId: kind === "project" ? projectId : "" }); }}>
+    <label><span>Kanal adı</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Örnek: Montaj Ekibi" required /></label>
+    <label><span>Kanal tipi</span><select value={kind} onChange={(event) => setKind(event.target.value)}>
+      <option value="team">Ekip kanalı</option><option value="project">Proje kanalı</option><option value="announcement">Duyuru</option>
+    </select></label>
+    {kind === "project" && <label><span>Proje</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)} required>
+      <option value="">Proje seçin</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.code ? `${project.code} · ` : ""}{project.name}</option>)}
+    </select></label>}
+    {error && <div className="live-form-alert"><WarningCircle /> {error.message || "Kanal açılamadı."}</div>}
+    <footer><button type="button" className="live-button secondary" onClick={onCancel}>Vazgeç</button><button type="submit" className="live-button primary" disabled={saving || !name.trim()}>{saving ? "Açılıyor…" : "Kanalı aç"}</button></footer>
+  </form>;
+}
+
+function ChatView({ online, onNavigate, share, onShareConsumed }) {
+  const [state, setState] = useState({ loading: true, error: null, channels: [], canWrite: false });
+  const [channelId, setChannelId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [attachment, setAttachment] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState(null);
+  const [channelFormOpen, setChannelFormOpen] = useState(false);
+  const [channelSaving, setChannelSaving] = useState(false);
+  const [channelError, setChannelError] = useState(null);
+  // Nereye kadar okuduğumuz ve kaç yoklamadır bir şey çıkmadığı; ikisi de
+  // ekranı yeniden çizmemeli, bu yüzden state değil ref.
+  const cursor = useRef("");
+  const quiet = useRef(0);
+  const scroller = useRef(null);
+  const atBottom = useRef(true);
+
+  // Detay penceresinden "sohbette paylaş" denilerek gelinmişse kayıt hazır bekler.
+  useEffect(() => {
+    if (!share) return;
+    setAttachment(share);
+    onShareConsumed?.();
+  }, [share]);
+
+  async function poll(reset = false) {
+    try {
+      const data = await api.chatStream({ channelId, after: reset ? "" : cursor.current });
+      setState({ loading: false, error: null, channels: data.channels, canWrite: data.can_write });
+      if (data.channel_id && data.channel_id !== channelId) { setChannelId(data.channel_id); return; }
+      const fresh = data.messages || [];
+      if (reset || !cursor.current) {
+        setMessages(fresh);
+        quiet.current = 0;
+      } else if (fresh.length) {
+        setMessages((current) => [...current, ...fresh.filter((item) => !current.some((existing) => existing.id === item.id))]);
+        quiet.current = 0;
+      } else {
+        quiet.current += 1;
+      }
+      if (fresh.length) cursor.current = fresh[fresh.length - 1].created_at;
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false, error }));
+    }
+  }
+
+  useEffect(() => {
+    if (!online) { setState((current) => ({ ...current, loading: false })); return undefined; }
+    let stopped = false;
+    let handle = null;
+    cursor.current = "";
+    quiet.current = 0;
+    setMessages([]);
+    const tick = async () => {
+      if (stopped) return;
+      // Sekme arka plandayken sunucuya hiç sorulmaz; kullanıcı geri döndüğünde
+      // görünürlük olayı zaten anında bir yoklama tetikler.
+      if (document.visibilityState === "visible") await poll();
+      if (stopped) return;
+      const idle = document.visibilityState !== "visible" || quiet.current >= CHAT_QUIET_AFTER;
+      handle = setTimeout(tick, idle ? CHAT_QUIET_POLL_MS : CHAT_POLL_MS);
+    };
+    tick();
+    const wake = () => {
+      if (document.visibilityState !== "visible" || stopped) return;
+      quiet.current = 0;
+      clearTimeout(handle);
+      tick();
+    };
+    document.addEventListener("visibilitychange", wake);
+    return () => { stopped = true; clearTimeout(handle); document.removeEventListener("visibilitychange", wake); };
+  }, [channelId, online]);
+
+  // Kullanıcı yukarı kaydırıp eski mesajları okuyorsa yeni mesaj geldi diye onu
+  // aşağı fırlatmak sinir bozucudur; yalnız zaten dipteyse takip edilir.
+  useEffect(() => {
+    if (!scroller.current || !atBottom.current) return;
+    scroller.current.scrollTop = scroller.current.scrollHeight;
+  }, [messages]);
+
+  async function send(event) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text || !channelId || sending) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      await api.create("chatMessages", {
+        channelId, body: text,
+        ...(attachment ? { linkModule: attachment.moduleId, linkRecordId: attachment.recordId, linkLabel: attachment.label || "" } : {}),
+      });
+      setDraft("");
+      setAttachment(null);
+      atBottom.current = true;
+      await poll();
+    } catch (error) {
+      setSendError(error);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function createChannel(values) {
+    setChannelSaving(true);
+    setChannelError(null);
+    try {
+      const created = await api.create("chatChannels", { name: values.name, kind: values.kind, projectId: values.projectId || "" });
+      setChannelFormOpen(false);
+      setChannelId(created.id);
+    } catch (error) {
+      setChannelError(error);
+    } finally {
+      setChannelSaving(false);
+    }
+  }
+
+  function openLink(message) {
+    onNavigate(message.link_module, { recordId: message.link_record_id });
+  }
+
+  const channel = state.channels.find((item) => item.id === channelId);
+  if (state.loading) return <LoadingState />;
+  if (state.error?.status === 403 || state.error?.code === "forbidden") return <PermissionDeniedState />;
+
+  return <section className="live-panel live-chat">
+    <header className="live-toolbar">
+      <div><small>EKİP SOHBETİ</small><h2>{channel?.name || "Sohbet"}</h2><p>{channel?.project_name || channel?.topic || "Mesajlar programın içinde kalır; istenirse bir kayda iliştirilir."}</p></div>
+      {state.canWrite && <button className="live-button secondary" onClick={() => { setChannelError(null); setChannelFormOpen((open) => !open); }}><Plus /> Yeni kanal</button>}
+    </header>
+    {channelFormOpen && <NewChannelForm saving={channelSaving} error={channelError} onCancel={() => setChannelFormOpen(false)} onCreate={createChannel} />}
+    {!online && <div className="live-chat-notice"><WarningCircle /> Çevrimdışısınız. Mesajlar bağlantı geldiğinde gönderilebilir.</div>}
+    {state.channels.length === 0 ? <EmptyState title="sohbet kanalı" canCreate={state.canWrite} onCreate={() => setChannelFormOpen(true)} /> : <div className="live-chat-body">
+      <aside className="live-chat-channels" aria-label="Kanallar">
+        {state.channels.map((item) => <button type="button" key={item.id} className={item.id === channelId ? "active" : ""} onClick={() => setChannelId(item.id)}>
+          <span><b>{item.name}</b><small>{item.project_name || (item.kind === "announcement" ? "Duyuru" : item.kind === "project" ? "Proje kanalı" : "Ekip kanalı")}</small></span>
+          {item.unread > 0 && <em>{item.unread}</em>}
+        </button>)}
+      </aside>
+      <div className="live-chat-thread">
+        <div className="live-chat-scroll" ref={scroller} onScroll={(event) => {
+          const node = event.currentTarget;
+          atBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 60;
+        }}>
+          {messages.length === 0 ? <div className="live-compact-empty">Bu kanalda henüz mesaj yok. İlk mesajı siz yazın.</div>
+            : messages.map((message, index) => <ChatMessage key={message.id} message={message} previous={messages[index - 1]} onOpenLink={openLink} />)}
+        </div>
+        {state.canWrite && <form className="live-chat-composer" onSubmit={send}>
+          {attachment && <div className="live-chat-attachment">
+            <LinkSimple /><span><small>{modules.find((item) => item.id === attachment.moduleId)?.title || attachment.moduleId}</small><b>{attachment.label || attachment.recordId}</b></span>
+            <button type="button" onClick={() => setAttachment(null)} aria-label="İliştirilen kaydı kaldır"><X /></button>
+          </div>}
+          {sendError && <div className="live-form-alert"><WarningCircle /> {sendError.message || "Mesaj gönderilemedi."}</div>}
+          <div>
+            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={2} placeholder="Mesajınızı yazın…" disabled={!online}
+              onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(event); } }} />
+            <button type="submit" className="live-button primary" disabled={sending || !online || !draft.trim()} aria-label="Gönder"><PaperPlaneTilt /></button>
+          </div>
+          <small>Enter gönderir, Shift+Enter alt satıra geçer.</small>
+        </form>}
+      </div>
+    </div>}
+  </section>;
+}
+
 export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }) {
   const [sessionState, setSessionState] = useState({ loading: true, session: null, error: null, needsLogin: false });
   const [activeId, setActiveId] = useState(initialModule);
@@ -1938,6 +2324,10 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
   // Telefonda kenar çubuğu ekranı kaplayan bir çekmeceye dönüşür; alt çubuk
   // yalnızca en sık kullanılan bölümleri ve bu çekmeceyi açan düğmeyi taşır.
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Paylaşılan bağlantıyla açılması istenen kayıt ve sohbete iliştirilmek
+  // üzere bekleyen kayıt. İkisi de tek bir tıklamalık ömre sahiptir.
+  const [focusRecord, setFocusRecord] = useState(null);
+  const [chatShare, setChatShare] = useState(null);
   const active = useMemo(() => modules.find((item) => item.id === activeId) || modules[0], [activeId]);
   // Çekmece açıkken arka planın kayması ve Escape'in işlevsiz kalması,
   // telefonda menüyü kapatmayı zorlaştırıyordu.
@@ -1981,6 +2371,34 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
       setSessionState({ loading: false, session: null, error: needsLogin && !explain ? null : error, needsLogin });
     }
   }
+
+  // Adres çubuğu ile ekran arasındaki bağ. Bir kayda verilen bağlantı açıldığında
+  // doğrudan o kaydın detayı açılsın, gezinirken de adres her zaman bulunulan
+  // yeri göstersin ki kullanıcı adres çubuğundan kopyalayıp paylaşabilsin.
+  useEffect(() => {
+    const target = parseRecordLink(window.location.hash);
+    if (target) {
+      setActiveId(target.moduleId);
+      if (target.recordId) setFocusRecord({ moduleId: target.moduleId, recordId: target.recordId });
+    }
+    const follow = () => {
+      const next = parseRecordLink(window.location.hash);
+      if (!next) return;
+      setActiveId(next.moduleId);
+      setFocusRecord(next.recordId ? { moduleId: next.moduleId, recordId: next.recordId } : null);
+      // Geri düğmesiyle ya da paylaşılan bir bağlantıyla bölüm değiştiğinde
+      // telefondaki çekmece açık kalırsa altındaki ekran kullanılamıyor.
+      setMobileMenuOpen(false);
+    };
+    window.addEventListener("hashchange", follow);
+    return () => window.removeEventListener("hashchange", follow);
+  }, []);
+  // replaceState kullanılıyor: her menü tıklaması tarayıcı geçmişine bir adım
+  // eklerse geri düğmesi kullanılmaz hâle gelir.
+  useEffect(() => {
+    const next = `#/${activeId}${focusRecord?.recordId ? `/${focusRecord.recordId}` : ""}`;
+    if (window.location.hash !== next) window.history.replaceState(null, "", next);
+  }, [activeId, focusRecord?.recordId]);
 
   useEffect(() => api.subscribeOfflineQueue(setQueueState), []);
   useEffect(() => { bootstrap(); }, []);
@@ -2072,8 +2490,18 @@ export function LiveWorkspace({ initialModule = "dashboard", onBackToPrototype }
     .concat(visibleModules)
     .filter((item, index, list) => list.findIndex((other) => other.id === item.id) === index)
     .slice(0, 4);
-  const openModule = (moduleId, group) => { setActiveId(moduleId); if (group) setOpenNavGroup(group); setMobileMenuOpen(false); };
-  return <div className="live-shell"><LiveStyles />{!online && <div className="live-offline"><WarningCircle /> Çevrimdışısınız. Uygun yeni saha kayıtları kuyruğa alınır; onay, silme ve dosya işlemleri bağlantı bekler.</div>}<aside className={`live-sidebar ${mobileMenuOpen ? "open" : ""}`} aria-hidden={false}><div className="live-brand"><span><Buildings /></span><div><b>Capproje</b><small>Yönetim Platformu</small></div></div><TenantSelector session={session} onChange={changeTenant} /><nav aria-label="Ana menü">{Object.entries(navGroups).map(([group, items], groupIndex) => { const expanded = openNavGroup === group; const panelId = `live-nav-group-${groupIndex}`; return <section className={`live-nav-group ${expanded ? "open" : ""}`} key={group}><button type="button" className="live-nav-group-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpenNavGroup((current) => current === group ? null : group)}><span>{group}</span><CaretDown /></button><div id={panelId} className="live-nav-group-items" hidden={!expanded}>{items.map((item) => <button type="button" key={item.id} className={`live-nav-item ${item.id === selectedModule?.id ? "active" : ""}`} onClick={() => openModule(item.id, group)}><item.icon /><span>{item.title}</span></button>)}</div></section>; })}</nav><div className="live-user"><UserCircle /><span><b>{session?.user?.name || session?.user?.full_name || `${session?.user?.firstName || ""} ${session?.user?.lastName || ""}`.trim() || session?.user?.email}</b><small>{session?.role?.name || session?.user?.role || "Kullanıcı"}</small></span><button onClick={() => setSecurityOpen(true)} title="Şifre ve oturumlar"><UserCircle /></button><button onClick={logout} title="Çıkış yap"><SignOut /></button></div></aside>{mobileMenuOpen && <button type="button" className="live-drawer-backdrop" aria-label="Menüyü kapat" onClick={() => setMobileMenuOpen(false)} />}<nav className="live-tabbar" aria-label="Hızlı menü">{tabbarModules.map((item) => <button type="button" key={item.id} className={item.id === selectedModule?.id && !mobileMenuOpen ? "active" : ""} aria-current={item.id === selectedModule?.id ? "page" : undefined} onClick={() => openModule(item.id, item.group)}><item.icon /><span>{item.title}</span></button>)}<button type="button" className={mobileMenuOpen ? "active" : ""} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X /> : <ListBullets />}<span>{mobileMenuOpen ? "Kapat" : "Tüm Menü"}</span></button></nav><main className="live-main"><header className="live-topbar"><div><small>{session?.tenant?.name || "Firma"}</small><h1>{selectedModule?.title || "Çalışma alanı"}</h1></div><GlobalSearch onNavigate={setActiveId} /><div className="live-top-actions">{onBackToPrototype && <button className="live-button secondary" onClick={onBackToPrototype}>Prototipe dön</button>}<OfflineQueueControl state={queueState} online={online} onSynced={() => setDataVersion((value) => value + 1)} /><button className="live-top-icon" onClick={() => setActiveId("notifications")} title="Bildirimler"><Bell /></button><span className="live-connection"><i /> {online ? "Canlı" : "Çevrimdışı"}</span></div></header><div className="live-content"><ErrorBoundary inline resetKey={selectedModule?.id}>{!selectedModule ? <PermissionDeniedState /> : selectedModule.id === "fieldMode" ? <FieldMode session={session} online={online} queueState={queueState} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} /> : selectedModule.id === "dashboard" ? <Dashboard session={session} onNavigate={setActiveId} refreshKey={dataVersion} /> : selectedModule.id === "notifications" ? <NotificationsView onNavigate={setActiveId} /> : selectedModule.id === "backups" ? <BackupView online={online} /> : selectedModule.id === "tokens" ? <TokenView online={online} /> : selectedModule.id === "workCenterLoad" ? <WorkCenterLoadView online={online} /> : <>{selectedModule.id === "memberships" && hasCapability(session, "users.reset-password") && <PasswordResetPanel online={online} onChanged={() => setDataVersion((value) => value + 1)} />}<ResourceView module={selectedModule} session={session} online={online} refreshKey={dataVersion} onNavigate={setActiveId} onDataChanged={() => setDataVersion((value) => value + 1)} /></>}</ErrorBoundary></div></main>{securityOpen && <SecuritySettingsModal onClose={() => setSecurityOpen(false)} />}</div>;
+  // Tek gezinme kapısı. İkinci parametreyle bir kaydın üzerine düşülebilir;
+  // arama sonucu, bildirim ve sohbete iliştirilen kayıt bunu kullanır.
+  const navigate = (moduleId, options = {}) => {
+    setActiveId(moduleId);
+    const target = modules.find((item) => item.id === moduleId);
+    if (target?.group) setOpenNavGroup(target.group);
+    setMobileMenuOpen(false);
+    setFocusRecord(options.recordId ? { moduleId, recordId: options.recordId } : null);
+  };
+  const openModule = (moduleId, group) => { navigate(moduleId); if (group) setOpenNavGroup(group); };
+  const shareToChat = (target) => { setChatShare(target); navigate("chat"); };
+  return <div className="live-shell"><LiveStyles />{!online && <div className="live-offline"><WarningCircle /> Çevrimdışısınız. Uygun yeni saha kayıtları kuyruğa alınır; onay, silme ve dosya işlemleri bağlantı bekler.</div>}<aside className={`live-sidebar ${mobileMenuOpen ? "open" : ""}`} aria-hidden={false}><div className="live-brand"><span><Buildings /></span><div><b>Capproje</b><small>Yönetim Platformu</small></div></div><TenantSelector session={session} onChange={changeTenant} /><nav aria-label="Ana menü">{Object.entries(navGroups).map(([group, items], groupIndex) => { const expanded = openNavGroup === group; const panelId = `live-nav-group-${groupIndex}`; return <section className={`live-nav-group ${expanded ? "open" : ""}`} key={group}><button type="button" className="live-nav-group-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpenNavGroup((current) => current === group ? null : group)}><span>{group}</span><CaretDown /></button><div id={panelId} className="live-nav-group-items" hidden={!expanded}>{items.map((item) => <button type="button" key={item.id} className={`live-nav-item ${item.id === selectedModule?.id ? "active" : ""}`} onClick={() => openModule(item.id, group)}><item.icon /><span>{item.title}</span></button>)}</div></section>; })}</nav><a className="live-guide-link" href="/kilavuz" target="_blank" rel="noreferrer"><BookOpen /><span>Kullanım Kılavuzu</span></a><div className="live-user"><UserCircle /><span><b>{session?.user?.name || session?.user?.full_name || `${session?.user?.firstName || ""} ${session?.user?.lastName || ""}`.trim() || session?.user?.email}</b><small>{session?.role?.name || session?.user?.role || "Kullanıcı"}</small></span><button onClick={() => setSecurityOpen(true)} title="Şifre ve oturumlar"><UserCircle /></button><button onClick={logout} title="Çıkış yap"><SignOut /></button></div></aside>{mobileMenuOpen && <button type="button" className="live-drawer-backdrop" aria-label="Menüyü kapat" onClick={() => setMobileMenuOpen(false)} />}<nav className="live-tabbar" aria-label="Hızlı menü">{tabbarModules.map((item) => <button type="button" key={item.id} className={item.id === selectedModule?.id && !mobileMenuOpen ? "active" : ""} aria-current={item.id === selectedModule?.id ? "page" : undefined} onClick={() => openModule(item.id, item.group)}><item.icon /><span>{item.title}</span></button>)}<button type="button" className={mobileMenuOpen ? "active" : ""} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X /> : <ListBullets />}<span>{mobileMenuOpen ? "Kapat" : "Tüm Menü"}</span></button></nav><main className="live-main"><header className="live-topbar"><div><small>{session?.tenant?.name || "Firma"}</small><h1>{selectedModule?.title || "Çalışma alanı"}</h1></div><GlobalSearch onNavigate={navigate} /><div className="live-top-actions">{onBackToPrototype && <button className="live-button secondary" onClick={onBackToPrototype}>Prototipe dön</button>}<OfflineQueueControl state={queueState} online={online} onSynced={() => setDataVersion((value) => value + 1)} /><a className="live-top-icon" href="/kilavuz" target="_blank" rel="noreferrer" title="Kullanım kılavuzu"><BookOpen /></a><button className="live-top-icon" onClick={() => navigate("notifications")} title="Bildirimler"><Bell /></button><span className="live-connection"><i /> {online ? "Canlı" : "Çevrimdışı"}</span></div></header><div className="live-content"><ErrorBoundary inline resetKey={selectedModule?.id}>{!selectedModule ? <PermissionDeniedState /> : selectedModule.id === "fieldMode" ? <FieldMode session={session} online={online} queueState={queueState} onNavigate={navigate} onDataChanged={() => setDataVersion((value) => value + 1)} /> : selectedModule.id === "dashboard" ? <Dashboard session={session} onNavigate={navigate} refreshKey={dataVersion} /> : selectedModule.id === "chat" ? <ChatView online={online} onNavigate={navigate} share={chatShare} onShareConsumed={() => setChatShare(null)} /> : selectedModule.id === "notifications" ? <NotificationsView onNavigate={navigate} /> : selectedModule.id === "backups" ? <BackupView online={online} /> : selectedModule.id === "tokens" ? <TokenView online={online} /> : selectedModule.id === "workCenterLoad" ? <WorkCenterLoadView online={online} /> : <>{selectedModule.id === "memberships" && hasCapability(session, "users.reset-password") && <PasswordResetPanel online={online} onChanged={() => setDataVersion((value) => value + 1)} />}<ResourceView module={selectedModule} session={session} online={online} refreshKey={dataVersion} onNavigate={navigate} onShare={shareToChat} focusRecordId={focusRecord?.moduleId === selectedModule.id ? focusRecord.recordId : null} onFocusHandled={() => setFocusRecord(null)} onDataChanged={() => setDataVersion((value) => value + 1)} /></>}</ErrorBoundary></div></main>{securityOpen && <SecuritySettingsModal onClose={() => setSecurityOpen(false)} />}</div>;
 }
 
 export default LiveWorkspace;
@@ -2148,5 +2576,73 @@ function LiveStyles() {
     @media(max-width:720px){.live-sidebar,.live-tabbar{background:#3b261b}.live-tabbar{border-top-color:#5a3d2b}.live-tabbar button{color:#c8b09f}.live-tabbar button.active{color:#fff}.live-tabbar button.active svg{color:#d2aa74}}
     .live-form-grid>div{display:flex;flex-direction:column;gap:7px}.live-form-grid>div.wide{grid-column:1/-1}.live-form-grid>div>span{font-size:11px;font-weight:700;color:#46524c}
     @media(max-width:720px){.live-multi-select{grid-template-columns:1fr}.live-form-grid>div.wide{grid-column:auto}}
+
+    /* Kılavuz bağlantısı, ekip sohbeti ve kayıt kısayolları */
+    .live-guide-link{display:flex;align-items:center;gap:11px;margin-top:auto;min-height:42px;border-radius:9px;padding:0 12px;color:#d1c1b6;text-decoration:none;font-size:13px;border:1px dashed #5a3d2b}
+    .live-guide-link:hover{background:#533624;color:#fff}
+    .live-guide-link svg{font-size:19px;flex:none}
+    .live-user{margin-top:14px}
+    a.live-top-icon{text-decoration:none}
+    /* Kapatma düğmesi paylaşma düğmelerinin altına düşmemeli; taşma olursa
+       alt satıra geçecek olan paylaşma düğmeleridir. */
+    .live-modal-actions{display:flex;align-items:flex-start;gap:8px;flex-wrap:nowrap;justify-content:flex-end}
+    .live-record-links{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+    .live-modal-actions>.live-icon-button{flex:none}
+    .live-record-links button{display:inline-flex;align-items:center;gap:5px}
+    .live-chat-body{display:grid;grid-template-columns:238px 1fr;min-height:540px}
+    .live-chat-channels{border-right:1px solid var(--live-line);display:flex;flex-direction:column;overflow:auto;max-height:620px}
+    .live-chat-channels>button{border:0;border-bottom:1px solid #efefec;background:#fff;display:flex;align-items:center;gap:9px;justify-content:space-between;padding:13px 15px;font:inherit;text-align:left;cursor:pointer}
+    .live-chat-channels>button:hover{background:#fbfcfa}
+    .live-chat-channels>button.active{background:#f4ece3;box-shadow:inset 3px 0 0 var(--live-green)}
+    .live-chat-channels span{display:flex;flex-direction:column;gap:3px;min-width:0}
+    .live-chat-channels b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .live-chat-channels small{font-size:9px;color:var(--live-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .live-chat-channels em{flex:none;font-style:normal;font-size:9px;font-weight:800;background:var(--live-green);color:#fff;border-radius:11px;padding:3px 7px}
+    .live-chat-thread{display:flex;flex-direction:column;min-width:0}
+    .live-chat-scroll{flex:1;overflow:auto;max-height:520px;padding:18px 20px;display:flex;flex-direction:column;gap:9px;background:#fbfbf9}
+    .live-chat-message{max-width:min(560px,86%);background:#fff;border:1px solid var(--live-line);border-radius:12px;padding:9px 12px;display:flex;flex-direction:column;gap:4px}
+    .live-chat-message.mine{align-self:flex-end;background:#f4ece3;border-color:#e0cdb6}
+    .live-chat-message.joined{margin-top:-5px}
+    .live-chat-message b{font-size:10px;color:var(--live-green);font-weight:800}
+    .live-chat-message p{margin:0;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+    .live-chat-message time{font-size:9px;color:var(--live-muted);align-self:flex-end}
+    .live-chat-link{margin-top:3px;border:1px solid var(--live-line);background:#fff;border-radius:9px;padding:8px 10px;display:flex;align-items:center;gap:9px;cursor:pointer;text-align:left;font:inherit;width:100%}
+    .live-chat-link:hover{border-color:#c6a98e;background:#fdfaf6}
+    .live-chat-link>svg:first-child{font-size:18px;color:var(--live-green);flex:none}
+    .live-chat-link span{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+    .live-chat-link small{font-size:8px;letter-spacing:.09em;text-transform:uppercase;color:var(--live-muted)}
+    .live-chat-link em{font-style:normal;font-size:11px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .live-chat-composer{border-top:1px solid var(--live-line);padding:12px 20px 14px;display:flex;flex-direction:column;gap:7px;background:#fff}
+    .live-chat-composer>div{display:flex;align-items:flex-end;gap:9px}
+    .live-chat-composer textarea{flex:1;border:1px solid #ced3cf;border-radius:10px;padding:10px 11px;font:inherit;font-size:12px;resize:vertical;outline:0}
+    .live-chat-composer textarea:focus{border-color:var(--live-green-2);box-shadow:0 0 0 3px #dcece4}
+    .live-chat-composer>div>button{min-width:46px;height:42px}
+    .live-chat-composer>small{font-size:9px;color:var(--live-muted)}
+    .live-chat-attachment{display:flex;align-items:center;gap:9px;border:1px solid #decbb8;background:#f4ece3;border-radius:9px;padding:8px 10px}
+    .live-chat-attachment span{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+    .live-chat-attachment small{font-size:8px;letter-spacing:.09em;text-transform:uppercase;color:var(--live-muted)}
+    .live-chat-attachment b{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .live-chat-attachment>button{border:0;background:transparent;color:var(--live-muted);cursor:pointer;display:grid;place-items:center}
+    .live-chat-notice{margin:14px 22px 0;padding:11px 13px;border:1px solid #ddc7b1;background:#f4ece3;border-radius:9px;display:flex;align-items:center;gap:8px;font-size:11px}
+    .live-chat-new-channel{padding:18px 24px;border-bottom:1px solid var(--live-line);display:grid;grid-template-columns:1fr 1fr;gap:14px;background:#fbfbf9}
+    .live-chat-new-channel label{display:flex;flex-direction:column;gap:6px}
+    .live-chat-new-channel label>span{font-size:11px;font-weight:700;color:#46524c}
+    .live-chat-new-channel input,.live-chat-new-channel select{border:1px solid #ced3cf;border-radius:8px;padding:10px 11px;font:inherit;font-size:12px;outline:0}
+    .live-chat-new-channel .live-form-alert{grid-column:1/-1}
+    .live-chat-new-channel footer{grid-column:1/-1;display:flex;justify-content:flex-end;gap:9px}
+    @media(max-width:1050px){.live-guide-link{justify-content:center;padding:0}.live-guide-link span{display:none}}
+    @media(max-width:720px){
+      .live-guide-link{justify-content:flex-start;padding:0 12px}.live-guide-link span{display:block}
+      .live-chat-body{grid-template-columns:1fr}
+      .live-chat-channels{flex-direction:row;overflow-x:auto;max-height:none;border-right:0;border-bottom:1px solid var(--live-line)}
+      .live-chat-channels>button{border-bottom:0;border-right:1px solid #efefec;min-width:158px}
+      .live-chat-channels>button.active{box-shadow:inset 0 -3px 0 var(--live-green)}
+      .live-chat-scroll{max-height:none;min-height:320px;padding:14px}
+      .live-chat-message{max-width:92%}
+      /* Alt çubuk sabit durduğu için ipucu satırı onun altında kalıyordu. */
+      .live-chat-composer{padding:10px 14px 20px}
+      .live-chat-new-channel{grid-template-columns:1fr;padding:16px}
+      .live-modal-actions{width:100%;justify-content:space-between}
+    }
   `}</style>;
 }

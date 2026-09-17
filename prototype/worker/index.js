@@ -53,6 +53,8 @@ const resources = {
   "bom-lines": { table: "bom_lines", required: ["work_item_id", "description", "quantity_per_unit", "unit"], search: ["item_code", "description", "notes"], filters: ["work_item_id", "inventory_item_id", "supplier_id"], refs: { work_item_id: "work_items", inventory_item_id: "inventory_items", supplier_id: "suppliers" }, fields: ["work_item_id","inventory_item_id","item_code","description","quantity_per_unit","unit","scrap_rate","unit_cost_minor","supplier_id","sort_order","notes","metadata_json"] },
   "production-operations": { table: "production_operations", required: ["production_order_id", "name"], search: ["name", "description", "notes"], filters: ["production_order_id", "work_center_id", "status"], refs: { production_order_id: "production_orders", work_center_id: "work_centers" }, memberRefs: ["assignee_user_id"], fields: ["production_order_id","work_center_id","sequence","name","description","planned_minutes","planned_start","planned_end","assignee_user_id","status","notes","metadata_json"] },
   "production-issues": { table: "production_issues", required: ["production_order_id", "issue_type", "description"], search: ["issue_number", "description", "root_cause", "resolution"], filters: ["production_order_id", "production_operation_id", "project_id", "work_item_id", "issue_type", "severity", "status"], refs: { production_order_id: "production_orders", production_operation_id: "production_operations", project_id: "projects", work_item_id: "work_items" }, memberRefs: ["responsible_user_id"], serverDefaults: (principal, timestamp) => ({ reported_at: timestamp, reported_by: principal.user.id }), fields: ["production_order_id","production_operation_id","project_id","work_item_id","issue_number","issue_type","severity","description","responsible_user_id","rework_quantity","scrap_quantity","cost_impact_minor","delay_days","root_cause","status","metadata_json"] },
+  "chat-channels": { table: "chat_channels", required: ["name"], search: ["name", "topic"], filters: ["kind", "project_id", "status"], refs: { project_id: "projects" }, serverDefaults: (principal) => ({ created_by: principal.user.id }), fields: ["name","kind","project_id","topic","status","metadata_json"] },
+  "chat-messages": { table: "chat_messages", required: ["channel_id", "body"], search: ["body", "link_label"], filters: ["channel_id", "author_user_id", "link_module", "link_record_id", "status"], refs: { channel_id: "chat_channels" }, memberRefs: ["author_user_id"], serverDefaults: (principal) => ({ author_user_id: principal.user.id }), fields: ["channel_id","body","link_module","link_record_id","link_label","status","metadata_json"] },
 };
 
 const aliases = {
@@ -61,8 +63,8 @@ const aliases = {
   transactions: "financial-transactions",
 };
 
-const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","membership_roles","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements","supplier_quotations","work_centers","bom_lines","production_operations","production_issues"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql"];
+const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","membership_roles","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements","supplier_quotations","work_centers","bom_lines","production_operations","production_issues","chat_channels","chat_messages","chat_reads"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql"];
 const BACKUP_SCHEMA_VERSION = backupMigrations.length;
 const dailyBackupSeen = new Map();
 const DAILY_BACKUP_SEEN_LIMIT = 500;
@@ -433,12 +435,30 @@ function decodeRow(row) {
 }
 
 // Bağlı kaydın gösterilecek adını hangi sütundan alacağımız. Liste yanıtları
-// yalnız yabancı anahtarı taşıdığı için arayüzde "Müşteri" sütununda müşterinin
-// adı yerine ham kimliği görünüyordu.
+// yalnız yabancı anahtarı taşırsa arayüzde "Müşteri" alanında müşterinin adı
+// yerine cus_75188281-83c1-… gibi hiçbir şey anlatmayan bir kimlik görünür.
 const referenceNameSources = {
-  projects: "name", customers: "name", suppliers: "name",
-  work_items: "description", inventory_items: "name",
+  projects: "code || ' · ' || name", customers: "name", suppliers: "name",
+  work_items: "description", inventory_items: "sku || ' · ' || name",
+  offers: "offer_number", contracts: "contract_number", invoices: "invoice_number",
+  purchase_requests: "request_number", purchase_orders: "order_number",
+  production_orders: "order_number", production_operations: "name",
+  installations: "installation_number", site_surveys: "survey_number",
+  handovers: "handover_number", quality_inspections: "inspection_number",
+  progress_payments: "progress_number", financial_transactions: "transaction_number",
+  design_revisions: "title", project_meetings: "title", project_tasks: "title",
+  accounts: "name", work_centers: "name", roles: "name", chat_channels: "name",
+  files: "file_name", employees: "first_name || ' ' || last_name",
 };
+
+// Kişi alanları ayrı tutuluyor: bunlar firma tablolarını değil users tablosunu
+// gösterir ve tenant_id ile süzülemez. "Takip sorumlusu" alanında kimlik değil
+// kişinin adı yazmalı; kimse atanmamışsa hiçbir şey yazmamalı.
+const userReferenceColumns = new Set(["approved_by", "uploaded_by", "created_by", "reported_by", "user_id"]);
+
+function isUserReferenceColumn(column) {
+  return column.endsWith("_user_id") || userReferenceColumns.has(column);
+}
 
 // Satır başına sorgu açmadan, referans edilen her tablo için tek geçişte.
 async function attachReferenceNames(env, principal, config, rows, serialized) {
@@ -453,6 +473,22 @@ async function attachReferenceNames(env, principal, config, rows, serialized) {
     const key = `${column.replace(/_id$/, "")}_name`;
     for (let index = 0; index < rows.length; index += 1) {
       const label = labelById.get(rows[index][column]);
+      if (label) serialized[index][key] = label;
+    }
+  }
+  // Kişi alanları. Hangi sütunların kişi gösterdiğini yapılandırmadan değil,
+  // gerçekten dönen satırlardan çıkarıyoruz ki yeni bir alan eklendiğinde
+  // burayı güncellemek unutulmasın.
+  const personColumns = Object.keys(rows[0]).filter(isUserReferenceColumn);
+  if (!personColumns.length) return;
+  const personIds = [...new Set(rows.flatMap((row) => personColumns.map((column) => row[column])).filter(Boolean))];
+  if (!personIds.length) return;
+  const people = await all(env.DB.prepare(`SELECT id,full_name,email FROM users WHERE id IN (${personIds.map(() => "?").join(",")})`).bind(...personIds));
+  const personById = new Map(people.map((item) => [item.id, item.full_name || item.email]));
+  for (const column of personColumns) {
+    const key = `${column.replace(/_id$/, "")}_name`;
+    for (let index = 0; index < rows.length; index += 1) {
+      const label = personById.get(rows[index][column]);
       if (label) serialized[index][key] = label;
     }
   }
@@ -572,8 +608,13 @@ function allowed(principal, permission) {
   return false;
 }
 
+// Sohbetin iki tablosu tek yetkiyle yönetilir. Rol ekranında "sohbet kanalları"
+// ve "sohbet mesajları" diye iki ayrı satır görmek kullanıcıya hiçbir şey
+// anlatmaz; ikisi de aynı işin parçasıdır.
+const permissionAliases = { "chat-channels": "chat", "chat-messages": "chat" };
+
 function permissionFor(slug, action) {
-  return `${slug}.${action}`;
+  return `${permissionAliases[slug] || slug}.${action}`;
 }
 
 function sensitiveWriteProblem(principal, body) {
@@ -724,6 +765,11 @@ async function getPermissionCatalog(env, principal) {
   return json({ data: rows, meta: { implied, granted: principal.isOwner ? ["*"] : principal.permissions } });
 }
 
+// Evet/hayır sütunları veritabanında 1 ve 0 olarak durur. Arayüz bunları
+// "true"/"false" diye gönderdiği için karşılaştırma hiçbir satırı tutmuyor ve
+// "Resmi" / "Proje içi" sekmeleri boş görünüyordu.
+const booleanFilters = new Set(["official", "is_outsourced", "is_system"]);
+
 function csvCell(value) {
   if (value === null || value === undefined) return "";
   const text = typeof value === "object" ? JSON.stringify(value) : String(value);
@@ -740,7 +786,9 @@ async function exportResource(request, env, principal, slug, config) {
   const bindings = [principal.tenantId];
   for (const field of config.filters || []) {
     const value = url.searchParams.get(field);
-    if (value !== null && value !== "") { clauses.push(`${field}=?`); bindings.push(value); }
+    if (value === null || value === "") continue;
+    clauses.push(`${field}=?`);
+    bindings.push(booleanFilters.has(field) ? (["true", "1"].includes(value) ? 1 : 0) : value);
   }
   const limit = Math.min(10000, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "5000", 10) || 5000));
   const rows = await all(env.DB.prepare(`SELECT * FROM ${config.table} WHERE ${clauses.join(" AND ")} ORDER BY ${config.table === "audit_logs" ? "created_at" : "updated_at"} DESC LIMIT ?`).bind(...bindings, limit));
@@ -1099,7 +1147,9 @@ async function listResource(request, env, principal, slug, config) {
   const bindings = [principal.tenantId];
   for (const field of config.filters || []) {
     const value = url.searchParams.get(field);
-    if (value !== null && value !== "") { clauses.push(`${field}=?`); bindings.push(value); }
+    if (value === null || value === "") continue;
+    clauses.push(`${field}=?`);
+    bindings.push(booleanFilters.has(field) ? (["true", "1"].includes(value) ? 1 : 0) : value);
   }
   const q = url.searchParams.get("q")?.trim();
   if (q && config.search?.length) {
@@ -1210,6 +1260,15 @@ async function createResource(request, env, principal, slug, config) {
   if (slug === "meeting-actions") {
     const meeting = await workflowRow(env, principal, "project_meetings", normalized.values.meeting_id);
     if (!meeting || meeting.status === "closed") return problem(409, "meeting_closed", "Kapatılmış toplantıya aksiyon eklenemez.");
+  }
+  if (slug === "chat-messages" && normalized.values.link_module) {
+    // İliştirilen kayıt gerçekten var olmalı ve bu firmaya ait olmalı; aksi
+    // hâlde mesaj, tıklandığında hiçbir yere gitmeyen ölü bir bağlantı taşır.
+    const table = chatLinkTables[normalized.values.link_module];
+    if (!table) return problem(422, "unsupported_link_module", "Bu ekrana bağlantı verilemiyor.");
+    if (!validId(normalized.values.link_record_id)) return problem(422, "validation_error", "Bağlantı verilen kaydın kimliği geçersiz.");
+    const linked = await one(env.DB.prepare(`SELECT id FROM ${table} WHERE id=? AND tenant_id=?`).bind(normalized.values.link_record_id, principal.tenantId));
+    if (!linked) return problem(422, "cross_tenant_reference", "Bağlantı verilen kayıt bu firmada bulunamadı.");
   }
   if (slug === "handover-punch-items") {
     const handover = await workflowRow(env, principal, "handovers", normalized.values.handover_id);
@@ -2881,7 +2940,19 @@ async function backupRoute(request, env, principal, segments) {
   if (!allowed(principal, needed)) return problem(403, "forbidden", "Yedek yönetimi yetkiniz yok.");
   if (segments.length === 1 && request.method === "GET") {
     const rows = await all(env.DB.prepare("SELECT * FROM backup_runs WHERE tenant_id=? ORDER BY created_at DESC LIMIT 100").bind(principal.tenantId));
-    return json({ data: rows.map(decodeRow) });
+    const decoded = rows.map(decodeRow);
+    // "Tetikleyen" sütununda kullanıcı kimliği değil adı yazmalı. Zamanlanmış
+    // yedeklerde bir kişi yoktur; orada da kimlik yerine ne olduğu yazılır.
+    const triggerIds = [...new Set(rows.map((row) => row.triggered_by).filter((value) => value && validId(value)))];
+    if (triggerIds.length) {
+      const people = await all(env.DB.prepare(`SELECT id,full_name,email FROM users WHERE id IN (${triggerIds.map(() => "?").join(",")})`).bind(...triggerIds));
+      const nameById = new Map(people.map((item) => [item.id, item.full_name || item.email]));
+      for (const row of decoded) row.triggered_by_name = nameById.get(row.triggered_by) || null;
+    }
+    for (const row of decoded) {
+      if (!row.triggered_by_name) row.triggered_by_name = row.triggered_by === "scheduler" ? "Zamanlanmış görev" : "Otomatik yedek";
+    }
+    return json({ data: decoded });
   }
   if (segments.length === 1 && request.method === "POST") {
     const result = await writeBackup(env, principal.tenantId, principal.user.id);
@@ -2934,6 +3005,91 @@ async function bootstrap(request, env) {
   return json({ data: { tenant: { id: tenantId, name: body.tenant_name, slug: body.tenant_slug }, user: { id: userId, email: body.owner_email, full_name: body.owner_name }, token: rawToken, token_expires_at: tokenExpiresAt }, meta: { secret_visible_once: true } }, 201);
 }
 
+// Mesaja iliştirilen kaydın hangi ekranda açılacağı. Anahtarlar arayüzdeki
+// modül kimlikleri, değerler ise kaydın gerçekten bu firmaya ait olduğunu
+// doğrulayabilmek için tablo adlarıdır.
+const chatLinkTables = {
+  projects: "projects", customers: "customers", suppliers: "suppliers", offers: "offers",
+  workItems: "work_items", projectTasks: "project_tasks", purchases: "purchase_requests",
+  purchaseOrders: "purchase_orders", production: "production_orders", installations: "installations",
+  finance: "financial_transactions", accounting: "invoices", contracts: "contracts",
+  siteSurveys: "site_surveys", designRevisions: "design_revisions", handovers: "handovers",
+  qualityInspections: "quality_inspections", files: "files", projectMeetings: "project_meetings",
+  inventoryItems: "inventory_items", progressPayments: "progress_payments", hr: "employees",
+  productionIssues: "production_issues", stockMovements: "stock_movements", leaves: "leave_requests",
+};
+
+const CHAT_HISTORY_LIMIT = 60;
+const CHAT_CATCHUP_LIMIT = 200;
+
+// Sohbet ekranı saniyeler arayla aynı soruyu sorar: "kanallarda ne var, şu
+// kanalda benden sonra ne yazıldı?" İki ayrı istek atmak yükü iki katına
+// çıkarırdı; tek uçtan ikisi birden dönüyor. `after` verildiğinde yanıt çoğu
+// zaman boş bir dizidir, yani yoklamanın maliyeti neredeyse yalnız sorgudur.
+async function chatStream(request, env, principal) {
+  if (!allowed(principal, "chat.read")) return problem(403, "forbidden", "Sohbeti görüntüleme yetkiniz yok.");
+  const url = new URL(request.url);
+  const userId = principal.user.id;
+  const channels = await all(env.DB.prepare(`SELECT c.id,c.name,c.kind,c.project_id,c.topic,c.status,
+      (SELECT MAX(m.created_at) FROM chat_messages m WHERE m.tenant_id=c.tenant_id AND m.channel_id=c.id AND m.status='sent') AS last_message_at,
+      (SELECT COUNT(*) FROM chat_messages m WHERE m.tenant_id=c.tenant_id AND m.channel_id=c.id AND m.status='sent' AND m.author_user_id<>? AND m.created_at>COALESCE(r.last_read_at,'')) AS unread
+    FROM chat_channels c
+    LEFT JOIN chat_reads r ON r.tenant_id=c.tenant_id AND r.channel_id=c.id AND r.user_id=?
+    WHERE c.tenant_id=? AND c.status='active'
+    ORDER BY last_message_at DESC, c.name`).bind(userId, userId, principal.tenantId));
+
+  // Proje kanallarının başlığında proje adı da görünsün.
+  const projectIds = [...new Set(channels.map((row) => row.project_id).filter(Boolean))];
+  const projectNames = new Map();
+  if (projectIds.length) {
+    const rows = await all(env.DB.prepare(`SELECT id,code,name FROM projects WHERE tenant_id=? AND id IN (${projectIds.map(() => "?").join(",")})`).bind(principal.tenantId, ...projectIds));
+    for (const row of rows) projectNames.set(row.id, `${row.code} · ${row.name}`);
+  }
+
+  const requested = url.searchParams.get("channel_id");
+  const channelId = channels.some((row) => row.id === requested) ? requested : channels[0]?.id || null;
+  const after = url.searchParams.get("after") || "";
+  let messages = [];
+  if (channelId) {
+    // İlk açılışta son konuşulanlar, sonraki yoklamalarda yalnızca yenisi.
+    const sql = after
+      ? "SELECT m.*,u.full_name AS author_name FROM chat_messages m LEFT JOIN users u ON u.id=m.author_user_id WHERE m.tenant_id=? AND m.channel_id=? AND m.status='sent' AND m.created_at>? ORDER BY m.created_at LIMIT ?"
+      : "SELECT m.*,u.full_name AS author_name FROM chat_messages m LEFT JOIN users u ON u.id=m.author_user_id WHERE m.tenant_id=? AND m.channel_id=? AND m.status='sent' ORDER BY m.created_at DESC LIMIT ?";
+    const bindings = after ? [principal.tenantId, channelId, after, CHAT_CATCHUP_LIMIT] : [principal.tenantId, channelId, CHAT_HISTORY_LIMIT];
+    const rows = await all(env.DB.prepare(sql).bind(...bindings));
+    messages = (after ? rows : rows.reverse()).map((row) => ({
+      id: row.id, channel_id: row.channel_id, body: row.body,
+      author_user_id: row.author_user_id, author_name: row.author_name || "Silinmiş kullanıcı",
+      mine: row.author_user_id === userId,
+      link_module: row.link_module, link_record_id: row.link_record_id, link_label: row.link_label,
+      created_at: row.created_at,
+    }));
+    // Okundu imi yalnız gerçekten yeni bir şey görüldüğünde yazılır; her
+    // yoklamada yazmak, saniyede bir yazma işlemi demek olurdu.
+    const latest = messages.length ? messages[messages.length - 1].created_at : null;
+    if (latest) {
+      const marker = await one(env.DB.prepare("SELECT last_read_at FROM chat_reads WHERE tenant_id=? AND channel_id=? AND user_id=?").bind(principal.tenantId, channelId, userId));
+      if (!marker || marker.last_read_at < latest) {
+        const timestamp = now();
+        await run(env.DB.prepare("INSERT INTO chat_reads (tenant_id,channel_id,user_id,last_read_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(tenant_id,channel_id,user_id) DO UPDATE SET last_read_at=excluded.last_read_at,updated_at=excluded.updated_at")
+          .bind(principal.tenantId, channelId, userId, latest, timestamp));
+        const seen = channels.find((row) => row.id === channelId);
+        if (seen) seen.unread = 0;
+      }
+    }
+  }
+
+  return json({
+    data: {
+      channels: channels.map((row) => ({ ...row, unread: Number(row.unread || 0), project_name: projectNames.get(row.project_id) || null })),
+      channel_id: channelId,
+      messages,
+      can_write: allowed(principal, "chat.write"),
+      server_time: now(),
+    },
+  });
+}
+
 // Geçici şifreyle giren kullanıcı, şifresini değiştirmeden veri yazamaz.
 const passwordChangeExemptPaths = new Set(["/api/v1/session", "/api/v1/me", "/api/v1/auth/password/change", "/api/v1/permissions"]);
 
@@ -2946,6 +3102,7 @@ async function dispatchAuthenticated(request, env, principal, url, segments) {
   if (url.pathname === "/api/v1/permissions" && request.method === "GET") return getPermissionCatalog(env, principal);
   if (url.pathname === "/api/v1/dashboard" && request.method === "GET") return getDashboard(env, principal);
   if (url.pathname === "/api/v1/search" && request.method === "GET") return globalSearch(request, env, principal);
+  if (url.pathname === "/api/v1/chat/stream" && request.method === "GET") return chatStream(request, env, principal);
   if (url.pathname === "/api/v1/notifications" && request.method === "GET") return getNotifications(env, principal);
   if (segments.length === 5 && segments[2] === "notifications" && segments[4] === "read" && request.method === "POST" && validId(segments[3])) return markNotification(request, env, principal, segments[3]);
   if (segments[0] === "api" && segments[1] === "admin" && segments[2] === "backups") return backupRoute(request, env, principal, segments.slice(2));

@@ -263,7 +263,54 @@ async function asamaIlerlet(projeId, hedef) {
 const mahaller = ["Lobi", "Mutfak", "Toplantı Odası", "Giyinme Odası", "Banyo", "Resepsiyon", "Bar", "Derslik"];
 const cizimTurleri = ["2d", "3d", "shop_drawing"];
 
-async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKayit, merkezKayit, stokKayit, hesapKayit }) {
+// Ekip. Kayıtlara gerçek bir sorumlu atanabilmesi için projelerden ÖNCE kurulur;
+// "Takip sorumlusu" alanının boş kalması tanıtımda kimsenin işine yaramıyor.
+const ekip = [
+  { full_name: "Fatma Koç", email: "fatma@ozturkahsap.com", phone: "05341112201", title: "İç Mimar", rol: "architect" },
+  { full_name: "Melis Arda", email: "melis@ozturkahsap.com", phone: "05341112209", title: "Proje Satış Uzmanı", rol: "project_manager" },
+  { full_name: "Zeynep Erdoğan", email: "zeynep@ozturkahsap.com", phone: "05341112203", title: "Satın Alma Sorumlusu", rol: "purchasing" },
+  { full_name: "Selin Kurt", email: "selin@ozturkahsap.com", phone: "05341112205", title: "Ön Muhasebe Sorumlusu", rol: "finance" },
+  { full_name: "Ahmet Yılmaz", email: "ahmet@ozturkahsap.com", phone: "05341112200", title: "Atölye Şefi", rol: "production" },
+  { full_name: "Hasan Aydın", email: "hasan@ozturkahsap.com", phone: "05341112202", title: "Montaj Ustası", rol: "installation" },
+  { full_name: "Derya Güneş", email: "derya@ozturkahsap.com", phone: "05341112207", title: "Kalite Kontrol Sorumlusu", rol: "hr" },
+  { full_name: "Emre Polat", email: "emre@ozturkahsap.com", phone: "05341112206", title: "Montaj Elemanı", rol: "read_only" },
+];
+
+async function ekipKur() {
+  const roller = await istek("roles?pageSize=50");
+  const rolBul = (kod) => roller.veri?.find((rol) => rol.code === kod)?.id;
+  for (const uye of ekip) {
+    const rolId = rolBul(uye.rol);
+    if (!rolId) continue;
+    const yanit = await istek("memberships/invite", {
+      method: "POST",
+      body: JSON.stringify({
+        full_name: uye.full_name, email: uye.email, phone: uye.phone, title: uye.title,
+        role_ids: [rolId], temporary_password: "Capproje2026!Gecici",
+      }),
+    });
+    if (yanit.ok) say("memberships");
+    else if (yanit.status === 409) atlanan += 1;
+    else hatalar.push(`memberships · ${uye.full_name} · ${yanit.status} ${yanit.metin.slice(0, 160)}`);
+  }
+  // Kimlikler listeden okunur: betik ikinci kez çalıştığında davet 409 döner ve
+  // kullanıcı kimliği yanıtta gelmez.
+  const uyelikler = await istek("memberships?pageSize=100");
+  const kimlik = {};
+  for (const uye of ekip) {
+    const satir = uyelikler.veri?.find((item) => item.user_email === uye.email);
+    if (!satir?.user_id) continue;
+    kimlik[uye.rol] = satir.user_id;
+    // Davet edilen üye "invited" durumunda kalır ve hiçbir kayda sorumlu olarak
+    // atanamaz. Tanıtım verisinde ekibin işe başlamış olması gerekiyor.
+    if (satir.status !== "active") {
+      await istek(`memberships/${satir.id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
+    }
+  }
+  return kimlik;
+}
+
+async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKayit, merkezKayit, stokKayit, hesapKayit, ekipKayit }) {
   const musteri = musteriKayit[proje.musteri];
   const kayip = proje.asama === "lost";
   const d = kayip ? 3 : derinlik(proje.asama);
@@ -271,6 +318,7 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
   const kayit = await olustur("projects", {
     code: proje.code, name: proje.name, customer_id: musteri?.id, project_type: proje.tur, city: proje.sehir,
     site_address: proje.adres, status: "lead", priority: sec(["normal", "high", "normal", "low"], sira),
+    manager_user_id: ekipKayit?.project_manager, architect_user_id: ekipKayit?.architect,
     planned_start_date: gun(proje.baslangic), planned_end_date: gun(proje.bitis),
     contract_amount_minor: proje.bedel ? lira(proje.bedel) : undefined,
     estimated_cost_minor: proje.maliyet ? lira(proje.maliyet) : undefined,
@@ -287,11 +335,11 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
     direction: "inbound", contact_name: musteri?.contact_name || "Müşteri yetkilisi",
     subject: `${proje.name} · ilk görüşme`, summary: "Müşteri kapsamı ve beklenen teslim tarihini aktardı.",
     decision: "Keşif randevusu planlanacak.", occurred_at: an(proje.baslangic - 2),
-    next_follow_up_at: an(proje.baslangic + 3), status: "open",
+    next_follow_up_at: an(proje.baslangic + 3), status: "open", owner_user_id: ekipKayit?.project_manager,
   });
   if (!projeDoluMu) await olustur("project-tasks", {
     project_id: projeId, title: `${proje.name} · müşteri dosyasını hazırla`, description: "Sözleşme, çizim ve yazışmaları proje klasörüne topla.",
-    department: "Proje", status: d >= 4 ? "completed" : "todo", priority: "normal",
+    department: "Proje", status: d >= 4 ? "completed" : "todo", priority: "normal", assignee_user_id: ekipKayit?.project_manager,
     planned_start: gun(proje.baslangic), planned_end: gun(proje.baslangic + 5), progress_percent: d >= 4 ? 100 : 20,
   });
   if (!projeDoluMu) await fotograf({
@@ -306,7 +354,7 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
     kesif = await olustur("site-surveys", {
       project_id: projeId, customer_id: musteri?.id, survey_number: `KSF-${proje.code.slice(3)}`,
       survey_date: gun(proje.baslangic + 2), location: proje.adres,
-      customer_contact: musteri?.contact_name || "Müşteri yetkilisi", status: "draft",
+      customer_contact: musteri?.contact_name || "Müşteri yetkilisi", status: "draft", surveyor_user_id: ekipKayit?.architect,
       notes: "Mevcut ölçüler alındı, elektrik ve tesisat çıkışları işaretlendi.",
     });
     if (kesif) {
@@ -383,6 +431,21 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
     });
     if (avans) await akis("financial-transactions", avans.id, "approve", {});
 
+    // Proje içi (gayri resmi) maliyet takibi. Resmi defterle karışmaz; "Proje
+    // Finansları" ekranı öntanımlı olarak bu tarafı gösterir.
+    for (const [indeks, hareket] of [
+      { type: "cost_forecast", category: "Malzeme", description: "Levha, kenar bandı ve mekanizma tahmini", oran: 0.34 },
+      { type: "cost_forecast", category: "İşçilik", description: "Atölye ve montaj işçilik tahmini", oran: 0.21 },
+      { type: "expense", category: "Nakliye", description: "Şantiye sevkiyatı ve hamaliye", oran: 0.03 },
+    ].entries()) {
+      await olustur("financial-transactions", {
+        transaction_number: `FN-${proje.code.slice(3)}-PI${indeks + 1}`, project_id: projeId,
+        type: hareket.type, category: hareket.category, transaction_date: gun(proje.baslangic + 20 + indeks * 4),
+        amount_minor: lira(Math.round((proje.maliyet || proje.bedel || 100000) * hareket.oran)),
+        currency: "TRY", official: 0, description: hareket.description, status: "planned",
+      });
+    }
+
     const fatura = await olustur("invoices", {
       invoice_number: `FTR-${proje.code.slice(3)}-01`, direction: "sales", project_id: projeId, customer_id: musteri?.id,
       issue_date: gun(proje.baslangic + 14), due_date: gun(proje.baslangic + 44), currency: "TRY",
@@ -424,7 +487,7 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
   if (d >= 4 && !(await varMi("project-meetings", "project_id", projeId))) {
     const toplanti = await olustur("project-meetings", {
       project_id: projeId, meeting_type: sec(["weekly_project", "coordination", "site", "weekly_production"], sira),
-      meeting_date: gun(proje.baslangic + 18), title: `${proje.name} · başlangıç toplantısı`,
+      meeting_date: gun(proje.baslangic + 18), title: `${proje.name} · başlangıç toplantısı`, facilitator_user_id: ekipKayit?.project_manager,
       attendees_json: JSON.stringify(["Mehmet Öztürk", "Fatma Koç", musteri?.contact_name || "Müşteri"]),
       summary: "Kapsam, teslim takvimi ve malzeme seçimleri karara bağlandı.", status: "draft",
     });
@@ -436,7 +499,7 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
       ]) {
         await olustur("meeting-actions", {
           meeting_id: toplanti.id, project_id: projeId, description: "Toplantıda karara bağlandı.",
-          due_date: gun(proje.baslangic + 25), ...aksiyon,
+          due_date: gun(proje.baslangic + 25), owner_user_id: ekipKayit?.architect, ...aksiyon,
         });
       }
     }
@@ -570,7 +633,7 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
         operasyonKayit.push(await olustur("production-operations", {
           production_order_id: emir.id, planned_start: gun(proje.baslangic + 45 + operasyon.sequence),
           planned_end: gun(proje.baslangic + 46 + operasyon.sequence), status: "pending",
-          description: "Standart imalat adımı.", ...operasyon,
+          description: "Standart imalat adımı.", assignee_user_id: ekipKayit?.production, ...operasyon,
         }));
       }
       // İlk emir üretimde ilerlemiş, ikincisi yeni başlamış olsun.
@@ -602,7 +665,7 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
       const kontrol = await olustur("quality-inspections", {
         inspection_number: `KLT-${proje.code.slice(3)}-0${indeks + 1}`, project_id: projeId, work_item_id: isKalemi.id,
         production_order_id: emir.id, inspection_type: indeks === 0 ? "in_process" : "final",
-        inspection_date: gun(proje.baslangic + 60 + indeks * 4), result: d >= 8 ? "pass" : "pending",
+        inspection_date: gun(proje.baslangic + 60 + indeks * 4), result: d >= 8 ? "pass" : "pending", inspector_user_id: ekipKayit?.hr,
         checklist_json: JSON.stringify(["Ölçü toleransı", "Kenar bandı yapışması", "Yüzey kusuru", "Mekanizma çalışması"]),
         defect_notes: indeks === 0 ? "Bir kapakta hafif portakallanma görüldü." : null,
         corrective_action: indeks === 0 ? "Cila tekrarlandı." : null,
@@ -626,7 +689,7 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
       installation_number: `MNT-${proje.code.slice(3)}`, project_id: projeId, location: proje.adres,
       team_json: JSON.stringify(["Hasan Aydın", "Emre Polat"]),
       planned_start: gun(proje.bitis - 14), planned_end: gun(proje.bitis - 2),
-      progress_percent: d >= 9 ? 100 : 65,
+      progress_percent: d >= 9 ? 100 : 65, team_lead_user_id: ekipKayit?.installation,
       acceptance_contact: musteri?.contact_name || "Müşteri yetkilisi",
       acceptance_date: d >= 9 ? gun(proje.bitis - 2) : undefined,
       issue_notes: d >= 9 ? "Teslimde iki küçük eksik tespit edildi." : "Elektrik altyapısı bekleniyor.",
@@ -652,7 +715,7 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
       ];
       if (!(await varMi("handover-punch-items", "handover_id", teslim.id))) for (const eksik of eksikler) {
         await olustur("handover-punch-items", {
-          handover_id: teslim.id, due_date: gun(proje.bitis + 5),
+          handover_id: teslim.id, due_date: gun(proje.bitis + 5), responsible_user_id: ekipKayit?.installation,
           status: d >= 10 ? "accepted" : "open", ...eksik,
         });
       }
@@ -695,7 +758,7 @@ async function depoGirisleri(stokKayit) {
 }
 
 
-async function firmaGeneli({ personelKayit, stokKayit, tedarikciKayit }) {
+async function firmaGeneli({ personelKayit, stokKayit, tedarikciKayit, ekipKayit }) {
   // Puantaj: son on iş günü, birkaç personel için.
   for (const personel of personelKayit.slice(0, 6)) {
     if (!personel) continue;
@@ -780,39 +843,138 @@ async function firmaGeneli({ personelKayit, stokKayit, tedarikciKayit }) {
     });
   }
 
-  // Ekip: roller ekranının karşılığı olsun diye farklı yetkilerde kullanıcılar.
-  const roller = await istek("roles?pageSize=50");
-  const rolBul = (kod) => roller.veri?.find((rol) => rol.code === kod)?.id;
-  for (const uye of [
-    { full_name: "Fatma Koç", email: "fatma@ozturkahsap.com", phone: "05341112201", title: "İç Mimar", rol: "architect" },
-    { full_name: "Melis Arda", email: "melis@ozturkahsap.com", phone: "05341112209", title: "Proje Satış Uzmanı", rol: "project_manager" },
-    { full_name: "Zeynep Erdoğan", email: "zeynep@ozturkahsap.com", phone: "05341112203", title: "Satın Alma Sorumlusu", rol: "purchasing" },
-    { full_name: "Selin Kurt", email: "selin@ozturkahsap.com", phone: "05341112205", title: "Ön Muhasebe Sorumlusu", rol: "finance" },
-    { full_name: "Ahmet Yılmaz", email: "ahmet@ozturkahsap.com", phone: "05341112200", title: "Atölye Şefi", rol: "production" },
-    { full_name: "Hasan Aydın", email: "hasan@ozturkahsap.com", phone: "05341112202", title: "Montaj Ustası", rol: "installation" },
-    { full_name: "Derya Güneş", email: "derya@ozturkahsap.com", phone: "05341112207", title: "Kalite Kontrol Sorumlusu", rol: "hr" },
-    { full_name: "Emre Polat", email: "emre@ozturkahsap.com", phone: "05341112206", title: "Montaj Elemanı", rol: "read_only" },
-  ]) {
-    const rolId = rolBul(uye.rol);
-    if (!rolId) continue;
-    const yanit = await istek("memberships/invite", {
-      method: "POST",
-      body: JSON.stringify({
-        full_name: uye.full_name, email: uye.email, phone: uye.phone, title: uye.title,
-        role_ids: [rolId], temporary_password: "Capproje2026!Gecici",
-      }),
-    });
-    if (yanit.ok) say("memberships");
-    else if (yanit.status === 409) atlanan += 1;
-    else hatalar.push(`memberships · ${uye.full_name} · ${yanit.status} ${yanit.metin.slice(0, 160)}`);
-  }
-
   // Yedek kaydı: Yönetim ekranı boş kalmasın.
   const yedek = await fetch(`${BASE.replace("/api/v1", "")}/api/admin/backups`, { method: "POST", headers });
   if (yedek.ok) say("backups");
 }
 
 // --- Çalıştırma ---------------------------------------------------------
+
+// --- Ekip sohbeti ---------------------------------------------------------
+// Tanıtımda sohbetin tek ağızdan yazılmış olması işe yaramıyor; mesajların
+// gerçekten farklı kişilerden gelmesi için ekip üyelerinin oturumu açılır.
+// Davet şifresi geçicidir ve değiştirilmeden yazma yapılamaz, o yüzden önce
+// kalıcıya çevrilir. Kalıcı şifre README'de yazılıdır: tanıtımı yapan kişi
+// istediği rolle girip ekranların rolden role nasıl değiştiğini gösterebilir.
+const DEMO_SIFRE = "Capproje2026!Demo";
+const GECICI_SIFRE = "Capproje2026!Gecici";
+
+async function uyeOturumu(telefon) {
+  for (const sifre of [DEMO_SIFRE, GECICI_SIFRE]) {
+    const giris = await fetch(`${BASE}/auth/password/login`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ phone: telefon, password: sifre }),
+    });
+    if (!giris.ok) continue;
+    const veri = (await giris.json())?.data;
+    const jeton = veri?.session_token;
+    if (!jeton) continue;
+    if (sifre !== DEMO_SIFRE) {
+      await fetch(`${BASE}/auth/password/change`, {
+        method: "POST", headers: { "content-type": "application/json", "x-session-token": jeton },
+        body: JSON.stringify({ current_password: sifre, new_password: DEMO_SIFRE }),
+      });
+    }
+    return jeton;
+  }
+  return null;
+}
+
+// Kanalın kendi numarası yok; ikinci çalıştırmada çoğalmaması için önce aranır.
+async function kanalAc(govde) {
+  const mevcut = await bul("chat-channels", govde.name);
+  if (mevcut) return mevcut;
+  const yanit = await istek("chat-channels", { method: "POST", body: JSON.stringify(govde) });
+  if (yanit.ok) { say("chat-channels"); return yanit.veri; }
+  hatalar.push(`chat-channels · ${govde.name} · ${yanit.status} ${yanit.metin.slice(0, 160)}`);
+  return null;
+}
+
+async function mesajYaz(jeton, kanalId, govde) {
+  const yanit = await fetch(`${BASE}/chat-messages`, {
+    method: "POST",
+    headers: jeton
+      ? { "content-type": "application/json", "x-session-token": jeton }
+      : { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ channel_id: kanalId, ...govde }),
+  });
+  if (yanit.ok) { say("chat-messages"); return; }
+  hatalar.push(`chat-messages · ${yanit.status} ${(await yanit.text()).slice(0, 160)}`);
+}
+
+async function sohbetKur() {
+  const jetonlar = {};
+  for (const uye of ekip) jetonlar[uye.rol] = await uyeOturumu(uye.phone);
+
+  // Mesajlara iliştirilecek gerçek kayıtlar. Tanıtımı yapan kişi sohbetten
+  // kaydın üzerine tıklayıp oradan devam edebilsin diye.
+  const projeler = (await istek("projects?pageSize=50")).veri || [];
+  const projeBul = (kod) => projeler.find((satir) => satir.code === kod);
+  const ilk = async (kaynak, projeId) => ((await istek(`${kaynak}?pageSize=5${projeId ? `&project_id=${projeId}` : ""}`)).veri || [])[0];
+
+  // Proje kanalındaki mesajlar o projenin kendi kayıtlarını göstermeli; başka
+  // bir projenin dosyasını iliştirmek tanıtımda kafa karıştırır. Teslim ve
+  // kalite kaydı ancak ilerlemiş bir projede bulunur, o yüzden kanal kabul
+  // aşamasındaki proje üzerine kuruluyor.
+  const kanalProje = projeBul("CP-26009") || projeler.find((satir) => satir.status === "acceptance") || projeler[0];
+  const talep = await ilk("purchase-requests");
+  const emir = await ilk("production-orders");
+  const kontrol = await ilk("quality-inspections");
+  const hakedis = await ilk("progress-payments");
+  const teslim = await ilk("handovers", kanalProje?.id);
+  const belge = await ilk("files", kanalProje?.id);
+
+  const bag = (modul, kayit, etiket) => kayit?.id ? { link_module: modul, link_record_id: kayit.id, link_label: etiket } : {};
+
+  const kanallar = [
+    {
+      govde: { name: "Genel", kind: "team", topic: "Tüm ekip · günlük koordinasyon" },
+      mesajlar: [
+        { rol: "project_manager", body: "Günaydın. Bu hafta üç projede montaj var, sabah 9'da kısa bir tur yapalım." },
+        { rol: "purchasing", body: "Lake levha siparişi bugün çıkıyor. Onaya düşen talep bu:", ...bag("purchases", talep, talep?.request_number) },
+        { rol: "finance", body: "Hakediş hazırlandı, müşteriye bu hafta gönderiyorum.", ...bag("progressPayments", hakedis, hakedis?.progress_number) },
+        { rol: "project_manager", body: "Eline sağlık. Tahsilat girince finans ekranından işleyelim." },
+      ],
+    },
+    {
+      govde: { name: "Üretim & Montaj", kind: "team", topic: "Atölye ve saha ekibi" },
+      mesajlar: [
+        { rol: "production", body: "Kesim bitti, kenar bantlamaya geçiyoruz. İş emri burada:", ...bag("production", emir, emir?.order_number) },
+        { rol: "hr", body: "Final kontrolde iki kapakta portakallanma vardı, cila tekrarlandı. Rapor ekte:", ...bag("qualityInspections", kontrol, kontrol?.inspection_number) },
+        { rol: "installation", body: "Sahada elektrik altyapısı hazır değil, montajı iki gün kaydırmamız gerekebilir." },
+        { rol: "production", body: "Bizde sıkıntı yok, imalat hazır bekliyor. Tarihi siz verin." },
+        { rol: "project_manager", body: "Müşteriyle konuştum, perşembe sabahına aldık. Ekip planını güncelledim." },
+      ],
+    },
+    {
+      govde: { name: `${kanalProje?.code || "Proje"} · ${kanalProje?.name || "Proje kanalı"}`, kind: "project", project_id: kanalProje?.id, topic: "Projeye özel yazışma" },
+      mesajlar: [
+        { rol: "architect", body: "Revize çizimi yükledim, mutfak adası 12 cm kısaldı. Üretim buna göre başlasın.", ...bag("files", belge, belge?.file_name) },
+        { rol: "production", body: "Gördüm, reçeteyi güncelliyorum. Kesim listesi bugün çıkar." },
+        { rol: "installation", body: "Teslimde iki eksik kalmıştı, ikisi de kapandı.", ...bag("handovers", teslim, teslim?.handover_number) },
+        { rol: "project_manager", body: "Teşekkürler. Müşteri memnuniyet puanı 5 geldi, projeyi kapatıyorum." },
+      ],
+    },
+    {
+      govde: { name: "Duyurular", kind: "announcement", topic: "Yönetimden ekibe" },
+      mesajlar: [
+        { rol: "project_manager", body: "Cuma günü atölyede yıllık bakım var, 14:00'ten sonra makineler durdurulacak." },
+        { rol: "hr", body: "İzin taleplerinizi bu ay 25'ine kadar sisteme girmenizi rica ederim." },
+      ],
+    },
+  ];
+
+  for (const kanal of kanallar) {
+    const kayit = await kanalAc(kanal.govde);
+    if (!kayit) continue;
+    // Kanalda mesaj varsa ikinci çalıştırmada üzerine yazılmaz.
+    if (await varMi("chat-messages", "channel_id", kayit.id)) { atlanan += 1; continue; }
+    for (const mesaj of kanal.mesajlar) {
+      const { rol, ...govde } = mesaj;
+      await mesajYaz(jetonlar[rol], kayit.id, govde);
+    }
+  }
+}
 
 async function main() {
   const oturum = await istek("session");
@@ -836,6 +998,7 @@ async function main() {
   for (const { giris, ...kayit } of stokKartlari) stokKayit.push(await olustur("inventory-items", { ...kayit, status: "active" }));
   const hesapKayit = [];
   for (const kayit of hesaplar) hesapKayit.push(await olustur("accounts", { ...kayit, status: "active" }));
+  const ekipKayit = await ekipKur();
 
   await depoGirisleri(stokKayit);
 
@@ -843,12 +1006,15 @@ async function main() {
   let sira = 0;
   for (const proje of projeler) {
     sira += 1;
-    await projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKayit, merkezKayit, stokKayit, hesapKayit });
+    await projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKayit, merkezKayit, stokKayit, hesapKayit, ekipKayit });
     process.stdout.write(`  ${proje.code} ✓\n`);
   }
 
   console.log("Firma geneli kayıtlar yazılıyor…");
-  await firmaGeneli({ personelKayit, stokKayit, tedarikciKayit });
+  await firmaGeneli({ personelKayit, stokKayit, tedarikciKayit, ekipKayit });
+
+  console.log("Ekip sohbeti yazılıyor…");
+  await sohbetKur();
 
   console.log("\nÖzet:");
   for (const [kaynak, adet] of [...sayac.entries()].sort()) console.log(`  ${kaynak.padEnd(24)} ${adet}`);

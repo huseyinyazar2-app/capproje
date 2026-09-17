@@ -55,6 +55,8 @@ export const API_CONFIG = Object.freeze({
     bomLines: "/bom-lines",
     productionOperations: "/production-operations",
     productionIssues: "/production-issues",
+    chatChannels: "/chat-channels",
+    chatMessages: "/chat-messages",
     notifications: "/notifications",
     search: "/search",
   }),
@@ -85,6 +87,7 @@ let offlineSyncPromise = null;
 
 export const RESOURCE_SLUGS = Object.freeze({
   dashboard: "dashboard",
+  chat: "chat",
   projects: "projects",
   offers: "offers",
   purchases: "purchase-requests",
@@ -643,6 +646,15 @@ export const api = {
   },
   async globalSearch(query) {
     return mapIncoming("dashboard", (await request(withQuery(API_CONFIG.endpoints.search, { q: query }))).data);
+  },
+  // Sohbet ekranı tek uçtan hem kanalları hem yeni mesajları alır. `after`
+  // verildiğinde yanıt çoğu zaman boştur; yoklamanın ucuz olmasının sebebi bu.
+  async chatStream({ channelId, after } = {}) {
+    const params = new URLSearchParams();
+    if (channelId) params.set("channel_id", channelId);
+    if (after) params.set("after", after);
+    const query = params.toString();
+    return (await request(`/chat/stream${query ? `?${query}` : ""}`)).data;
   },
   async notifications() {
     const result = await request(API_CONFIG.endpoints.notifications);
