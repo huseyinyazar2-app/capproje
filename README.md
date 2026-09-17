@@ -33,6 +33,28 @@ pnpm build
 
 Veritabanı migration'ları `prototype/migrations`, Worker API'si `prototype/worker`, canlı arayüz ise `prototype/src/LiveWorkspace.jsx` altındadır.
 
+## Tanıtım verisi
+
+Boş bir kurulumda her ekran boştur ve programın ne yaptığı anlaşılmaz. Aşağıdaki
+betik, bir marangoz atölyesinin gerçek iş akışını taklit eden, birbirine bağlı
+örnek veri yazar: on iki proje farklı aşamalarda (talepten kapanışa), müşteri,
+tedarikçi, keşif, teklif, sözleşme, tasarım, reçete, satın alma, üretim, kalite,
+montaj, teslim, finans ve insan kaynakları kayıtlarıyla birlikte.
+
+```bash
+cd prototype
+CAPPROJE_URL=https://alan-adiniz CAPPROJE_TOKEN=cap_... node scripts/seed-demo.mjs
+```
+
+Anahtarı uygulamadan **Yönetim → API Erişim Anahtarları** ekranından üretin.
+Betik aynı veriyi ikinci kez yazmaz; yarıda kalırsa tekrar çalıştırılabilir.
+Tanıtım verisi gerçek müşteri kayıtlarıyla karışmasın diye ayrı bir firmada
+(tenant) çalıştırılması önerilir.
+
+Kullanım kılavuzu `/kilavuz` adresinde yayınlanır; kaynağı
+`prototype/public/kilavuz.html` ve ekran görüntüleri `prototype/public/kilavuz/`
+altındadır.
+
 ## Ubuntu sunucu hedefi
 
 Uygulama, bulut önizlemesine ek olarak Node.js 24 ve yerel SQLite ile kendi sunucusunda çalışabilir. `prototype/server/index.mjs`; aynı API, tenant izolasyonu ve rol kontrollerini kullanır, migration'ları başlangıçta uygular, yüklenen dosyaları özel veri dizininde saklar ve her gün okunabilir bir SQLite yedeği üretir.
