@@ -467,17 +467,7 @@ sunduğunu ayrıca belirtmesi beklenir.
 | Genel muhasebe defteri | Yok — bilinçli karar. Mevcut muhasebe programında kalır. |
 | Resmi bordro hesaplama | Yok — yalnız bordro girdisi hazırlanır. |
 | E-fatura / e-arşiv kesme | Yok. Fatura kaydı tutulur, resmi kesim dışarıda yapılır. |
-| Muhasebe programı entegrasyonu | Veri alanı hazır (aktarım durumu), **bağlayıcı yazılmadı**. |
-| CAD / CAM entegrasyonu | Yok. Çizimler dosya olarak saklanır. |
-| Anlık mesaj bildirimi (push) | Yok. Sohbet üç saniyede bir sunucuya sorar (polling). WebSocket katmanı yok. |
-| E-posta gönderimi | Yok. Şifre sıfırlama kodu uygulama içinden verilir. |
-| Gantt / zaman çizelgesi görünümü | Yok. Liste, Kanban ve Takvim görünümleri vardır. |
-| Parametrik ürün reçetesi | Yok. Reçete sabit tanımlanır, ölçüye göre otomatik hesaplanmaz. |
-| Tedarikçi performans raporu | Yok. Tedarikçi puanı elle girilir. |
-| Çok dilli arayüz | Yok. Arayüz yalnız Türkçedir. |
-| Uygulama içinden geri yükleme | Bilinçli olarak kapalı; komut satırından yapılır. |
-| Barkod / QR okuma | Yok. |
-| Üretim makinesi (CNC) bağlantısı | Yok. |
+| Muhasebe programı entegrasyonu | Veri alanı hazır (aktarım durumu). Kullanılan muhasebe programının entegrasyon (veri alışverişi) özelliği varsa bağlantı eklenebilir. |
 
 ---
 
