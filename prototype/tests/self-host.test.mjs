@@ -54,6 +54,14 @@ test("static adapter serves the app shell without exposing parent files", async 
   assert.match(await index.text(), /Capproje/);
   const escaped = await storage.fetch(new Request("https://example.test/%2e%2e/secret.txt"));
   assert.equal(escaped.status, 404);
+  // Kök adres bir dizindir. İçindeki index.html sunulmazsa uygulama yalnız
+  // "Accept: text/html" gönderen isteklerde açılır; service worker kurulumu ve
+  // sayfa içi fetch "Not found" alır.
+  const root = await storage.fetch(new Request("https://example.test/"));
+  assert.equal(root.status, 200);
+  assert.match(await root.text(), /Capproje/);
+  // Bulunamadı yanıtı tarayıcıda kalıcılaşmamalı.
+  assert.equal(escaped.headers.get("cache-control"), "no-store");
 });
 
 test("self-host health checks the database and reports file storage", async (t) => {
@@ -112,6 +120,18 @@ test("Node HTTP bridge serves API health and the SPA shell", async (t) => {
   const shell = await fetch(`http://127.0.0.1:${port}/projects`, { headers: { accept: "text/html" } });
   assert.equal(shell.status, 200);
   assert.match(await shell.text(), /Self hosted Capproje/);
+  // Tarayıcı dışından gelen ya da "Accept: */*" gönderen istekler de uygulamayı
+  // almalı: service worker kurulumu, önceden getirme ve sayfa içi fetch böyle
+  // davranır, önceden hepsi "Not found" alıyordu.
+  for (const yol of ["/", "/projects"]) {
+    const yanit = await fetch(`http://127.0.0.1:${port}${yol}`, { headers: { accept: "*/*" } });
+    assert.equal(yanit.status, 200, `${yol} Accept: */* ile açılmalı`);
+    assert.match(await yanit.text(), /Self hosted Capproje/);
+  }
+  // Gerçekten eksik bir dosya 404 kalmalı; HTML döndürmek hatayı gizlerdi.
+  const eksik = await fetch(`http://127.0.0.1:${port}/assets/yok.js`, { headers: { accept: "*/*" } });
+  assert.equal(eksik.status, 404);
+  assert.equal(eksik.headers.get("cache-control"), "no-store");
 });
 
 test("self-host server refuses accidental direct public binding", async () => {

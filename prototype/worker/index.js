@@ -3322,8 +3322,20 @@ async function fetchHandler(request, env, context) {
   }
 
   const response = await env.ASSETS.fetch(request);
+  // Bulunamayan adres tek sayfa uygulamasına düşer. Ölçüt olarak yalnız
+  // "Accept: text/html" kullanmak yetmiyordu: bu başlığı göndermeyen istekler
+  // (service worker kurulumu, sayfa içi fetch, tarayıcının önceden getirmesi)
+  // uygulama yerine "Not found" alıyor ve bu yanıt tarayıcıda kalıcılaşınca
+  // kullanıcı sayfayı bir daha açamıyordu. Uzantısı olan adresler ise gerçekten
+  // bir dosyayı gösterir; eksik bir .js dosyasına HTML döndürmek hatayı
+  // gizleyip çok daha anlaşılmaz bir arızaya çevirirdi.
   const acceptsHtml = request.headers.get("accept")?.includes("text/html");
-  if (response.status !== 404 || !acceptsHtml || !["GET", "HEAD"].includes(request.method)) return secureStaticResponse(response);
+  const looksLikeFile = /\.[a-z0-9]{1,8}$/i.test(url.pathname.split("/").pop() || "");
+  // /api/ altındaki hiçbir adres uygulamaya düşmez: yanlış yazılmış bir API
+  // adresine HTML döndürmek, çağıranın gördüğü hatayı tanınmaz hâle getirir.
+  const apiPath = url.pathname === "/api" || url.pathname.startsWith("/api/");
+  const serveShell = !apiPath && (acceptsHtml || !looksLikeFile);
+  if (response.status !== 404 || !serveShell || !["GET", "HEAD"].includes(request.method)) return secureStaticResponse(response);
   const indexUrl = new URL(request.url);
   indexUrl.pathname = "/index.html";
   indexUrl.search = "";

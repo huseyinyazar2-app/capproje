@@ -130,23 +130,37 @@ const mimeTypes = new Map([
   [".txt", "text/plain; charset=utf-8"], [".webmanifest", "application/manifest+json"], [".woff2", "font/woff2"],
 ]);
 
+function notFound() {
+  return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
+}
+
 export class StaticAssets {
   constructor(root) {
     this.root = path.resolve(root);
   }
 
   async fetch(request) {
-    if (!["GET", "HEAD"].includes(request.method)) return new Response("Not found", { status: 404 });
+    if (!["GET", "HEAD"].includes(request.method)) return notFound();
     let pathname;
     try { pathname = decodeURIComponent(new URL(request.url).pathname); }
-    catch { return new Response("Bad request", { status: 400 }); }
+    catch { return new Response("Bad request", { status: 400, headers: { "cache-control": "no-store" } }); }
     const relative = pathname.replace(/^\/+/, "");
     let target;
     try { target = resolveInside(this.root, relative || "."); }
-    catch { return new Response("Not found", { status: 404 }); }
+    catch { return notFound(); }
     try {
-      const info = await stat(target);
-      if (!info.isFile()) return new Response("Not found", { status: 404 });
+      let info = await stat(target);
+      // Dizin istendiğinde içindeki index.html sunulur. Bu olmadan "/" adresi
+      // dosya olmadığı için 404 dönüyordu; uygulamayı ayakta tutan tek şey
+      // tarayıcının "Accept: text/html" göndermesiydi. Bu başlığı göndermeyen
+      // her istek -- service worker kurulumu, önceden getirme, sayfa içi
+      // fetch -- açılış sayfası yerine "Not found" alıyordu.
+      if (info.isDirectory()) {
+        target = path.join(target, "index.html");
+        try { info = await stat(target); }
+        catch { return notFound(); }
+      }
+      if (!info.isFile()) return notFound();
       const headers = new Headers({
         "content-type": mimeTypes.get(path.extname(target).toLowerCase()) || "application/octet-stream",
         "content-length": String(info.size),
@@ -156,7 +170,7 @@ export class StaticAssets {
       });
       return new Response(request.method === "HEAD" ? null : await readFile(target), { headers });
     } catch (error) {
-      if (error?.code === "ENOENT") return new Response("Not found", { status: 404 });
+      if (error?.code === "ENOENT") return notFound();
       throw error;
     }
   }

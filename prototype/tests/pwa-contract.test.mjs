@@ -58,10 +58,20 @@ test("the service worker is registered only for a production build", () => {
   assert.doesNotMatch(mainSource, /import\.meta\.env\.DEV[^\n]*serviceWorker\.register/);
 });
 
+// Sıralama kontrolleri dosyanın tamamında değil, fetch dinleyicisinin gövdesinde
+// yapılır: kurulum sırasında kabuk dosyalarını önbelleğe yazmak meşrudur ve
+// dosya başında geçtiği için bütün dosyaya bakan bir kontrol onu ihlal sanıyordu.
+function fetchListenerBody() {
+  const start = serviceWorkerSource.indexOf('self.addEventListener("fetch"');
+  assert.ok(start >= 0, "service worker needs a fetch listener");
+  return serviceWorkerSource.slice(start);
+}
+
 test("API requests are never intercepted or stored by the service worker", () => {
-  const apiGuard = serviceWorkerSource.indexOf('url.pathname.startsWith("/api/")');
-  const respondWith = serviceWorkerSource.indexOf("event.respondWith");
-  const cachePut = serviceWorkerSource.indexOf("cache.put");
+  const body = fetchListenerBody();
+  const apiGuard = body.indexOf('url.pathname.startsWith("/api/")');
+  const respondWith = body.indexOf("event.respondWith");
+  const cachePut = body.indexOf("cache.put");
 
   assert.ok(apiGuard >= 0, "service worker needs an explicit /api/ bypass");
   assert.ok(respondWith > apiGuard, "the API bypass must run before respondWith");
@@ -70,12 +80,28 @@ test("API requests are never intercepted or stored by the service worker", () =>
 });
 
 test("runtime shell caching is limited to same-origin GET requests", () => {
-  assert.match(serviceWorkerSource, /request\.method\s*!==\s*["']GET["']/);
-  assert.match(serviceWorkerSource, /url\.origin\s*!==\s*self\.location\.origin/);
-  assert.ok(serviceWorkerSource.indexOf("request.method") < serviceWorkerSource.indexOf("event.respondWith"));
-  assert.ok(serviceWorkerSource.indexOf("url.origin") < serviceWorkerSource.indexOf("event.respondWith"));
-  assert.match(serviceWorkerSource, /response\.ok[^\n]*cache\.put\(request,\s*response\.clone\(\)\)/);
+  const body = fetchListenerBody();
+  assert.match(body, /request\.method\s*!==\s*["']GET["']/);
+  assert.match(body, /url\.origin\s*!==\s*self\.location\.origin/);
+  assert.ok(body.indexOf("request.method") < body.indexOf("event.respondWith"));
+  assert.ok(body.indexOf("url.origin") < body.indexOf("event.respondWith"));
+  // Yalnız başarılı yanıtlar saklanır: bir hata sayfasını önbelleğe almak,
+  // kullanıcıyı o hataya kalıcı olarak kilitler.
+  assert.match(body, /response\.ok[^\n]*cache\.put\(request,\s*response\.clone\(\)\)/);
   assert.match(serviceWorkerSource, /caches\.match\(["']\/index\.html["']\)/);
+});
+
+test("the shell survives an install where one asset fails", () => {
+  // cache.addAll tek bir hatada tümünü iptal eder ve service worker hiç
+  // kurulmaz; kabuk dosyaları bu yüzden tek tek yazılmalıdır.
+  assert.doesNotMatch(serviceWorkerSource, /cache\.addAll\(/);
+  assert.match(serviceWorkerSource, /APP_SHELL\.map\(/);
+});
+
+test("a failed navigation falls back to the cached shell", () => {
+  const body = fetchListenerBody();
+  assert.match(body, /request\.mode\s*===\s*["']navigate["']/);
+  assert.match(body, /!response\.ok[^\n]*Navigation|!response\.ok[^\n]*isNavigation/);
 });
 
 test("offline mode queues only allowlisted creates and blocks critical mutations", () => {
