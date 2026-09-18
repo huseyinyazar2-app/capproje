@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useState } from "react";
+import React, { lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { ErrorBoundary } from "./ErrorBoundary.jsx";
@@ -8,12 +8,14 @@ const LiveWorkspace = lazy(() => import("./LiveWorkspace.jsx").then(({ LiveWorks
 
 function Root() {
   const params = new URLSearchParams(window.location.search);
-  const [prototypeMode, setPrototypeMode] = useState(() => params.get("prototype") === "1" || (import.meta.env.DEV && params.get("live") !== "1"));
+  // Prototip tasarımına yalnız adresten geçilir; uygulamanın içinde artık
+  // buna açılan bir düğme yok.
+  const prototypeMode = params.get("prototype") === "1" || (import.meta.env.DEV && params.get("live") !== "1");
 
   return (
     <ErrorBoundary>
       <Suspense fallback={<div role="status" style={{ padding: "2rem", fontFamily: "system-ui", color: "#20262c" }}>Capproje hazırlanıyor…</div>}>
-        {prototypeMode ? <PrototypeApp /> : <LiveWorkspace onBackToPrototype={() => setPrototypeMode(true)} />}
+        {prototypeMode ? <PrototypeApp /> : <LiveWorkspace />}
       </Suspense>
     </ErrorBoundary>
   );
