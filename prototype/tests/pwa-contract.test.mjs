@@ -121,6 +121,23 @@ test("a redirect stays a redirect so the address bar follows it", () => {
   assert.match(fetchListenerBody(), /response\.type\s*===\s*["']opaqueredirect["'][^\n]*return response/);
 });
 
+test("the running build is identifiable from the screen", async () => {
+  const viteConfig = await readFile(new URL("../vite.config.mjs", import.meta.url), "utf8");
+  // Bir dağıtımın sunucuya gerçekten çıkıp çıkmadığı, kullanıcıya dosya adresi
+  // açtırmadan, uygulamanın kendisine bakılarak anlaşılabilmeli.
+  assert.match(viteConfig, /define:\s*\{[^}]*__BUILD_STAMP__/s);
+  assert.match(viteConfig, /builtAt:\s*new Date\(\)\.toISOString\(\)/);
+  assert.match(workspaceSource, /typeof __BUILD_STAMP__/);
+
+  const topbar = workspaceSource.split("\n").find((line) => line.includes('className="live-topbar"'));
+  assert.ok(topbar?.includes('className="live-build"'), "sürüm damgası üst çubukta görünmeli");
+
+  // Giriş yapılamayan bir cihazda da sürüm okunabilmeli.
+  const loginBrands = workspaceSource.match(/className="live-login-brand"[\s\S]{0,300}?<\/div><\/div>/g) || [];
+  assert.ok(loginBrands.length >= 2, `giriş ekranı marka bloğu bulunamadı: ${loginBrands.length}`);
+  for (const block of loginBrands) assert.ok(block.includes('className="live-build"'), "sürüm damgası giriş ekranında da görünmeli");
+});
+
 test("offline mode queues only allowlisted creates and blocks critical mutations", () => {
   assert.match(workspaceSource, /navigator\.onLine/);
   assert.match(workspaceSource, /addEventListener\(["']offline["']/);
