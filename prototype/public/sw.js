@@ -1,4 +1,4 @@
-const CACHE_NAME = "capproje-shell-v2";
+const CACHE_NAME = "capproje-shell-v3";
 const APP_SHELL = ["/", "/index.html", "/manifest.webmanifest"];
 
 // Kurulum tek bir dosya yüzünden çökmemeli. cache.addAll listedeki herhangi bir
@@ -30,6 +30,15 @@ async function cachedShell() {
   return (await caches.match("/index.html")) || (await caches.match("/"));
 }
 
+// Geri düğmesiyle açılan sayfalar tarayıcı önbelleğini tazeliğini doğrulamadan
+// kullanır. Adrese ait hatalı bir yanıt bir kez saklanmışsa geri tuşu sürekli
+// onu gösterir, sunucu düzelse bile. Bu yüzden sayfa açılışlarında önbellek
+// atlanıp ağa gidilir. Yönlendirmeler tarayıcıya bırakılır ki adres çubuğu
+// hedefi gösterebilsin.
+function freshNavigation(request) {
+  return fetch(request.url, { cache: "reload", credentials: "same-origin", redirect: "manual" });
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -42,7 +51,8 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith((async () => {
     try {
-      const response = await fetch(request);
+      const response = isNavigation ? await freshNavigation(request) : await fetch(request);
+      if (response.type === "opaqueredirect") return response;
       if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone())).catch(() => {});
       if (!response.ok && isNavigation) return (await cachedShell()) || response;
       return response;

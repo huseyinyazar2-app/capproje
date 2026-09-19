@@ -132,6 +132,13 @@ test("Node HTTP bridge serves API health and the SPA shell", async (t) => {
   const eksik = await fetch(`http://127.0.0.1:${port}/assets/yok.js`, { headers: { accept: "*/*" } });
   assert.equal(eksik.status, 404);
   assert.equal(eksik.headers.get("cache-control"), "no-store");
+  // Uygulama kabuğu her açılışta doğrulanmalı. Tarayıcı, geri düğmesiyle açılan
+  // sayfalarda saklı kopyanın tazeliğini sormaz; kabuk "no-cache" taşımazsa eski
+  // bir yanıt telefonda kalıcı olarak takılı kalır.
+  for (const yol of ["/", "/projects"]) {
+    const yanit = await fetch(`http://127.0.0.1:${port}${yol}`, { headers: { accept: "text/html" } });
+    assert.match(yanit.headers.get("cache-control") || "", /no-cache|no-store/, `${yol} her açılışta doğrulanmalı`);
+  }
 });
 
 test("self-host server refuses accidental direct public binding", async () => {

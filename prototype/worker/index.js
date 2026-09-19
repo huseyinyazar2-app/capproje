@@ -3318,7 +3318,10 @@ async function fetchHandler(request, env, context) {
   // adres tek sayfa uygulamasına düşeceği için buradan dosyaya yönlendiriliyor;
   // müşteriye ".html" uzantılı bir adres vermek zorunda kalmayalım.
   if (["/kilavuz", "/kilavuz/"].includes(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
-    return new Response(null, { status: 308, headers: { location: "/kilavuz.html" } });
+    // Kalıcı yönlendirmeler tarayıcıda süresiz saklanır. "no-cache" ile her
+    // açılışta doğrulanır; böylece hedef değişirse eski adresi açan telefonlar
+    // eski yanıta kilitlenmez.
+    return new Response(null, { status: 308, headers: { location: "/kilavuz.html", "cache-control": "no-cache" } });
   }
 
   const response = await env.ASSETS.fetch(request);

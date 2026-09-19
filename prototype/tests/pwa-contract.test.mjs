@@ -104,6 +104,23 @@ test("a failed navigation falls back to the cached shell", () => {
   assert.match(body, /!response\.ok[^\n]*Navigation|!response\.ok[^\n]*isNavigation/);
 });
 
+test("page loads skip the browser cache so the back button cannot resurrect a bad response", () => {
+  // Telefonda geri tuşuna basıldığında tarayıcı, sakladığı kopyanın hâlâ geçerli
+  // olup olmadığını sunucuya sormaz. Bir kez hatalı bir yanıt saklanırsa geri
+  // tuşu sunucu düzeldikten sonra bile aynı hatayı göstermeye devam eder.
+  assert.match(serviceWorkerSource, /function freshNavigation/);
+  assert.match(serviceWorkerSource, /cache:\s*["']reload["'][^\n]*credentials/);
+  assert.match(fetchListenerBody(), /isNavigation\s*\?\s*await freshNavigation\(request\)/);
+});
+
+test("a redirect stays a redirect so the address bar follows it", () => {
+  // /kilavuz gibi yönlendirmeler tarayıcıya bırakılmalı: service worker
+  // yönlendirmeyi kendisi izlerse adres çubuğu hedefi göstermez ve tarayıcı
+  // yönlendirilmiş bir yanıtı sayfa açılışı olarak kabul etmez.
+  assert.match(serviceWorkerSource, /redirect:\s*["']manual["']/);
+  assert.match(fetchListenerBody(), /response\.type\s*===\s*["']opaqueredirect["'][^\n]*return response/);
+});
+
 test("offline mode queues only allowlisted creates and blocks critical mutations", () => {
   assert.match(workspaceSource, /navigator\.onLine/);
   assert.match(workspaceSource, /addEventListener\(["']offline["']/);
