@@ -3290,7 +3290,9 @@ function reportFilterClause(filter, field, clauses, bindings) {
   return null;
 }
 
-async function buildReportPlan(env, principal, definition, preview) {
+// `mode`: "preview" ekranda ilk bakış, "run" tam çalıştırma, "export" dosyaya
+// döküm. Üçü yalnız satır sınırında ayrışır.
+async function buildReportPlan(env, principal, definition, mode) {
   if (!definition || typeof definition !== "object" || Array.isArray(definition)) return { error: problem(422, "validation_error", "Rapor tanımı bir JSON nesnesi olmalıdır.") };
   const slug = aliases[definition.resource] || definition.resource;
   const config = resources[slug];
@@ -3413,10 +3415,15 @@ async function buildReportPlan(env, principal, definition, preview) {
   }
 
   const requestedLimit = Number(definition.limit);
-  let limit = Number.isFinite(requestedLimit) && Math.floor(requestedLimit) >= 1 ? Math.min(REPORT_MAX_LIMIT, Math.floor(requestedLimit)) : REPORT_DEFAULT_LIMIT;
+  // Varsayılan sınır ekrana bakarken makuldür, dosyaya dökerken değil: "indir"
+  // diyen kişi veriyi ister. 2000 projesi olan firma 500 satır indirip bunu
+  // fark etmezse yanlış sayıyla karar verir; sessiz veri kaybı en kötü hata
+  // türüdür. Açıkça yazılmış sınır her iki kipte de aynen korunur.
+  const fallbackLimit = mode === "export" ? REPORT_MAX_LIMIT : REPORT_DEFAULT_LIMIT;
+  let limit = Number.isFinite(requestedLimit) && Math.floor(requestedLimit) >= 1 ? Math.min(REPORT_MAX_LIMIT, Math.floor(requestedLimit)) : fallbackLimit;
   // Önizlemede istemcinin gönderdiği sınır hiç dikkate alınmaz; "önizleme"
   // diyip 5000 satır çekmek mümkün olmamalı.
-  if (preview) limit = REPORT_PREVIEW_LIMIT;
+  if (mode === "preview") limit = REPORT_PREVIEW_LIMIT;
 
   const where = clauses.join(" AND ");
   const order = orderParts.length ? ` ORDER BY ${orderParts.join(",")}` : "";
@@ -3470,7 +3477,7 @@ async function savedReportWriteProblem({ env, principal, values, existing }) {
   if (definition && typeof definition === "object" && definition.resource !== undefined && definition.resource !== resource) {
     return problem(422, "report_resource_mismatch", "Rapor tanımındaki kaynak, raporun kaynağıyla aynı olmalıdır.");
   }
-  const plan = await buildReportPlan(env, principal, { ...definition, resource }, false);
+  const plan = await buildReportPlan(env, principal, { ...definition, resource }, "run");
   return plan.error || null;
 }
 
@@ -3494,39 +3501,82 @@ async function reportFields(env, principal) {
   return json({ data });
 }
 
+// Kaydedilmiş rapor iki uçtan da çalıştırılıyor; okunması tek yerde durur ki
+// satır kapsamı birinde uygulanıp diğerinde unutulmasın. Yetkili kaynak
+// raporun `resource` sütunudur: tanımın içindeki kopyayla ayrıştığında listede
+// bir şey gösterip başka bir şey çalıştıran kayıt üretilir.
+async function loadSavedReport(env, principal, reportId) {
+  if (!validId(reportId)) return { error: problem(400, "invalid_id", "Geçersiz rapor kimliği.") };
+  const config = resources["saved-reports"];
+  const scope = rowScopeFor(config, principal, "read");
+  const row = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(reportId, principal.tenantId, ...scope.bindings));
+  if (!row) return { error: problem(404, "not_found", "Rapor bulunamadı.") };
+  let definition;
+  try { definition = typeof row.definition_json === "string" ? JSON.parse(row.definition_json) : row.definition_json; }
+  catch { return { error: problem(422, "invalid_report_definition", "Rapor tanımı okunamadı.") }; }
+  return { row, definition: { ...definition, resource: row.resource } };
+}
+
+// Döküm izini tek yer yazar: aynı dökümün iki uçtan iki ayrı biçimde iz
+// bırakması, denetim kaydını sonradan okunamaz hale getirir.
+function auditReportExport(env, principal, request, reportId, plan, rowCount) {
+  return audit(env, principal, request, "export", "saved-reports", reportId, { resource: plan.slug, row_count: rowCount });
+}
+
 async function runReport(request, env, principal) {
   if (!allowed(principal, "reports.read")) return problem(403, "forbidden", "Rapor çalıştırma yetkiniz yok.");
   let body;
   try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", response.status === 415 ? "Content-Type application/json olmalıdır." : "Geçersiz JSON."); }
-  const preview = body?.preview === true;
-  const plan = await buildReportPlan(env, principal, body?.definition, preview);
+  // CSV'yi istemci yazıyor, sunucu değil. Ama veriyi firma dışına çıkaran çağrı
+  // ekrana bakan çağrıyla aynı şey değildir: kendi yetkisini ister, kendi izini
+  // bırakır ve önizleme sınırına düşmez.
+  const exporting = body?.export === true;
+  if (exporting && !allowed(principal, "export")) return problem(403, "forbidden", "Dışa aktarma yetkiniz yok.");
+  const savedReportId = body?.savedReportId ?? null;
+  // İkisi birden geldiğinde hangisinin çalıştığı tahmine kalırdı; sessizce
+  // birini seçmek, kullanıcının bakmadığı tanımı çalıştırmak demektir.
+  if (savedReportId !== null && (body?.definition ?? null) !== null) return problem(422, "ambiguous_report_source", "savedReportId ile definition birlikte gönderilemez.");
+  let definition = body?.definition;
+  if (savedReportId !== null) {
+    const saved = await loadSavedReport(env, principal, savedReportId);
+    if (saved.error) return saved.error;
+    definition = saved.definition;
+  }
+  // Döküm önizleme olamaz: 20 satırlık bir dosya kimsenin işine yaramaz.
+  const mode = exporting ? "export" : body?.preview === true ? "preview" : "run";
+  const preview = mode === "preview";
+  const plan = await buildReportPlan(env, principal, definition, mode);
   if (plan.error) return plan.error;
   let result;
   try { result = await runReportPlan(env, principal, plan); }
   catch (error) { return problem(422, "report_query_failed", "Rapor çalıştırılamadı; tanımı kontrol edin.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
+  if (exporting) await auditReportExport(env, principal, request, savedReportId, plan, result.rows.length);
   return json({ data: { columns: result.columns, rows: result.rows }, meta: { rowCount: result.rows.length, truncated: result.rows.length >= plan.limit, preview } });
 }
 
+// Bağlı kaydın adı zaten sütunlarda varken ham kimliği de yazmak, dosyayı açan
+// insana aynı bilgiyi ikinci kez, üstelik okunamaz biçimde gösterir.
+function csvReportColumns(columns) {
+  const keys = columns.map((column) => column.key);
+  return keys.filter((key) => !(key.endsWith("_id") && keys.includes(`${key.slice(0, -3)}_name`)));
+}
+
+// Bu uç dış sistem entegrasyonları için duruyor; arayüz CSV'yi kendi üretir.
+// Durum kodları burada ham kalır: bir API tüketicisi `lead` bekler, ekrandaki
+// "Talep" etiketini değil. Etiket sözlüğü istemcide, tek kopya.
 async function exportReport(request, env, principal) {
   if (!allowed(principal, "export")) return problem(403, "forbidden", "Dışa aktarma yetkiniz yok.");
   if (!allowed(principal, "reports.read")) return problem(403, "forbidden", "Rapor görüntüleme yetkiniz yok.");
   const reportId = new URL(request.url).searchParams.get("id");
-  if (!validId(reportId)) return problem(400, "invalid_id", "Geçersiz rapor kimliği.");
-  const config = resources["saved-reports"];
-  const scope = rowScopeFor(config, principal, "read");
-  const row = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(reportId, principal.tenantId, ...scope.bindings));
-  if (!row) return problem(404, "not_found", "Rapor bulunamadı.");
-  let definition;
-  try { definition = typeof row.definition_json === "string" ? JSON.parse(row.definition_json) : row.definition_json; }
-  catch { return problem(422, "invalid_report_definition", "Rapor tanımı okunamadı."); }
-  // Yetkili kaynak, tanımın içi değil raporun kendi sütunudur.
-  const plan = await buildReportPlan(env, principal, { ...definition, resource: row.resource }, false);
+  const saved = await loadSavedReport(env, principal, reportId);
+  if (saved.error) return saved.error;
+  const plan = await buildReportPlan(env, principal, saved.definition, "export");
   if (plan.error) return plan.error;
   let result;
   try { result = await runReportPlan(env, principal, plan); }
   catch (error) { return problem(422, "report_query_failed", "Rapor çalıştırılamadı; tanımı kontrol edin.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
-  await audit(env, principal, request, "export", "saved-reports", reportId, { resource: plan.slug, row_count: result.rows.length });
-  return csvResponse(result.columns.map((column) => column.key), result.rows, `rapor-${plan.slug}`);
+  await auditReportExport(env, principal, request, reportId, plan, result.rows.length);
+  return csvResponse(csvReportColumns(result.columns), result.rows, `rapor-${plan.slug}`);
 }
 
 async function dispatchAuthenticated(request, env, principal, url, segments) {

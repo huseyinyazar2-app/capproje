@@ -510,3 +510,182 @@ test("sahip muafiyeti yalnız saved-reports'a özeldir, diğer kaynakların silm
   // Başka firmanın kaydı yine görünmez.
   assert.equal((await send(env, "/api/v1/projects/prj-x", { method: "DELETE", email: "owner@a.test" })).status, 404);
 });
+
+const postRun = (env, body, email) => send(env, "/api/v1/reports/run", { method: "POST", body, email });
+const exporter = { id: "disa-aktaran", email: "disa@a.test", name: "Dışa Aktaran", permissions: ["reports.read", "reports.write", "projects.read", "customers.read", "export"] };
+
+// Önizleme sınırının gerçekten sınır olduğunu görebilmek için 20'den fazla satır gerekir.
+function seedManyProjects(database, count) {
+  for (let index = 1; index <= count; index += 1) {
+    database.prepare("INSERT INTO projects (id,tenant_id,customer_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(`prj-c${index}`, "tenant-a", "cus-a", `C-${String(index).padStart(3, "0")}`, `Çok ${index}`, "production", timestamp, timestamp);
+  }
+}
+
+const exportLogs = (database) => database.prepare("SELECT * FROM audit_logs WHERE action='export' AND entity_type='saved-reports'").all();
+
+test("kaydedilmiş rapor kimliğiyle çalıştırma satır kapsamına uyar ve kaynağı sütundan alır", async () => {
+  const other = { id: "baskasi", email: "baskasi@a.test", name: "Başkası", permissions: ["reports.read", "projects.read", "customers.read"] };
+  const { database, env } = await setup({ users: [reporter, other] });
+  seedProjects(database);
+
+  const mine = (await payload(await send(env, "/api/v1/saved-reports", {
+    method: "POST", email: reporter.email,
+    body: { name: "Özel raporum", visibility: "private", resource: "projects", definition_json: { resource: "projects", columns: ["code", "name"], sort: [{ field: "code", direction: "asc" }] } },
+  }))).data;
+
+  const owned = await postRun(env, { savedReportId: mine.id }, reporter.email);
+  assert.equal(owned.status, 200);
+  assert.deepEqual((await payload(owned)).data.rows.map((row) => row.code), ["P-1", "P-2", "P-3"]);
+
+  // Başkasının özel raporu, kimliği bilinse bile çalıştırılamaz.
+  const stolen = await postRun(env, { savedReportId: mine.id }, other.email);
+  assert.equal(stolen.status, 404, "başkasının özel raporu rapor kimliğiyle de çalıştırılamamalı");
+  assert.equal((await payload(stolen)).error.code, "not_found");
+
+  assert.equal((await postRun(env, { savedReportId: "rep_yok" }, reporter.email)).status, 404);
+  assert.equal((await postRun(env, { savedReportId: "../../etc/passwd" }, reporter.email)).status, 400);
+
+  // Kaynak iki yerde duruyor; çalıştıran taraf için yetkili olan sütundur.
+  // Tanımın içine sonradan başka bir kaynak sızarsa rapor yine kendi
+  // tablosundan okumalı.
+  database.prepare("UPDATE saved_reports SET definition_json=? WHERE id=?")
+    .run(JSON.stringify({ resource: "customers", columns: ["code", "name"], sort: [{ field: "code", direction: "asc" }] }), mine.id);
+  const fromColumn = await payload(await postRun(env, { savedReportId: mine.id }, reporter.email));
+  assert.deepEqual(fromColumn.data.rows.map((row) => row.name), ["Lobi", "Odalar", "Mutfak"], "kaynak tanımdan değil saved_reports.resource sütunundan gelmeli");
+});
+
+test("savedReportId ile definition birlikte gönderilemez", async () => {
+  const { database, env } = await setup({ users: [reporter] });
+  seedProjects(database);
+  const saved = (await payload(await send(env, "/api/v1/saved-reports", {
+    method: "POST", email: reporter.email,
+    body: { name: "Rapor", resource: "projects", definition_json: { resource: "projects", columns: ["code"] } },
+  }))).data;
+
+  const both = await postRun(env, { savedReportId: saved.id, definition: { resource: "projects", columns: ["name"] } }, reporter.email);
+  assert.equal(both.status, 422);
+  assert.equal((await payload(both)).error.code, "ambiguous_report_source");
+  // Hiçbiri gelmediğinde eski davranış: tanım eksik.
+  assert.equal((await postRun(env, {}, reporter.email)).status, 422);
+});
+
+test("export bayrağı kendi yetkisini arar, tam sınırla çalışır ve denetim kaydı bırakır", async () => {
+  const { database, env } = await setup({ users: [reporter, exporter] });
+  seedProjects(database);
+  seedManyProjects(database, 25);
+
+  const saved = (await payload(await send(env, "/api/v1/saved-reports", {
+    method: "POST", email: exporter.email,
+    body: { name: "Üretimdekiler", resource: "projects", visibility: "shared", definition_json: { resource: "projects", columns: ["code", "name"], filters: [{ field: "status", op: "eq", value: "production" }] } },
+  }))).data;
+
+  // Rapor yetkisi var, dışa aktarma yetkisi yok: veri firma dışına çıkamaz.
+  const denied = await postRun(env, { savedReportId: saved.id, export: true }, reporter.email);
+  assert.equal(denied.status, 403, "export yetkisi olmadan bayrak kullanılamamalı");
+  assert.equal(exportLogs(database).length, 0, "reddedilen istek denetim kaydı bırakmamalı");
+
+  const response = await postRun(env, { savedReportId: saved.id, export: true }, exporter.email);
+  assert.equal(response.status, 200);
+  const body = await payload(response);
+  // Üretimdeki 2 tohum projesi + 25 ek satır; önizleme sınırı (20) uygulanmamalı.
+  assert.equal(body.meta.rowCount, 27, "döküm önizleme sınırına düşmemeli");
+  assert.equal(body.meta.preview, false);
+  assert.equal(body.meta.truncated, false);
+
+  const logs = exportLogs(database);
+  assert.equal(logs.length, 1, "döküm tam olarak bir denetim kaydı yazmalı");
+  assert.equal(logs[0].entity_id, saved.id);
+  assert.equal(logs[0].user_id, exporter.id);
+  assert.deepEqual(JSON.parse(logs[0].changes_json), { resource: "projects", row_count: 27 });
+
+  // Bayrak, istemci "önizleme" dese bile önizlemeyi bastırır: yarım dosya
+  // indirmek, yanlış dosya indirmektir.
+  const forced = await payload(await postRun(env, { savedReportId: saved.id, export: true, preview: true }, exporter.email));
+  assert.equal(forced.meta.rowCount, 27);
+  assert.equal(forced.meta.preview, false);
+
+  // Bayrak gövdeden gelen tanımla da çalışır; kayıtlı rapor olmadığında iz
+  // kimliksiz kalır ama yine bırakılır.
+  const inline = await postRun(env, { definition: { resource: "projects", columns: ["code"] }, export: true }, exporter.email);
+  assert.equal(inline.status, 200);
+  const inlineLog = exportLogs(database).find((log) => log.entity_id === null);
+  assert.ok(inlineLog, "gövdeden gelen tanımın dökümü de iz bırakmalı");
+  assert.equal(JSON.parse(inlineLog.changes_json).row_count, 28);
+});
+
+test("bayraksız çalıştırma eskisi gibi davranır", async () => {
+  const { database, env } = await setup({ users: [exporter] });
+  seedProjects(database);
+  seedManyProjects(database, 25);
+
+  const preview = await payload(await runReport(env, { resource: "projects", columns: ["code"] }, { email: exporter.email, preview: true }));
+  assert.equal(preview.data.rows.length, 20, "önizleme sınırı olduğu gibi kalmalı");
+  assert.equal(preview.meta.preview, true);
+  assert.equal(preview.meta.truncated, true);
+
+  const full = await payload(await runReport(env, { resource: "projects", columns: ["code"] }, { email: exporter.email }));
+  assert.equal(full.data.rows.length, 28);
+  assert.equal(full.meta.preview, false);
+
+  // Dışa aktarma yetkisi olan kullanıcı bile bayrak koymadan iz bırakmaz:
+  // ekrana bakmak dışa aktarmak değildir.
+  assert.equal(exportLogs(database).length, 0);
+});
+
+test("CSV dökümünde bağlı kaydın adı varken ham kimlik yazılmaz", async () => {
+  const { database, env } = await setup({ users: [exporter] });
+  seedProjects(database);
+
+  const saved = (await payload(await send(env, "/api/v1/saved-reports", {
+    method: "POST", email: exporter.email,
+    body: { name: "Müşteriye göre", resource: "projects", definition_json: { resource: "projects", columns: ["code", "customer_id", "manager_user_id", "status"], filters: [{ field: "status", op: "eq", value: "production" }], sort: [{ field: "code", direction: "asc" }] } },
+  }))).data;
+
+  const csv = await (await send(env, `/api/v1/reports/export?id=${saved.id}`, { email: exporter.email })).text();
+  const lines = csv.replace(/^﻿/, "").trim().split("\r\n");
+  assert.deepEqual(lines[0].split(",").map((cell) => cell.replaceAll('"', "")), ["code", "customer_name", "manager_user_id", "status"]);
+  assert.ok(!lines[0].includes("customer_id"), "adı yazılan bağlı kaydın kimliği dosyaya girmemeli");
+  assert.ok(!lines.some((line) => line.includes("cus-a")), "ham kimlik hiçbir satırda görünmemeli");
+  assert.equal(lines[1], '"P-1","Beyaz Otel",,"production"', "adı çözülemeyen kimlik sütunu yerinde kalmalı");
+  // Durum kodu ham kalır: bu uç dış sistemler için duruyor, Türkçe etiket
+  // sözlüğü istemcide tek kopya halinde bekliyor.
+  assert.ok(lines[1].includes('"production"'));
+});
+
+test("döküm sınırı: yazılmamış limit tavana çıkar, yazılmış limit korunur", async () => {
+  const { database, env } = await setup({ users: [exporter] });
+  seedProjects(database);
+  seedManyProjects(database, 520);
+  const production = { resource: "projects", columns: ["code"], filters: [{ field: "status", op: "eq", value: "production" }] };
+  // Tohumdaki 2 üretim projesi + 520 ek satır.
+  const total = 522;
+
+  // Ekranda varsayılan sınır yerinde: 500 satırda kesilir ve kesildiği söylenir.
+  const onScreen = await payload(await runReport(env, production, { email: exporter.email }));
+  assert.equal(onScreen.data.rows.length, 500);
+  assert.equal(onScreen.meta.truncated, true);
+
+  // Dosyada ise sınır yazılmadığı sürece tavan geçerli: indiren kişi veriyi
+  // ister, sessizce eksik gelen dosya yanlış karara yol açar.
+  const downloaded = await payload(await postRun(env, { definition: production, export: true }, exporter.email));
+  assert.equal(downloaded.data.rows.length, total, "limit yazılmamış döküm 500'de kesilmemeli");
+  assert.ok(downloaded.data.rows.length > 500);
+  assert.equal(downloaded.meta.truncated, false);
+
+  // Açık niyet her zaman korunur: kullanıcının yazdığı sınır yok sayılmaz.
+  const capped = await payload(await postRun(env, { definition: { ...production, limit: 100 }, export: true }, exporter.email));
+  assert.equal(capped.data.rows.length, 100, "tanımdaki limit dökümde de geçerli olmalı");
+  assert.equal(capped.meta.truncated, true);
+
+  // Aynı kural CSV ucunda da geçerli; iki döküm yolu ayrışmamalı.
+  const savedIds = [];
+  for (const [name, definition] of [["Sınırsız", production], ["Yüz satır", { ...production, limit: 100 }]]) {
+    savedIds.push((await payload(await send(env, "/api/v1/saved-reports", {
+      method: "POST", email: exporter.email, body: { name, resource: "projects", definition_json: definition },
+    }))).data.id);
+  }
+  const dataLines = async (reportId) => (await (await send(env, `/api/v1/reports/export?id=${reportId}`, { email: exporter.email })).text()).trim().split("\r\n").length - 1;
+  assert.equal(await dataLines(savedIds[0]), total, "CSV ucu da yazılmamış limitte tavana çıkmalı");
+  assert.equal(await dataLines(savedIds[1]), 100);
+});
