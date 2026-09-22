@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { createRuntime, startSelfHostedServer } from "../server/index.mjs";
 
 const workspaceUrl = new URL("../src/LiveWorkspace.jsx", import.meta.url);
 const apiUrl = new URL("../src/api.js", import.meta.url);
@@ -18,6 +21,21 @@ function section(source, startNeedle, endNeedle) {
 }
 
 const reportScreen = section(liveSource, "const REPORT_PREVIEW_DELAY_MS", "function ProjectCommandCenterModal(");
+
+// Etiket ve sütun yardımcıları JSX dosyasında yaşıyor, node doğrudan içeri
+// alamıyor. Kaynaktan kesip derlemek, davranışı metin eşleştirmesiyle değil
+// gerçekten çalıştırarak denetlemeyi sağlıyor.
+function loadReportHelpers() {
+  const parts = [
+    section(apiSource, "export const RESOURCE_SLUGS", "// Rapor kurucusu bu haritayı").replace("export ", ""),
+    section(apiSource, "export const FIELD_MAPS", "// Etiket → sunucu durum kodu").replace("export ", ""),
+    section(liveSource, "const field = (name, label", "const operationalViews"),
+    section(liveSource, "const reportColumnNameFor", "// Sunucu `definition_json`"),
+    "return { reportColumnLabel, reportColumnLabels, sharedColumnLabels, humanizeColumnName, collapseReportColumns, reportPresentedValue };",
+  ];
+  return new Function(parts.join("\n"))();
+}
+const helpers = loadReportHelpers();
 const reportLabels = section(liveSource, "const reportColumnNameFor", "const auditActionLabels");
 const reportApi = section(apiSource, "async reportFields()", "async workflow(");
 const liveStyles = section(liveSource, "function LiveStyles()", "\n  `}</style>;");
@@ -125,8 +143,8 @@ test("önizleme yenilenirken eski sonuç yerinde kalır ve sönükleşir", () =>
 });
 
 test("biçimlendirme var olan yardımcılarla yapılır, yeni biçimlendirici yazılmaz", () => {
-  assert.match(reportScreen, /formatValue\(reportCellValue\(column\.key, row\[column\.key\], column\.type\), column\.type, row\)/);
-  assert.match(reportScreen, /<Status>\{row\[column\.key\]\}<\/Status>/);
+  assert.match(reportScreen, /formatValue\(reportCellValue\(column\.key, cell, column\.type\), column\.type, row\)/);
+  assert.match(reportScreen, /<Status>\{cell\}<\/Status>/);
 
   for (const source of [reportScreen, reportLabels]) {
     assert.doesNotMatch(source, /new Intl\.(NumberFormat|DateTimeFormat)/, "rapor kodu yeni bir biçimlendirici kurmamalı");
@@ -169,10 +187,12 @@ test("süzgeç alanın tipine göre giriş açar", () => {
   assert.match(reportScreen, /Math\.round\(Number\(part\) \* 100\)/);
 });
 
-test("durum seçenekleri sunucunun alan kataloğundan gelir, tahmin edilmez", () => {
+test("seçenek listeleri sunucunun alan kataloğundan gelir, tahmin edilmez", () => {
   // Tek doğruluk kaynağı /reports/fields yanıtındaki values dizisi.
-  assert.match(reportScreen, /const statusChoicesFor = \(key\) => \(resourceColumns\.find\(\(item\) => item\.key === key\)\?\.values \|\| \[\]\)\.map\(\(value\) => \(\{ value, label: localizedEnum\(value\) \}\)\)/);
-  assert.match(reportScreen, /const statusChoices = statusChoicesFor\(item\.field\);/);
+  assert.match(reportScreen, /const choicesFor = \(key\) => \(resourceColumns\.find\(\(item\) => item\.key === key\)\?\.values \|\| \[\]\)\.map\(\(value\) => \(\{ value, label: localizedEnum\(value\) \}\)\)/);
+  assert.match(reportScreen, /const choices = choicesFor\(item\.field\);/);
+  // Durum dışındaki sabit değerli sütunlar da listeden seçilir.
+  assert.match(reportScreen, /const operatorsForColumn = \(key, type\) => reportOperatorsFor\(choicesFor\(key\)\.length \? "status" : type\)/);
 
   // Yerel tahmin kaynakları rapor kodunda hiç kullanılmamalı.
   for (const source of [reportScreen, reportLabels]) {
@@ -181,17 +201,18 @@ test("durum seçenekleri sunucunun alan kataloğundan gelir, tahmin edilmez", ()
   assert.doesNotMatch(apiSource, /export function statusOptionsFor/);
 
   // Kullanıcıya Türkçe gösterilir, sunucuya ham kod gider.
-  assert.match(reportScreen, /statusChoices\.map\(\(option\) => <option key=\{option\.value\} value=\{option\.value\}>\{option\.label\}<\/option>\)/);
+  assert.match(reportScreen, /choices\.map\(\(option\) => <option key=\{option\.value\} value=\{option\.value\}>\{option\.label\}<\/option>\)/);
   assert.match(reportScreen, /localizedEnum\(value\)/);
 
   // `in` işlecinde çoklu seçim.
   const multi = section(reportScreen, 'if (item.op === "in") {', "<span>Değerler</span>");
-  assert.match(multi, /type === "status" && statusChoices\.length/);
+  assert.match(multi, /if \(choices\.length\) \{/);
   assert.match(multi, /<input type="checkbox" checked=\{selected\.includes\(option\.value\)\}/);
   assert.match(multi, /selected\.filter\(\(code\) => code !== option\.value\) : \[\.\.\.selected, option\.value\]/);
 
   // values gelmeyen sütunda alan serbest metin olarak kalır.
   assert.match(reportScreen, /return <label><span>Değer\{unit\}<\/span>\{valueInput\(type, item\.value/);
+  assert.match(reportScreen, /type === "status" \? "Durum kodu" : undefined/);
 });
 
 test("kaydedilmiş raporlar açılır, kopyalanır, silinir ve CSV olarak indirilir", () => {
@@ -222,6 +243,36 @@ test("kaydedilmiş raporlar açılır, kopyalanır, silinir ve CSV olarak indiri
   assert.doesNotMatch(reportApi, /JSON\.stringify/);
 });
 
+test("bağlı kayıt sütunu tek sütun çizilir, ham kimlik gösterilmez", () => {
+  // Sunucu customer_id'nin yanına customer_name ekliyor; ikisi ayrı sütun
+  // çizilince başlık ikileniyor ve kullanıcı UUID görüyordu.
+  const collapsed = helpers.collapseReportColumns([
+    { key: "code", type: "text" },
+    { key: "customer_id", type: "text" },
+    { key: "customer_name", type: "text" },
+    { key: "name", type: "text" },
+  ]);
+  assert.deepEqual(collapsed.map((item) => item.key), ["code", "customer_id", "name"]);
+  assert.equal(helpers.reportColumnLabel("projects", "customer_id"), "Müşteri");
+
+  // Değer addan gelir.
+  const row = { code: "CP-5", customer_id: "cus_ce699fc4-961a-4697-b610-4ea2d1540cc6", customer_name: "Müşteri 1", name: "Resepsiyon" };
+  assert.equal(helpers.reportPresentedValue("customer_id", row), "Müşteri 1");
+  assert.equal(helpers.reportPresentedValue("code", row), "CP-5");
+
+  // Ad çözülemediyse ham kimlik değil, boş.
+  assert.equal(helpers.reportPresentedValue("customer_id", { customer_id: "cus_ce699fc4-961a-4697-b610-4ea2d1540cc6" }), null);
+  assert.equal(helpers.reportPresentedValue("approved_by", { approved_by: "usr_ce699fc4961a4697b6104ea2d1540cc6" }), null);
+  // Kaydın kendi kimliği ve normal metinler olduğu gibi kalır.
+  assert.equal(helpers.reportPresentedValue("id", { id: "prj_ce699fc4-961a-4697-b610-4ea2d1540cc6" }), "prj_ce699fc4-961a-4697-b610-4ea2d1540cc6");
+  assert.equal(helpers.reportPresentedValue("project_id", { project_id: "CP-5" }), "CP-5");
+  // Kimlik sütunu seçilmediyse ad sütunu kendi başına kalır.
+  assert.deepEqual(helpers.collapseReportColumns([{ key: "customer_name", type: "text" }]).map((item) => item.key), ["customer_name"]);
+
+  assert.match(reportScreen, /const previewColumns = collapseReportColumns\(preview\.data\?\.columns \|\| \[\]\)/);
+  assert.match(reportScreen, /const cell = reportPresentedValue\(column\.key, row\);/);
+});
+
 test("rapor ekranı yükleme, hata, yetkisizlik ve boş durumlarını ayrı ayrı karşılar", () => {
   assert.match(reportScreen, /saved\.loading \? <LoadingState \/>/);
   assert.match(reportScreen, /saved\.error\?\.status === 403 \|\| saved\.error\?\.code === "forbidden" \? <PermissionDeniedState \/>/);
@@ -248,4 +299,62 @@ test("rapor ekranı 390 pikselde yatay taşma yapmaz", () => {
   assert.match(mobile, /\.live-report-row\{grid-template-columns:minmax\(0,1fr\) 34px\}/);
   assert.match(mobile, /\.live-report-groups>section>div\{grid-template-columns:1fr\}/);
   assert.match(mobile, /\.live-report-save\{grid-template-columns:1fr\}/);
+});
+
+// Etiket denetimi kaynak metni üzerinde değil, sunucunun gerçekten döndürdüğü
+// sütun listesi üzerinde yapılır: alan kataloğu büyüdüğünde etiketi olmayan
+// yeni sütun sessizce İngilizce yedeğe düşmesin.
+test("her rapor sütunu Türkçe etikete çözülür, İngilizce yedek kalmaz", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "capproje-report-labels-"));
+  const assetsDirectory = path.join(directory, "client");
+  await mkdir(assetsDirectory, { recursive: true });
+  await writeFile(path.join(assetsDirectory, "index.html"), "<!doctype html><title>Capproje</title>");
+  const environment = {
+    HOST: "127.0.0.1",
+    PORT: "0",
+    CAPPROJE_DATA_DIR: path.join(directory, "data"),
+    STATIC_ASSETS_DIR: assetsDirectory,
+    BOOTSTRAP_SECRET: "bootstrap-secret-for-report-label-scan",
+    PASSWORD_AUTH_ENABLED: "true",
+    PASSWORD_AUTH_PEPPER: "password-pepper-for-report-label-scan",
+    PHONE_AUTH_ENABLED: "false",
+    ALLOW_DEV_AUTH: "false",
+  };
+  const runtime = await createRuntime(environment);
+  const server = await startSelfHostedServer(runtime, environment);
+  t.after(() => new Promise((resolve) => server.close(async () => { await server.waitForBackgroundTasks(); resolve(); })));
+  t.after(() => runtime.sqlite.close());
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const bootstrap = await fetch(`${baseUrl}/api/v1/bootstrap`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-bootstrap-secret": environment.BOOTSTRAP_SECRET },
+    body: JSON.stringify({ tenant_name: "Capproje", tenant_slug: "capproje", owner_email: "owner@example.test", owner_name: "Firma Sahibi", owner_phone: "0533 656 52 55", owner_password: "Test-password-123" }),
+  });
+  assert.equal(bootstrap.status, 201);
+  const login = await fetch(`${baseUrl}/api/v1/auth/password/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ phone: "0533 656 52 55", password: "Test-password-123" }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = (login.headers.get("set-cookie") || "").split(";")[0];
+
+  const response = await fetch(`${baseUrl}/api/v1/reports/fields`, { headers: { cookie } });
+  assert.equal(response.status, 200, "alan kataloğu okunabilmeli");
+  const resources = (await response.json()).data;
+  assert.ok(Array.isArray(resources) && resources.length >= 20, `beklenenden az kaynak döndü: ${resources?.length}`);
+  const columnCount = resources.reduce((total, resource) => total + resource.columns.length, 0);
+  assert.ok(columnCount >= 400, `beklenenden az sütun döndü: ${columnCount}`);
+
+  // Sözlükte karşılığı olmayan sütun, ham addan üretilen İngilizce yedeğe düşer.
+  const missing = [];
+  for (const resource of resources) {
+    for (const column of resource.columns) {
+      const covered = helpers.reportColumnLabels[resource.resource]?.[column.key] || helpers.sharedColumnLabels[column.key];
+      if (!covered) missing.push(`${resource.resource}.${column.key} → "${helpers.reportColumnLabel(resource.resource, column.key)}"`);
+    }
+  }
+  assert.deepEqual(missing, [], `Türkçe etiketi olmayan sütunlar:\n${missing.join("\n")}`);
 });

@@ -808,14 +808,44 @@ const reportColumnLabels = Object.fromEntries(Object.entries(RESOURCE_SLUGS).map
   for (const item of config?.fields || []) labels[reportColumnNameFor(key, item.name)] ??= item.label;
   return [slug, labels];
 }));
-// Her kaynakta aynı anlama gelen teknik sütunlar. Kaynağın kendi sözlüğünde
-// karşılığı yoksa buradan okunur.
+// Kaynağın kendi ekranında etiketi olmayan sütunlar. Aynı kavram başka bir
+// ekranda Türkçe geçiyorsa oradaki kelime kullanılır ("Ödeme koşulu", "Şehir",
+// "Öncelik", "Ara toplam"…); aynı şey iki ekranda iki ada bürünmemeli. Bu
+// sözlük olmadan sütunlar sütun adından üretilen İngilizce yedeğe düşüyor.
 const sharedColumnLabels = {
   id: "Kayıt kimliği", status: "Durum", created_at: "Oluşturulma", updated_at: "Güncellenme",
   created_by: "Oluşturan", updated_by: "Güncelleyen", code: "Kod", name: "Ad", title: "Başlık",
   description: "Açıklama", notes: "Notlar", currency: "Para birimi", quantity: "Miktar", unit: "Birim",
   type: "Tür", project_id: "Proje", customer_id: "Müşteri", supplier_id: "Tedarikçi",
   employee_id: "Personel", work_item_id: "İş kalemi", tenant_id: "Firma",
+  // Tarih ve zaman damgaları
+  acceptance_date: "Kabul tarihi", accepted_at: "Kabul tarihi", approved_at: "Onay tarihi",
+  completed_at: "Tamamlanma tarihi", resolved_at: "Çözüm tarihi", offer_date: "Teklif tarihi",
+  birth_date: "Doğum tarihi", termination_date: "Çıkış tarihi",
+  actual_start: "Gerçekleşen başlangıç", actual_end: "Gerçekleşen bitiş",
+  actual_start_date: "Gerçekleşen başlangıç", actual_end_date: "Gerçekleşen bitiş",
+  planned_end: "Planlanan bitiş",
+  // Kişi ve bağlı kayıt alanları
+  approved_by: "Onaylayan", uploaded_by: "Yükleyen", user_id: "Kullanıcı", role_id: "Rol",
+  requester_user_id: "Talep eden", team_lead_user_id: "Ekip lideri", architect_user_id: "Mimar",
+  manager_employee_id: "Bağlı yönetici", account_id: "Hesap", channel_id: "Kanal",
+  design_revision_id: "Tasarım revizyonu", quality_inspection_id: "Kalite kontrolü",
+  installation_id: "Montaj", entity_id: "Bağlı kayıt", entity_type: "Modül",
+  // Tutar ve sayılar
+  subtotal_minor: "Ara toplam", tax_total_minor: "Vergi toplamı", discount_total_minor: "İndirim toplamı",
+  paid_total_minor: "Ödenen tutar", estimated_cost_minor: "Tahmini maliyet", exchange_rate: "Kur",
+  completed_quantity: "Üretilen miktar", scrap_quantity: "Hurda miktarı", progress_percent: "İlerleme",
+  salary_currency: "Maaş para birimi",
+  // Ticari ve operasyonel alanlar
+  city: "Şehir", priority: "Öncelik", project_type: "Proje türü", official: "Resmi",
+  payment_terms: "Ödeme koşulu", delivery_terms: "Teslim koşulu", payment_method: "Ödeme yöntemi",
+  quality_status: "Kalite durumu", reference: "Referans", rejection_reason: "Ret nedeni",
+  termination_reason: "Fesih nedeni", national_id_masked: "TC kimlik (maskeli)",
+  // Dosya, sohbet ve rapor kayıtları
+  content_type: "Dosya türü", size_bytes: "Dosya boyutu", object_key: "Depolama anahtarı",
+  checksum: "Sağlama toplamı", visibility: "Görünürlük", photo_consent_snapshot: "Fotoğraf izni (kayıt anındaki)",
+  body: "Mesaj", topic: "Konu", kind: "Kanal türü", link_label: "Bağlantı etiketi",
+  link_module: "Bağlantılı modül", link_record_id: "Bağlantılı kayıt", resource: "Kaynak",
 };
 const reportColumnTypeLabels = { text: "Metin", money: "Tutar", date: "Tarih", datetime: "Tarih ve saat", status: "Durum", percent: "Yüzde", number: "Sayı" };
 
@@ -839,6 +869,28 @@ function reportColumnLabel(slug, column) {
 function reportCellValue(column, value, type) {
   if (type === "money" && typeof value === "number" && String(column).endsWith("_minor")) return value / 100;
   return value;
+}
+
+// Sunucu bağlı kaydın adını `X_name` olarak kimliğin yanına ekliyor
+// (attachReferenceNames). İkisini ayrı sütun çizmek başlığı ikiye katlıyor ve
+// kullanıcıya hiçbir şey anlatmayan bir UUID gösteriyordu; ad sütunu düşürülür,
+// başlık kimlik sütununun etiketinden gelir. RecordDetailModal'daki
+// coveredReferences ile aynı kural.
+function collapseReportColumns(columns) {
+  const keys = new Set(columns.map((item) => item.key));
+  return columns.filter((item) => !(item.key.endsWith("_name") && keys.has(`${item.key.slice(0, -5)}_id`)));
+}
+
+// presentedValue'nun snake_case karşılığı: varsa bağlı kaydın adı, yoksa
+// değerin kendisi. Çözülemeyen kimlik boş bırakılır — kırk karakterlik bir
+// dizi kimseye bir şey anlatmaz.
+const reportReferenceColumn = /_(id|by)$/;
+function reportPresentedValue(column, row) {
+  const name = column.endsWith("_id") ? row[`${column.slice(0, -3)}_name`] ?? row[`${column}_name`] : null;
+  if (name != null && name !== "") return name;
+  const raw = row[column];
+  if (column !== "id" && reportReferenceColumn.test(column) && typeof raw === "string" && /^[a-z]{2,4}_[0-9a-f-]{16,}$/i.test(raw)) return null;
+  return raw;
 }
 
 // Sunucu `definition_json` sütununu çözerek gönderiyor; yine de metin gelirse
@@ -1679,10 +1731,13 @@ function ReportsView({ session, online }) {
   const resourceColumns = activeResource?.columns || [];
   const columnType = (key) => resourceColumns.find((item) => item.key === key)?.type || "text";
   const numericColumns = resourceColumns.filter((item) => reportNumericTypes.has(item.type));
-  // Durum seçenekleri yalnız alan kataloğundan okunur. Tahmin edilen bir liste,
-  // o kaynakta hiç bulunmayan bir durumu seçtirir ve rapor sessizce boş döner;
+  // Seçenekler yalnız alan kataloğundan okunur. Tahmin edilen bir liste, o
+  // kaynakta hiç bulunmayan bir değeri seçtirir ve rapor sessizce boş döner;
   // sunucu güvenilir bir küme çıkaramadıysa alan serbest metin olarak kalır.
-  const statusChoicesFor = (key) => (resourceColumns.find((item) => item.key === key)?.values || []).map((value) => ({ value, label: localizedEnum(value) }));
+  // Durum dışındaki sabit değerli sütunlar (öncelik, tür, yön…) da aynı listeyi
+  // taşıyor; elle "Yüksek" yazan kullanıcı boş rapor alırdı.
+  const choicesFor = (key) => (resourceColumns.find((item) => item.key === key)?.values || []).map((value) => ({ value, label: localizedEnum(value) }));
+  const operatorsForColumn = (key, type) => reportOperatorsFor(choicesFor(key).length ? "status" : type);
   const columnLabel = (key) => reportColumnLabel(draft.resource, key);
 
   const requestDefinition = useMemo(() => reportRequestDefinition(draft), [draft]);
@@ -1733,7 +1788,7 @@ function ReportsView({ session, online }) {
   function addFilter() {
     const first = resourceColumns[0];
     if (!first) return;
-    const op = reportOperatorsFor(first.type)[0];
+    const op = operatorsForColumn(first.key, first.type)[0];
     patchDraft({ filters: [...draft.filters, { field: first.key, op, type: first.type, value: op === "between" ? ["", ""] : op === "in" ? [] : "" }] });
   }
   function updateFilter(index, patch) {
@@ -1741,7 +1796,8 @@ function ReportsView({ session, online }) {
   }
   function changeFilterField(index, key) {
     const type = columnType(key);
-    updateFilter(index, { field: key, type, op: reportOperatorsFor(type)[0], value: reportOperatorsFor(type)[0] === "between" ? ["", ""] : "" });
+    const op = operatorsForColumn(key, type)[0];
+    updateFilter(index, { field: key, type, op, value: op === "between" ? ["", ""] : op === "in" ? [] : "" });
   }
   function changeFilterOp(index, op) {
     updateFilter(index, { op, value: op === "between" ? ["", ""] : op === "in" ? [] : "" });
@@ -1911,21 +1967,21 @@ function ReportsView({ session, online }) {
         <label><span>Bitiş{unit}</span>{valueInput(type, pair[1], (next) => updateFilter(index, { value: [pair[0], next] }))}</label>
       </>;
     }
-    const statusChoices = statusChoicesFor(item.field);
+    const choices = choicesFor(item.field);
     if (item.op === "in") {
       const selected = Array.isArray(item.value) ? item.value : [];
-      if (type === "status" && statusChoices.length) {
-        return <div className="live-report-chips" role="group" aria-label="Durum seçimi">{statusChoices.map((option) => <label key={option.value}><input type="checkbox" checked={selected.includes(option.value)} onChange={() => updateFilter(index, { value: selected.includes(option.value) ? selected.filter((code) => code !== option.value) : [...selected, option.value] })} /><span>{option.label}</span></label>)}</div>;
+      if (choices.length) {
+        return <div className="live-report-chips" role="group" aria-label="Değer seçimi">{choices.map((option) => <label key={option.value}><input type="checkbox" checked={selected.includes(option.value)} onChange={() => updateFilter(index, { value: selected.includes(option.value) ? selected.filter((code) => code !== option.value) : [...selected, option.value] })} /><span>{option.label}</span></label>)}</div>;
       }
       return <label><span>Değerler</span><input value={selected.join(", ")} placeholder="Virgülle ayırın" onChange={(event) => updateFilter(index, { value: event.target.value.split(",").map((part) => part.trim()).filter(Boolean) })} /></label>;
     }
-    if (type === "status" && statusChoices.length) {
-      return <label><span>Durum</span><select value={item.value ?? ""} onChange={(event) => updateFilter(index, { value: event.target.value })}><option value="">Seçin</option>{statusChoices.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+    if (choices.length) {
+      return <label><span>{type === "status" ? "Durum" : "Değer"}</span><select value={item.value ?? ""} onChange={(event) => updateFilter(index, { value: event.target.value })}><option value="">Seçin</option>{choices.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
     }
     return <label><span>Değer{unit}</span>{valueInput(type, item.value, (next) => updateFilter(index, { value: next }), type === "status" ? "Durum kodu" : undefined)}</label>;
   }
 
-  const previewColumns = preview.data?.columns || [];
+  const previewColumns = collapseReportColumns(preview.data?.columns || []);
   const previewRows = preview.data?.rows || [];
   const previewColumnLabel = (column) => {
     const aggregate = requestDefinition.group?.aggregates?.find((item) => item.as === column.key);
@@ -1962,7 +2018,7 @@ function ReportsView({ session, online }) {
             <header><b>3 · Süzgeçler</b><small>Alan, işleç ve değer. Tarihte takvim, durumda liste, sayıda sayı girişi açılır.</small><button type="button" className="live-workflow-button" onClick={addFilter}><Plus /> Süzgeç ekle</button></header>
             {draft.filters.length ? draft.filters.map((item, index) => <div className="live-report-row" key={`filter-${index}`}>
               <label><span>Alan</span><select value={item.field} onChange={(event) => changeFilterField(index, event.target.value)}>{resourceColumns.map((column) => <option key={column.key} value={column.key}>{columnLabel(column.key)}</option>)}</select></label>
-              <label><span>İşleç</span><select value={item.op} onChange={(event) => changeFilterOp(index, event.target.value)}>{reportOperatorsFor(item.type || columnType(item.field)).map((op) => <option key={op} value={op}>{reportOperatorLabels[op]}</option>)}</select></label>
+              <label><span>İşleç</span><select value={item.op} onChange={(event) => changeFilterOp(index, event.target.value)}>{operatorsForColumn(item.field, item.type || columnType(item.field)).map((op) => <option key={op} value={op}>{reportOperatorLabels[op]}</option>)}</select></label>
               {filterValueFields(item, index)}
               <button type="button" className="live-icon-button danger" title="Süzgeci kaldır" onClick={() => removeFilter(index)}><X /></button>
             </div>) : <p className="live-report-hint">Süzgeç eklemezseniz kaynaktaki tüm kayıtlar raporlanır.</p>}
@@ -2024,7 +2080,10 @@ function ReportsView({ session, online }) {
             : !previewRows.length ? <div className="live-view-empty"><ChartPieSlice /><b>Bu tanıma uyan kayıt yok</b><small>Süzgeçleri gevşetip tekrar deneyin.</small></div>
               : <div className={`live-report-preview ${preview.loading ? "refreshing" : ""}`}>
                 <div className="live-table-wrap"><table className="live-table"><thead><tr>{previewColumns.map((column) => <th key={column.key} title={column.key}>{previewColumnLabel(column)}</th>)}</tr></thead><tbody>
-                  {previewRows.map((row, index) => <tr key={index}>{previewColumns.map((column) => <td key={column.key}>{column.type === "status" && row[column.key] ? <Status>{row[column.key]}</Status> : formatValue(reportCellValue(column.key, row[column.key], column.type), column.type, row)}</td>)}</tr>)}
+                  {previewRows.map((row, index) => <tr key={index}>{previewColumns.map((column) => {
+                    const cell = reportPresentedValue(column.key, row);
+                    return <td key={column.key}>{column.type === "status" && cell ? <Status>{cell}</Status> : formatValue(reportCellValue(column.key, cell, column.type), column.type, row)}</td>;
+                  })}</tr>)}
                 </tbody></table></div>
                 <footer className="live-table-footer"><span>{preview.meta?.rowCount ?? previewRows.length} satır{preview.meta?.truncated ? " (kırpıldı)" : ""}</span><small>Önizleme sunucu tarafında 20 satırla sınırlıdır</small></footer>
               </div>}
