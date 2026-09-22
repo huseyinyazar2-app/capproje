@@ -43,9 +43,9 @@ function loadReportHelpers() {
     section(liveSource, "const enumLabels = {", "// Denetim kaydı modülü"),
     section(liveSource, "const auditActionLabels = {", "// Sunucudaki üst yetki"),
     section(liveSource, "const reportColumnNameFor", "// Sunucu `definition_json`"),
-    section(liveSource, "const reportAggregateLabels = {", "const reportValuelessOps"),
+    section(liveSource, "const reportAggregateLabels = {", "const reportOperatorsFor"),
     section(liveSource, "// Bir rapor hücresinin kullanıcıya görünen metni", "function ReportCard("),
-    "return { reportColumnLabel, reportColumnLabels, sharedColumnLabels, humanizeColumnName, collapseReportColumns, reportPresentedValue, reportCellText, reportHeaderLabel, reportCsvField, buildReportCsv, localizedEnum, formatValue };",
+    "return { reportColumnLabel, reportColumnLabels, sharedColumnLabels, humanizeColumnName, collapseReportColumns, reportPresentedValue, reportCellText, reportHeaderLabel, reportCsvField, reportCsvCell, reportCsvSafeText, reportCsvCurrency, buildReportCsv, localizedEnum, formatValue };",
   ];
   return new Function(parts.join("\n"))();
 }
@@ -373,7 +373,8 @@ test("indirilen CSV ekranda görünen tablonun aynısıdır", () => {
   assert.ok(exportedCsv.startsWith("﻿"), "dosya UTF-8 BOM ile başlamalı");
 
   // Başlıklar ekrandaki Türkçe etiketlerin aynısı; İngilizce sütun adı yok.
-  assert.equal(exportedLines[0], '"Proje Kodu","Müşteri","Proje","Aşama","Ara toplam","Teklif tarihi"');
+  // Birim hücreden başlığa taşındı: hücre sayı kalsın, bilgi kaybolmasın.
+  assert.equal(exportedLines[0], '"Proje Kodu","Müşteri","Proje","Aşama","Ara toplam (TL)","Teklif tarihi"');
   for (const raw of ["code", "customer_id", "customer_name", "status", "subtotal_minor", "offer_date"]) {
     assert.ok(!exportedLines[0].includes(raw), `başlıkta ham sütun adı kalmış: ${raw}`);
   }
@@ -383,8 +384,8 @@ test("indirilen CSV ekranda görünen tablonun aynısıdır", () => {
   assert.equal(exportedLines[0].match(/Müşteri/g).length, 1, "müşteri sütunu ikilenmemeli");
   assert.equal(exportedCsv.split(",").length, exportedLines[0].split(",").length * 2, "başlık ve satır aynı sütun sayısını taşımalı");
 
-  // Durum Türkçe, para ve tarih ekrandaki biçimde.
-  assert.equal(exportedLines[1], '"CP-5","Müşteri 1","Resepsiyon","Talep","1.234,50 TL","09.03.2026"');
+  // Durum Türkçe; tarih ekrandaki biçimde; tutar hesaplanabilir düz sayı.
+  assert.equal(exportedLines[1], '"CP-5","Müşteri 1","Resepsiyon","Talep","1234,50","09.03.2026"');
 
   // Aynı kural gruplanmış raporun başlığında da geçerli.
   const grouped = { group: { aggregates: [{ fn: "sum", field: "subtotal_minor", as: "toplam_subtotal_minor" }] } };
@@ -394,7 +395,8 @@ test("indirilen CSV ekranda görünen tablonun aynısıdır", () => {
 test("ekrandaki hücre metni ile dosyadaki hücre metni tek yerden gelir", () => {
   // Önizleme tablosu da CSV de reportCellText'ten geçiyor.
   assert.match(reportScreen, /: reportCellText\(column, row\)\}<\/td>/);
-  assert.match(reportCsvSection, /reportCsvField\(reportCellText\(column, row\)\)/);
+  assert.match(reportCsvSection, /reportCsvField\(reportCsvCell\(column, row\)\)/);
+  assert.match(reportCsvSection, /return reportCsvSafeText\(reportCellText\(column, row\)\);/);
 
   // Durum sütununda rozetin yazdığı metnin aynısı dosyaya yazılır.
   assert.match(liveSource, /return <span className=\{`live-status \$\{statusTone\(children\)\}`\}>\{localizedEnum\(children\) \|\| "—"\}<\/span>;/);
@@ -403,10 +405,15 @@ test("ekrandaki hücre metni ile dosyadaki hücre metni tek yerden gelir", () =>
 
   // Bağlı kayıt adı, para ve tarih de aynı yardımcılardan geçer.
   assert.equal(helpers.reportCellText({ key: "customer_id", type: "text" }, csvRow), "Müşteri 1");
-  assert.equal(helpers.reportCellText({ key: "subtotal_minor", type: "money" }, csvRow), "1.234,50 TL");
+  assert.equal(helpers.reportCsvCell({ key: "customer_id", type: "text" }, csvRow), "Müşteri 1");
   assert.equal(helpers.reportCellText({ key: "offer_date", type: "date" }, csvRow), "09.03.2026");
-  // Çözülemeyen kimlik dosyada da boş kalır; kırk karakterlik dizi yazılmaz.
+  assert.equal(helpers.reportCsvCell({ key: "offer_date", type: "date" }, csvRow), "09.03.2026");
+  // Ayrıldıkları tek yer sayının görünüşü: ekran okumak, dosya hesaplamak için.
+  assert.equal(helpers.reportCellText({ key: "subtotal_minor", type: "money" }, csvRow), "1.234,50 TL");
+  assert.equal(helpers.reportCsvCell({ key: "subtotal_minor", type: "money" }, csvRow), "1234,50");
+  // Çözülemeyen kimlik ekranda "—", dosyada boş.
   assert.equal(helpers.reportCellText({ key: "customer_id", type: "text" }, { customer_id: "cus_ce699fc4-961a-4697-b610-4ea2d1540cc6" }), "—");
+  assert.equal(helpers.reportCsvCell({ key: "customer_id", type: "text" }, { customer_id: "cus_ce699fc4-961a-4697-b610-4ea2d1540cc6" }), "");
 });
 
 test("CSV kaçışı virgül, tırnak ve satır sonu taşıyan hücreyi bozmaz", () => {
@@ -428,11 +435,88 @@ test("CSV kaçışı virgül, tırnak ve satır sonu taşıyan hücreyi bozmaz",
   assert.ok(body.endsWith("\r\n"), "satırlar CRLF ile bitmeli");
 });
 
+test("dosya hesaplanabilir: boş hücre boş, sayı ayraçsız ve birimsiz", () => {
+  // Ekran okumak, dosya hesaplamak içindir. Uzun tire dosyada sütunu metne
+  // çevirir ve süzgeçte çöp olarak görünür; boş hücre boş kalır.
+  assert.equal(helpers.reportCsvCell({ key: "name", type: "text" }, { name: null }), "");
+  assert.equal(helpers.reportCsvCell({ key: "name", type: "text" }, { name: "" }), "");
+  assert.equal(helpers.reportCsvCell({ key: "name", type: "text" }, { name: "null" }), "");
+  assert.equal(helpers.reportCsvCell({ key: "offer_date", type: "date" }, {}), "");
+
+  // `1234,50` Türkçe Excel'de sayıdır; `1.234,50` İngilizce yerelde metne
+  // düşer. Binlik ayracı ve "TL" eki dosyada yok.
+  assert.equal(helpers.reportCsvCell({ key: "subtotal_minor", type: "money" }, { subtotal_minor: 123450678 }), "1234506,78");
+  assert.equal(helpers.reportCsvCell({ key: "subtotal_minor", type: "money" }, { subtotal_minor: 150000 }), "1500,00");
+  assert.equal(helpers.reportCsvCell({ key: "exchange_rate", type: "number" }, { exchange_rate: 41.25 }), "41,25");
+  // Yüzde sütununda da yalnız sayı: ekrandaki "%12" dosyada "12".
+  assert.equal(helpers.reportCellText({ key: "progress_percent", type: "percent" }, { progress_percent: 12 }), "%12");
+  assert.equal(helpers.reportCsvCell({ key: "progress_percent", type: "percent" }, { progress_percent: 12 }), "12");
+
+  // Birim hücreden başlığa taşındığı için kaybolmamalı: satırlar tek para
+  // birimi taşıyorsa başlıkta yazar, karışıksa tek birim yazmak yanlış olur.
+  assert.equal(helpers.reportCsvCurrency([{ currency: "TRY" }, {}]), "TL");
+  assert.equal(helpers.reportCsvCurrency([{ currency: "EUR" }]), "€");
+  assert.equal(helpers.reportCsvCurrency([{ currency: "TRY" }, { currency: "EUR" }]), null);
+  const mixed = helpers.buildReportCsv([{ key: "subtotal_minor", type: "money" }], [{ subtotal_minor: 100, currency: "TRY" }, { subtotal_minor: 100, currency: "EUR" }], () => "Ara toplam");
+  assert.equal(mixed.replace(/^\ufeff/, "").split("\r\n")[0], '"Ara toplam"');
+  assert.match(reportScreen, /Rapor birden fazla para birimi taşıdığı için tutar başlıklarına birim yazılmadı/);
+});
+
+test("formül enjeksiyonu kapalı, sayısal sütunlar tırnak almıyor", () => {
+  // Excel `=`, `+`, `-`, `@` ile başlayan hücreyi formül olarak çalıştırır;
+  // müşteri adını, proje adını ve notları kullanıcı yazıyor, dosyayı açan
+  // başkası oluyor.
+  for (const value of ["=1+1", "+1", "-1", "@SUM(A1)", "\t=1", " =1+1", "\n=1+1", "\r\n-2+3"]) {
+    assert.equal(helpers.reportCsvSafeText(value), `'${value}`, `etkisizleşmedi: ${JSON.stringify(value)}`);
+  }
+  // Tek tırnak en öne, görünmez karakterlerin de önüne konur.
+  assert.ok(helpers.reportCsvSafeText("\t=1").startsWith("'"), "tırnak hücrenin en önünde olmalı");
+  // Zararsız metin dokunulmadan kalır.
+  for (const value of ["Müşteri 1", "Resepsiyon, \"A\" blok", "2026-03-09", ""]) {
+    assert.equal(helpers.reportCsvSafeText(value), value);
+  }
+
+  // Kural sütunun tipine bağlı: sayı formül olamaz. Eksi işaretli tutara tırnak
+  // koymak bütün tutar sütununu metne çevirir ve toplam alınamaz — düzeltmeye
+  // çalıştığımız sorunun ta kendisi.
+  assert.equal(helpers.reportCsvCell({ key: "subtotal_minor", type: "money" }, { subtotal_minor: -150000 }), "-1500,00");
+  assert.equal(helpers.reportCsvCell({ key: "progress_percent", type: "percent" }, { progress_percent: -12 }), "-12");
+  // Kullanıcının yazdığı metinde aynı değer tırnaklanır.
+  assert.equal(helpers.reportCsvCell({ key: "name", type: "text" }, { name: "-1500" }), "'-1500");
+  assert.equal(helpers.reportCsvCell({ key: "description", type: "text" }, { description: "=HYPERLINK(\"http://x\")" }), "'=HYPERLINK(\"http://x\")");
+
+  // Dosyanın tamamında da doğrulanır: tutar tırnaksız, ad tırnaklı.
+  const csv = helpers.buildReportCsv(
+    [{ key: "name", type: "text" }, { key: "subtotal_minor", type: "money" }],
+    [{ name: "-1500", subtotal_minor: -150000, currency: "TRY" }],
+    (column) => helpers.reportColumnLabel("offers", column.key),
+  );
+  assert.equal(csv.replace(/^\ufeff/, "").split("\r\n")[1], '"\'-1500","-1500,00"');
+});
+
 test("indirme kaydedilmiş rapora bağlıdır, beklemede görünür, hatası Türkçedir", () => {
-  // Kaydedilmemiş taslakta düğme kapalı ve ne yapılacağı yazıyor.
-  assert.match(reportScreen, /disabled=\{!reportMeta\.id \|\| Boolean\(exportingId\)\}/);
+  // Kaydedilmemiş taslakta ve kaydedilmemiş değişiklikte düğme kapalı; ikisinde
+  // de ne yapılacağı yazıyor. Dosya kayıtlı tanımdan üretildiği için,
+  // kaydedilmemiş bir değişiklikle indirilen dosya ekrandakinden sessizce
+  // farklı olurdu.
+  assert.match(reportScreen, /disabled=\{!reportMeta\.id \|\| dirty \|\| Boolean\(exportingId\)\}/);
   assert.match(reportScreen, /Kaydedip indirin/);
   assert.match(reportScreen, /Kaydedilmemiş taslak indirilemez/);
+  assert.match(reportScreen, /Önce kaydedin: dosya kayıtlı tanımdan üretilir/);
+  assert.match(reportScreen, /\{canExport && \(!reportMeta\.id \|\| dirty\) && <p className="live-report-hint">/);
+
+  // Bayrak kullanıcının eylemine bağlı; tanım JSON'u karşılaştırılmıyor
+  // (anahtar sırası yanlış alarm verirdi). Taslağı değiştiren her yol tek
+  // kapıdan geçer, kaydetme ve kayıttan açma bayrağı indirir.
+  assert.match(reportScreen, /const editDraft = \(updater\) => \{ setDirty\(true\); setDraft\(updater\); \};/);
+  assert.match(reportScreen, /const patchDraft = \(patch\) => editDraft\(/);
+  const builder = section(reportScreen, "function chooseResource(value)", "function startNew()");
+  assert.doesNotMatch(builder, /setDraft\(/, "taslağı değiştiren her yol editDraft üzerinden geçmeli");
+
+  // Bayrak yeni rapor, kayıttan açma ve kaydetme sonrasında iner.
+  assert.match(section(reportScreen, "function startNew()", "function draftFromDefinition"), /setDirty\(false\);/);
+  assert.match(section(reportScreen, "setDraft(draftFromDefinition(definition));", "setSaveError(null);"), /setDirty\(false\);/);
+  assert.match(section(reportScreen, "const stored = await api.saveReport(", "loadSaved();"), /setDirty\(false\);[\s\S]*Rapor kaydedildi/);
   assert.match(reportScreen, /if \(!stored\?\.id\) \{ setExportNotice\(\{ tone: "warning", message: "Bu raporu indirmeden önce kaydedin/);
 
   // Beklemede durumu: hangi raporun hazırlandığı kimlikle tutulur, düğme
@@ -458,7 +542,7 @@ test("kırpılmış döküm kullanıcıya söylenir, önizlemede uyarı çıkmaz
   assert.match(download, /tone: "warning", message: `Dosya eksik/);
   assert.match(download, /satır indirildi/);
   assert.match(download, /satır sınırını yükseltin/);
-  assert.match(download, /tone: "success", message: `Rapor indirildi/);
+  assert.match(download, /tone: mixedCurrency \? "warning" : "success", message: `Rapor indirildi/);
 
   // Mesaj kullanıcının baktığı yerde: hem kayıtlı rapor listesinde hem
   // önizleme panelinde aynı kutu gösterilir.

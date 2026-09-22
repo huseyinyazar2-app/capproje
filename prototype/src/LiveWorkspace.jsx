@@ -1706,11 +1706,51 @@ function reportHeaderLabel(resource, definition, column) {
 }
 
 // CSV, ekrandaki tablonun dosyaya yazılmış hâlidir: aynı sütunlar, aynı Türkçe
-// başlıklar, aynı hücre metinleri. Sunucuda ikinci bir sunum katmanı tutmuyoruz;
-// bağlı kaydın adı, Türkçe durum, para ve tarih biçimi zaten burada çözülüyor.
+// başlıklar, aynı adlar ve aynı durum çevirileri. Ayrıldığı tek yer sayının
+// görünüşü: ekran okumak, dosya hesaplamak içindir. Müşteri bu dosyayı Excel'de
+// açıp toplam alacak; tutar ve yüzde sütunu metne düşerse alamaz.
 // Excel, BOM taşımayan UTF-8 dosyayı kendi kod sayfasıyla açar ve "Müşteri"
 // "MÃ¼ÅŸteri" olur; sunucunun bıraktığı BOM davranışı korunur.
 const REPORT_CSV_BOM = "\ufeff";
+
+// Excel ve LibreOffice, `=`, `+`, `-` ya da `@` ile başlayan bir hücreyi formül
+// olarak çalıştırır; DDE üzerinden komut çalıştırmaya kadar gidebilir. Müşteri
+// adını, proje adını ve notları kullanıcı yazıyor, dosyayı açan çoğu zaman
+// başkası oluyor: tam da tehlikeli olan durum. Böyle bir hücrenin önüne tek
+// tırnak konur; Excel tırnağı göstermez, hücreyi metin olarak açar. Sekme ve
+// satır başıyla başlayan biçimler de aynı kapıdan girdiği için baştaki boşluk
+// ve denetim karakterleri atlanarak bakılır.
+const reportCsvFormulaStart = /^[=+\-@]/;
+function reportCsvSafeText(value) {
+  const text = String(value ?? "");
+  return reportCsvFormulaStart.test(text.replace(/^[\s\u0000-\u001f]+/, "")) ? `'${text}` : text;
+}
+
+// Dosyadaki hücre. Ad, Türkçe etiket ve durum çevirisi ekrandakinin aynısıdır;
+// boş hücre boş kalır (ekrandaki "—" dosyada sütunu metne çevirir ve süzgeçte
+// çöp olarak görünür), sayı ise binlik ayracı ve birim eki olmadan yazılır.
+// `1234,50` Türkçe Excel'de sayıdır; `1.234,50` İngilizce yerelde metne düşer.
+// Birim bilgisi başlıkta durur. Kendi ürettiğimiz sayı formüle benzeyemeyeceği
+// için (eksi işaretli tutar dâhil) formül koruması yalnız metne uygulanır.
+function reportCsvCell(column, row) {
+  const cell = reportPresentedValue(column.key, row);
+  if (cell == null || cell === "" || cell === "null" || cell === "undefined") return "";
+  const number = Number(reportCellValue(column.key, cell, column.type));
+  if (reportNumericTypes.has(column.type) && Number.isFinite(number)) {
+    return (column.type === "money" ? moneyKurus : numberDigits).format(number).replace(/\./g, "");
+  }
+  return reportCsvSafeText(reportCellText(column, row));
+}
+
+// Tutar sütununda birim ekini hücreden başlığa taşıyoruz. Satırlar tek para
+// birimi taşıyorsa başlıkta yazar; karışıksa tek bir birim yazmak yanlış olur,
+// başlık birimsiz kalır ve kullanıcı indirme notunda uyarılır.
+function reportCsvCurrency(rows) {
+  const codes = new Set(rows.map((row) => row.currency || "TRY"));
+  if (codes.size !== 1) return null;
+  const [code] = [...codes];
+  return currencyLabels[code] || code;
+}
 
 // RFC 4180: alan çift tırnakla sarılır, içteki tırnak ikilenir. Böylece virgül,
 // tırnak ve satır sonu taşıyan bir hücre satırı bölmez. Sunucunun bugünkü
@@ -1720,8 +1760,10 @@ function reportCsvField(value) {
 }
 
 function buildReportCsv(columns, rows, headerLabel) {
-  const lines = [columns.map((column) => reportCsvField(headerLabel(column))).join(",")];
-  for (const row of rows) lines.push(columns.map((column) => reportCsvField(reportCellText(column, row))).join(","));
+  const currency = reportCsvCurrency(rows);
+  const header = columns.map((column) => reportCsvField(`${headerLabel(column)}${column.type === "money" && currency ? ` (${currency})` : ""}`));
+  const lines = [header.join(",")];
+  for (const row of rows) lines.push(columns.map((column) => reportCsvField(reportCsvCell(column, row))).join(","));
   return `${REPORT_CSV_BOM}${lines.join("\r\n")}\r\n`;
 }
 
@@ -1757,6 +1799,8 @@ function ReportsView({ session, online }) {
   // İndirme sonucu kurucudaki kayıt notundan ayrı tutulur: kullanıcı kayıtlı
   // rapor kartından da indirebiliyor, mesajı orada da görmeli.
   const [exportNotice, setExportNotice] = useState(null);
+  // Kurucudaki tanım kayıtlı sürümden ayrıldı mı.
+  const [dirty, setDirty] = useState(false);
   const [removeTarget, setRemoveTarget] = useState(null);
   const [removeError, setRemoveError] = useState(null);
   const [removing, setRemoving] = useState(false);
@@ -1826,16 +1870,23 @@ function ReportsView({ session, online }) {
     return () => clearTimeout(timer);
   }, [definitionKey, online]);
 
+  // Kurucuda bir şey değiştiği anda taslak "kaydedilmemiş" sayılır. Dosya
+  // kayıtlı tanımdan üretiliyor: kaydedilmemiş bir değişiklikle indirilen dosya
+  // ekrandakinden sessizce farklı olur ve kullanıcı bunu fark etmez. Tanımı
+  // JSON olarak karşılaştırmak anahtar sırası yüzünden yanlış alarm verirdi;
+  // bayrak kullanıcının kendi eylemine bağlanır.
+  const editDraft = (updater) => { setDirty(true); setDraft(updater); };
+
   function chooseResource(value) {
     // Kaynak değişince eski sütun ve süzgeçler geçersizdir; taşınırsa sunucu
     // 422 döner ve kullanıcı nedenini anlamaz.
-    setDraft({ ...emptyReportDraft, resource: value });
+    editDraft({ ...emptyReportDraft, resource: value });
     setReportMeta((current) => ({ ...current, id: null }));
     setNotice(null);
   }
-  const patchDraft = (patch) => setDraft((current) => ({ ...current, ...patch }));
+  const patchDraft = (patch) => editDraft((current) => ({ ...current, ...patch }));
   function toggleColumn(key) {
-    setDraft((current) => ({ ...current, columns: current.columns.includes(key) ? current.columns.filter((item) => item !== key) : [...current.columns, key] }));
+    editDraft((current) => ({ ...current, columns: current.columns.includes(key) ? current.columns.filter((item) => item !== key) : [...current.columns, key] }));
   }
   function addFilter() {
     const first = resourceColumns[0];
@@ -1844,7 +1895,7 @@ function ReportsView({ session, online }) {
     patchDraft({ filters: [...draft.filters, { field: first.key, op, type: first.type, value: op === "between" ? ["", ""] : op === "in" ? [] : "" }] });
   }
   function updateFilter(index, patch) {
-    setDraft((current) => ({ ...current, filters: current.filters.map((item, position) => (position === index ? { ...item, ...patch } : item)) }));
+    editDraft((current) => ({ ...current, filters: current.filters.map((item, position) => (position === index ? { ...item, ...patch } : item)) }));
   }
   function changeFilterField(index, key) {
     const type = columnType(key);
@@ -1861,17 +1912,17 @@ function ReportsView({ session, online }) {
     patchDraft({ sort: [...draft.sort, { field: first.key, direction: "asc" }] });
   }
   function updateSort(index, patch) {
-    setDraft((current) => ({ ...current, sort: current.sort.map((item, position) => (position === index ? { ...item, ...patch } : item)) }));
+    editDraft((current) => ({ ...current, sort: current.sort.map((item, position) => (position === index ? { ...item, ...patch } : item)) }));
   }
   const removeSort = (index) => patchDraft({ sort: draft.sort.filter((_, position) => position !== index) });
   function toggleGrouping(enabled) {
     patchDraft({ group: enabled ? { by: [], aggregates: [{ fn: "count", field: "", as: reportAggregateAlias("count") }] } : null });
   }
   function toggleGroupBy(key) {
-    setDraft((current) => ({ ...current, group: { ...current.group, by: current.group.by.includes(key) ? current.group.by.filter((item) => item !== key) : [...current.group.by, key] } }));
+    editDraft((current) => ({ ...current, group: { ...current.group, by: current.group.by.includes(key) ? current.group.by.filter((item) => item !== key) : [...current.group.by, key] } }));
   }
   function updateAggregate(index, patch) {
-    setDraft((current) => ({
+    editDraft((current) => ({
       ...current,
       group: {
         ...current.group,
@@ -1887,15 +1938,16 @@ function ReportsView({ session, online }) {
   }
   function addAggregate() {
     const first = numericColumns[0];
-    setDraft((current) => ({ ...current, group: { ...current.group, aggregates: [...current.group.aggregates, first ? { fn: "sum", field: first.key, as: reportAggregateAlias("sum", first.key) } : { fn: "count", field: "", as: reportAggregateAlias("count") }] } }));
+    editDraft((current) => ({ ...current, group: { ...current.group, aggregates: [...current.group.aggregates, first ? { fn: "sum", field: first.key, as: reportAggregateAlias("sum", first.key) } : { fn: "count", field: "", as: reportAggregateAlias("count") }] } }));
   }
-  const removeAggregate = (index) => setDraft((current) => ({ ...current, group: { ...current.group, aggregates: current.group.aggregates.filter((_, position) => position !== index) } }));
+  const removeAggregate = (index) => editDraft((current) => ({ ...current, group: { ...current.group, aggregates: current.group.aggregates.filter((_, position) => position !== index) } }));
 
   function startNew() {
     setDraft(emptyReportDraft);
     setReportMeta(emptyReportMeta);
     setSaveError(null);
     setNotice(null);
+    setDirty(false);
   }
   // Kaydedilmiş rapor arayüze geri yüklenirken süzgeç değerleri kullanıcının
   // gördüğü birime (lira) çevrilir; tanımda kuruş olarak duruyorlar.
@@ -1924,6 +1976,9 @@ function ReportsView({ session, online }) {
       return;
     }
     setDraft(draftFromDefinition(definition));
+    // Kayıttan gelen tanım kayıtlı sürümün kendisidir; kopyada ise indirilecek
+    // bir kayıt henüz yok, düğme zaten kimliksiz kapalı kalır.
+    setDirty(false);
     setReportMeta({
       id: asCopy ? null : report.id,
       name: asCopy ? `${report.name} (kopya)` : report.name || "",
@@ -1950,6 +2005,7 @@ function ReportsView({ session, online }) {
         visibility: reportMeta.visibility,
       }, { id: reportMeta.id });
       setReportMeta((current) => ({ ...current, id: stored?.id || current.id, ownerUserId: stored?.owner_user_id || current.ownerUserId }));
+      setDirty(false);
       setNotice("Rapor kaydedildi.");
       loadSaved();
     } catch (error) {
@@ -2009,9 +2065,14 @@ function ReportsView({ session, online }) {
       URL.revokeObjectURL(url);
       // Kırpılmış bir dosyayı sessizce vermek, hata vermekten kötüdür: eksik
       // sayıyla karar verilir. Kaç satır indiği ve neyin yapılacağı yazılır.
+      // Tutar sütunu birimini başlıkta taşır; satırlar farklı para birimi
+      // taşıyorsa bunu yazamayız ve kullanıcı toplam alırken bilmeli.
+      const mixedCurrency = columns.some((column) => column.type === "money") && !reportCsvCurrency(rows)
+        ? " Rapor birden fazla para birimi taşıdığı için tutar başlıklarına birim yazılmadı; para birimi sütununu rapora ekleyin."
+        : "";
       setExportNotice(result.meta?.truncated
-        ? { tone: "warning", message: `Dosya eksik: sonuç satır sınırına takıldı, yalnız ilk ${numberDigits.format(rows.length)} satır indirildi. Raporu açıp satır sınırını yükseltin ve yeniden indirin.` }
-        : { tone: "success", message: `Rapor indirildi: ${numberDigits.format(rows.length)} satır.` });
+        ? { tone: "warning", message: `Dosya eksik: sonuç satır sınırına takıldı, yalnız ilk ${numberDigits.format(rows.length)} satır indirildi. Raporu açıp satır sınırını yükseltin ve yeniden indirin.${mixedCurrency}` }
+        : { tone: mixedCurrency ? "warning" : "success", message: `Rapor indirildi: ${numberDigits.format(rows.length)} satır.${mixedCurrency}` });
     } catch (error) {
       setExportNotice({ tone: "warning", message: reportExportErrorMessage(error) });
     } finally {
@@ -2153,10 +2214,10 @@ function ReportsView({ session, online }) {
         <div><small>CANLI ÖNİZLEME</small><h2>Rapor önizlemesi</h2><p>İlk 20 satır gösterilir; tam sonuç kaydedip CSV indirdiğinizde alınır.</p></div>
         <div className="live-toolbar-actions">
           {preview.loading && <span className="live-report-refreshing"><span className="live-spinner small" /> Tazeleniyor…</span>}
-          {canExport && <button type="button" className="live-button secondary" disabled={!reportMeta.id || Boolean(exportingId)} title={reportMeta.id ? "Tam sonucu CSV olarak indir" : "Kaydedip indirin"} onClick={() => downloadCsv({ id: reportMeta.id, name: reportMeta.name, resource: draft.resource, definition_json: requestDefinition })}>{exportingId === reportMeta.id ? <><span className="live-spinner small" /> Hazırlanıyor…</> : <><DownloadSimple /> CSV indir</>}</button>}
+          {canExport && <button type="button" className="live-button secondary" disabled={!reportMeta.id || dirty || Boolean(exportingId)} title={!reportMeta.id ? "Kaydedip indirin" : dirty ? "Önce kaydedin: dosya kayıtlı tanımdan üretilir" : "Tam sonucu CSV olarak indir"} onClick={() => downloadCsv({ id: reportMeta.id, name: reportMeta.name, resource: draft.resource, definition_json: requestDefinition })}>{exportingId === reportMeta.id ? <><span className="live-spinner small" /> Hazırlanıyor…</> : <><DownloadSimple /> CSV indir</>}</button>}
         </div>
       </header>
-      {canExport && !reportMeta.id && <p className="live-report-hint">Kaydedilmemiş taslak indirilemez; dosya kayıtlı tanımdan üretilir. Raporu kaydedip indirin.</p>}
+      {canExport && (!reportMeta.id || dirty) && <p className="live-report-hint">{reportMeta.id ? "Önce kaydedin: dosya kayıtlı tanımdan üretilir. Kaydedilmemiş değişiklikle indirilen dosya ekrandakinden farklı olur." : "Kaydedilmemiş taslak indirilemez; dosya kayıtlı tanımdan üretilir. Raporu kaydedip indirin."}</p>}
       {exportNoticeBox}
       {preview.notice ? <div className="live-view-empty"><ChartPieSlice /><b>Önizleme için biraz daha bilgi gerekiyor</b><small>{preview.notice}</small></div>
         : preview.error ? <div className="live-view-empty"><WarningCircle /><b>Rapor çalıştırılamadı</b><small>{reportErrorMessage(preview.error)}</small></div>
