@@ -62,7 +62,6 @@ export const API_CONFIG = Object.freeze({
     savedReports: "/saved-reports",
     reportFields: "/reports/fields",
     reportRun: "/reports/run",
-    reportExport: "/reports/export",
   }),
 });
 
@@ -819,9 +818,19 @@ export const api = {
       headers: { "Idempotency-Key": idempotencyKey("savedReports", "delete") },
     })).data;
   },
-  async reportCsv(id) {
-    const result = await request(withQuery(API_CONFIG.endpoints.reportExport, { id }));
-    return typeof result.data === "string" ? result.data : String(result.data ?? "");
+  // Rapor dökümü sunucudan hazır CSV olarak değil, ekranın gösterdiği satırların
+  // kendisi olarak istenir: başlık, bağlı kayıt adı, Türkçe durum, para ve tarih
+  // biçimi arayüzde zaten çözülmüş durumda. Sunucuya ikinci bir sunum katmanı
+  // koymak, korunan alan listesinin iki kopyasında bedelini ödediğimiz ayrışmayı
+  // tekrar üretirdi. `savedReportId` tanımı kayıttan okutur ve satır kapsamını
+  // uygular; `export: true` dışa aktarma yetkisi aratır, denetim kaydı yazdırır
+  // ve satır sınırını tam sınıra çıkarır.
+  async exportReport(savedReportId) {
+    // Tam döküm önizlemeden çok daha fazla satır tarar; 15 saniyelik genel
+    // zaman aşımı burada kullanıcının hazırladığı dosyayı boşuna iptal eder.
+    const result = await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { savedReportId, export: true }, timeoutMs: 60000 });
+    const payload = result.data || {};
+    return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
   },
   async workflow(resource, resourceId, action, body = {}) {
     const endpoint = API_CONFIG.endpoints[resource];

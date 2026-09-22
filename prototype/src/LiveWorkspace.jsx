@@ -1678,7 +1678,54 @@ function reportAggregateAlias(fn, field) {
   return [reportAggregateAliases[fn] || fn, fn === "count" ? "" : field].filter(Boolean).join("_");
 }
 
-function ReportCard({ report, mine, ready, canRemove, canExport, busy, onOpen, onDuplicate, onExport, onRemove }) {
+// Dışa aktarmada 403, raporu çalıştırma değil dosya indirme yetkisini işaret
+// eder; kullanıcıya ham kod değil ne yapacağı söylenir. Kalan durumlar rapor
+// çalıştırmadaki cümlelere düşer, ikinci bir sözlük tutulmaz.
+function reportExportErrorMessage(error) {
+  if (error?.status === 403 || error?.code === "forbidden") return "Bu raporu dışa aktarma yetkiniz yok. CSV indirmek ayrı bir yetki ister; maliyet ve maaş gibi alanlar taşıyan raporlarda bu yetki ayrıca tanımlanır.";
+  if (error?.status === 404) return "Rapor bulunamadı; silinmiş ya da paylaşımı kaldırılmış olabilir. Listeyi yenileyip tekrar deneyin.";
+  return reportErrorMessage(error);
+}
+
+// Bir rapor hücresinin kullanıcıya görünen metni. Önizleme tablosu da CSV de
+// buradan geçer: biçim iki yerde ayrışamaz. Durum sütununda Status rozetinin
+// yazdığı metnin aynısı üretilir.
+function reportCellText(column, row) {
+  const cell = reportPresentedValue(column.key, row);
+  if (column.type === "status" && cell) return localizedEnum(cell) || "—";
+  return formatValue(reportCellValue(column.key, cell, column.type), column.type, row);
+}
+
+// Sütun başlığı: gruplanmış raporda işlev ve alan ("Toplam · Tutar"), diğerinde
+// kaynağın Türkçe sütun etiketi. Ekrandaki başlık da dosyadaki başlık da burayı
+// okur; İngilizce sütun adı kullanıcıya hiçbir yerde görünmez.
+function reportHeaderLabel(resource, definition, column) {
+  const aggregate = definition?.group?.aggregates?.find((item) => item.as === column.key);
+  if (aggregate) return `${reportAggregateLabels[aggregate.fn] || aggregate.fn}${aggregate.field ? ` · ${reportColumnLabel(resource, aggregate.field)}` : ""}`;
+  return reportColumnLabel(resource, column.key);
+}
+
+// CSV, ekrandaki tablonun dosyaya yazılmış hâlidir: aynı sütunlar, aynı Türkçe
+// başlıklar, aynı hücre metinleri. Sunucuda ikinci bir sunum katmanı tutmuyoruz;
+// bağlı kaydın adı, Türkçe durum, para ve tarih biçimi zaten burada çözülüyor.
+// Excel, BOM taşımayan UTF-8 dosyayı kendi kod sayfasıyla açar ve "Müşteri"
+// "MÃ¼ÅŸteri" olur; sunucunun bıraktığı BOM davranışı korunur.
+const REPORT_CSV_BOM = "\ufeff";
+
+// RFC 4180: alan çift tırnakla sarılır, içteki tırnak ikilenir. Böylece virgül,
+// tırnak ve satır sonu taşıyan bir hücre satırı bölmez. Sunucunun bugünkü
+// çıktısı da her alanı sarıyor ve satırları CRLF ile bitiriyor.
+function reportCsvField(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function buildReportCsv(columns, rows, headerLabel) {
+  const lines = [columns.map((column) => reportCsvField(headerLabel(column))).join(",")];
+  for (const row of rows) lines.push(columns.map((column) => reportCsvField(reportCellText(column, row))).join(","));
+  return `${REPORT_CSV_BOM}${lines.join("\r\n")}\r\n`;
+}
+
+function ReportCard({ report, mine, ready, canRemove, canExport, busy, exporting, onOpen, onDuplicate, onExport, onRemove }) {
   return <article className="live-report-card">
     <div>
       <b>{report.name || "Adsız rapor"}</b>
@@ -1689,7 +1736,7 @@ function ReportCard({ report, mine, ready, canRemove, canExport, busy, onOpen, o
     <footer>
       <button type="button" className="live-workflow-button" disabled={!ready} onClick={() => onOpen(report)}>Aç</button>
       <button type="button" className="live-workflow-button" disabled={!ready} onClick={() => onDuplicate(report)}>Kopyala</button>
-      {canExport && <button type="button" className="live-workflow-button" disabled={busy} onClick={() => onExport(report)}><DownloadSimple /> CSV</button>}
+      {canExport && <button type="button" className="live-workflow-button" disabled={exporting} onClick={() => onExport(report)}>{busy ? <><span className="live-spinner small" /> Hazırlanıyor…</> : <><DownloadSimple /> CSV</>}</button>}
       {canRemove && mine && <button type="button" className="live-icon-button danger" title="Raporu sil" onClick={() => onRemove(report)}><Trash /></button>}
     </footer>
   </article>;
@@ -1704,7 +1751,12 @@ function ReportsView({ session, online }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [notice, setNotice] = useState(null);
-  const [busy, setBusy] = useState(false);
+  // Hangi raporun dökümü hazırlanıyor. Tek bayrak yerine kimlik tutuluyor ki
+  // beklemede yazısı düğmeyi tıklayan kartta görünsün.
+  const [exportingId, setExportingId] = useState(null);
+  // İndirme sonucu kurucudaki kayıt notundan ayrı tutulur: kullanıcı kayıtlı
+  // rapor kartından da indirebiliyor, mesajı orada da görmeli.
+  const [exportNotice, setExportNotice] = useState(null);
   const [removeTarget, setRemoveTarget] = useState(null);
   const [removeError, setRemoveError] = useState(null);
   const [removing, setRemoving] = useState(false);
@@ -1923,24 +1975,47 @@ function ReportsView({ session, online }) {
     }
   }
 
-  // CSV dökümü kayıtlı rapor kimliğiyle alınır; sunucu denetim kaydına da yazar.
+  // CSV dosyası ekranda görünen satırlardan burada üretilir: sunucudan hazır
+  // metin değil, rapor motorunun satırları istenir. Tanım kayıttan okunduğu için
+  // istek `savedReportId` taşır; `export: true` sunucuda dışa aktarma yetkisini
+  // aratır, denetim kaydını yazdırır ve satır sınırını tam sınıra çıkarır.
   async function downloadCsv(report) {
-    if (!online || busy) return;
-    setBusy(true);
+    if (!online || exportingId) return;
+    // Kayıtlı sürüm listede duruyorsa tanımı oradan okunur: sunucu da aynı
+    // kaydı çalıştıracak, başlıklar dosyada onunla uyumlu olmalı.
+    const stored = saved.rows.find((row) => row.id === report?.id) || report;
+    // Kaydedilmemiş taslakta sunucunun okuyacağı bir tanım yok.
+    if (!stored?.id) { setExportNotice({ tone: "warning", message: "Bu raporu indirmeden önce kaydedin; dosya kayıtlı tanımdan üretiliyor." }); return; }
+    setExportingId(stored.id);
+    setExportNotice(null);
     try {
-      const csv = await api.reportCsv(report.id);
+      const result = await api.exportReport(stored.id);
+      const columns = collapseReportColumns(result.data.columns || []);
+      const rows = result.data.rows || [];
+      if (!columns.length || !rows.length) {
+        setExportNotice({ tone: "warning", message: "Bu rapor şu an hiç satır döndürmüyor; indirilecek bir şey yok." });
+        return;
+      }
+      const definition = reportDefinitionOf(stored);
+      const resource = stored.resource || definition?.resource || draft.resource;
+      const csv = buildReportCsv(columns, rows, (column) => reportHeaderLabel(resource, definition, column));
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${(report.name || "rapor").replace(/[^\wğüşiöçİĞÜŞÖÇ -]/gi, "").trim() || "rapor"}-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.download = `${(stored.name || "rapor").replace(/[^\wğüşiöçİĞÜŞÖÇ -]/gi, "").trim() || "rapor"}-${new Date().toISOString().slice(0, 10)}.csv`;
       document.body.append(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      // Kırpılmış bir dosyayı sessizce vermek, hata vermekten kötüdür: eksik
+      // sayıyla karar verilir. Kaç satır indiği ve neyin yapılacağı yazılır.
+      setExportNotice(result.meta?.truncated
+        ? { tone: "warning", message: `Dosya eksik: sonuç satır sınırına takıldı, yalnız ilk ${numberDigits.format(rows.length)} satır indirildi. Raporu açıp satır sınırını yükseltin ve yeniden indirin.` }
+        : { tone: "success", message: `Rapor indirildi: ${numberDigits.format(rows.length)} satır.` });
     } catch (error) {
-      setNotice(reportErrorMessage(error));
+      setExportNotice({ tone: "warning", message: reportExportErrorMessage(error) });
     } finally {
-      setBusy(false);
+      setExportingId(null);
     }
   }
 
@@ -1981,13 +2056,16 @@ function ReportsView({ session, online }) {
     return <label><span>Değer{unit}</span>{valueInput(type, item.value, (next) => updateFilter(index, { value: next }), type === "status" ? "Durum kodu" : undefined)}</label>;
   }
 
+  // Aynı kutu hem kayıtlı rapor listesinde hem önizleme panelinde gösterilir:
+  // indirme düğmesi iki yerde, mesaj kullanıcının baktığı yerde olmalı.
+  const exportNoticeBox = exportNotice
+    ? <div className={`live-field-note ${exportNotice.tone}`}>{exportNotice.tone === "warning" ? <WarningCircle /> : <Check />}{exportNotice.message}</div>
+    : null;
+
   const previewColumns = collapseReportColumns(preview.data?.columns || []);
   const previewRows = preview.data?.rows || [];
-  const previewColumnLabel = (column) => {
-    const aggregate = requestDefinition.group?.aggregates?.find((item) => item.as === column.key);
-    if (aggregate) return `${reportAggregateLabels[aggregate.fn] || aggregate.fn}${aggregate.field ? ` · ${columnLabel(aggregate.field)}` : ""}`;
-    return columnLabel(column.key);
-  };
+  // Ekrandaki başlık da indirilen dosyadaki başlık da aynı fonksiyondan gelir.
+  const previewColumnLabel = (column) => reportHeaderLabel(draft.resource, requestDefinition, column);
 
   return <>
     <section className="live-panel">
@@ -1995,7 +2073,8 @@ function ReportsView({ session, online }) {
         <div><small>RAPOR MERKEZİ</small><h2>Kaydedilmiş raporlar</h2><p>Kendi raporlarınız ve ekiple paylaşılanlar. Açıp sürdürebilir, kopyalayıp kendinize uyarlayabilir, CSV olarak indirebilirsiniz.</p></div>
         <div className="live-toolbar-actions"><button type="button" className="live-button secondary" onClick={loadSaved} disabled={!online}><ArrowClockwise /> Yenile</button><button type="button" className="live-button primary" onClick={startNew}><Plus /> Yeni rapor</button></div>
       </header>
-      {saved.loading ? <LoadingState /> : saved.error?.status === 403 || saved.error?.code === "forbidden" ? <PermissionDeniedState /> : saved.error ? <ErrorState error={saved.error} retry={loadSaved} /> : !savedGroups.length ? <div className="live-view-empty"><ChartPieSlice /><b>Henüz kayıtlı rapor yok</b><small>Aşağıdaki kurucuda kaynağı, sütunları ve süzgeçleri seçip raporu kaydedin.</small></div> : <div className="live-report-groups">{savedGroups.map((group) => <section key={group.key}><h3>{group.title}</h3><div>{group.rows.map((row) => <ReportCard key={row.id} report={row} mine={group.key === "mine"} ready={!catalog.loading && !catalog.error} canRemove={canRemove} canExport={canExport} busy={busy} onOpen={openSaved} onDuplicate={(report) => openSaved(report, { asCopy: true })} onExport={downloadCsv} onRemove={(report) => { setRemoveError(null); setRemoveTarget(report); }} />)}</div></section>)}</div>}
+      {exportNoticeBox}
+      {saved.loading ? <LoadingState /> : saved.error?.status === 403 || saved.error?.code === "forbidden" ? <PermissionDeniedState /> : saved.error ? <ErrorState error={saved.error} retry={loadSaved} /> : !savedGroups.length ? <div className="live-view-empty"><ChartPieSlice /><b>Henüz kayıtlı rapor yok</b><small>Aşağıdaki kurucuda kaynağı, sütunları ve süzgeçleri seçip raporu kaydedin.</small></div> : <div className="live-report-groups">{savedGroups.map((group) => <section key={group.key}><h3>{group.title}</h3><div>{group.rows.map((row) => <ReportCard key={row.id} report={row} mine={group.key === "mine"} ready={!catalog.loading && !catalog.error} canRemove={canRemove} canExport={canExport} busy={exportingId === row.id} exporting={Boolean(exportingId)} onOpen={openSaved} onDuplicate={(report) => openSaved(report, { asCopy: true })} onExport={downloadCsv} onRemove={(report) => { setRemoveError(null); setRemoveTarget(report); }} />)}</div></section>)}</div>}
     </section>
 
     <section className="live-panel live-report-panel">
@@ -2072,8 +2151,13 @@ function ReportsView({ session, online }) {
     <section className="live-panel live-report-preview-panel">
       <header className="live-toolbar">
         <div><small>CANLI ÖNİZLEME</small><h2>Rapor önizlemesi</h2><p>İlk 20 satır gösterilir; tam sonuç kaydedip CSV indirdiğinizde alınır.</p></div>
-        {preview.loading && <span className="live-report-refreshing"><span className="live-spinner small" /> Tazeleniyor…</span>}
+        <div className="live-toolbar-actions">
+          {preview.loading && <span className="live-report-refreshing"><span className="live-spinner small" /> Tazeleniyor…</span>}
+          {canExport && <button type="button" className="live-button secondary" disabled={!reportMeta.id || Boolean(exportingId)} title={reportMeta.id ? "Tam sonucu CSV olarak indir" : "Kaydedip indirin"} onClick={() => downloadCsv({ id: reportMeta.id, name: reportMeta.name, resource: draft.resource, definition_json: requestDefinition })}>{exportingId === reportMeta.id ? <><span className="live-spinner small" /> Hazırlanıyor…</> : <><DownloadSimple /> CSV indir</>}</button>}
+        </div>
       </header>
+      {canExport && !reportMeta.id && <p className="live-report-hint">Kaydedilmemiş taslak indirilemez; dosya kayıtlı tanımdan üretilir. Raporu kaydedip indirin.</p>}
+      {exportNoticeBox}
       {preview.notice ? <div className="live-view-empty"><ChartPieSlice /><b>Önizleme için biraz daha bilgi gerekiyor</b><small>{preview.notice}</small></div>
         : preview.error ? <div className="live-view-empty"><WarningCircle /><b>Rapor çalıştırılamadı</b><small>{reportErrorMessage(preview.error)}</small></div>
           : !preview.data ? <LoadingState />
@@ -2082,7 +2166,7 @@ function ReportsView({ session, online }) {
                 <div className="live-table-wrap"><table className="live-table"><thead><tr>{previewColumns.map((column) => <th key={column.key} title={column.key}>{previewColumnLabel(column)}</th>)}</tr></thead><tbody>
                   {previewRows.map((row, index) => <tr key={index}>{previewColumns.map((column) => {
                     const cell = reportPresentedValue(column.key, row);
-                    return <td key={column.key}>{column.type === "status" && cell ? <Status>{cell}</Status> : formatValue(reportCellValue(column.key, cell, column.type), column.type, row)}</td>;
+                    return <td key={column.key}>{column.type === "status" && cell ? <Status>{cell}</Status> : reportCellText(column, row)}</td>;
                   })}</tr>)}
                 </tbody></table></div>
                 <footer className="live-table-footer"><span>{preview.meta?.rowCount ?? previewRows.length} satır{preview.meta?.truncated ? " (kırpıldı)" : ""}</span><small>Önizleme sunucu tarafında 20 satırla sınırlıdır</small></footer>

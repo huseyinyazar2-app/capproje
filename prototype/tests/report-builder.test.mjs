@@ -27,11 +27,25 @@ const reportScreen = section(liveSource, "const REPORT_PREVIEW_DELAY_MS", "funct
 // gerçekten çalıştırarak denetlemeyi sağlıyor.
 function loadReportHelpers() {
   const parts = [
+    // Denetim kaydı kaynak adlarının menü başlığına çevrilmesi `modules`
+    // dizisine, o da React bileşenlerine bağlı. Rapor sütunlarında
+    // "resourceName" tipi yok; boş sözlük yeterli.
+    "const resourceTitles = {};",
     section(apiSource, "export const RESOURCE_SLUGS", "// Rapor kurucusu bu haritayı").replace("export ", ""),
     section(apiSource, "export const FIELD_MAPS", "// Etiket → sunucu durum kodu").replace("export ", ""),
+    // Para, sayı ve tarih biçimleri: CSV bunları yeniden kurmamalı, ekranın
+    // kullandığı biçimlendiricilerin aynısından geçmeli.
+    section(liveSource, "const moneyWhole = new Intl.NumberFormat", "// Derleme damgası"),
+    section(liveSource, "const currencyLabels = {", '// "2026-07-22"'),
+    section(liveSource, "const isoLike = /^", "const modules = ["),
     section(liveSource, "const field = (name, label", "const operationalViews"),
+    section(liveSource, "const identifierField = /(Id|By)$/", "function statusTone("),
+    section(liveSource, "const enumLabels = {", "// Denetim kaydı modülü"),
+    section(liveSource, "const auditActionLabels = {", "// Sunucudaki üst yetki"),
     section(liveSource, "const reportColumnNameFor", "// Sunucu `definition_json`"),
-    "return { reportColumnLabel, reportColumnLabels, sharedColumnLabels, humanizeColumnName, collapseReportColumns, reportPresentedValue };",
+    section(liveSource, "const reportAggregateLabels = {", "const reportValuelessOps"),
+    section(liveSource, "// Bir rapor hücresinin kullanıcıya görünen metni", "function ReportCard("),
+    "return { reportColumnLabel, reportColumnLabels, sharedColumnLabels, humanizeColumnName, collapseReportColumns, reportPresentedValue, reportCellText, reportHeaderLabel, reportCsvField, buildReportCsv, localizedEnum, formatValue };",
   ];
   return new Function(parts.join("\n"))();
 }
@@ -92,7 +106,6 @@ test("önizleme isteği preview bayrağını taşır ve tanım snake_case kalır
   assert.match(reportScreen, /api\.runReport\(requestDefinition, \{ preview: true \}\)/);
   assert.match(apiSource, /reportRun: "\/reports\/run"/);
   assert.match(apiSource, /reportFields: "\/reports\/fields"/);
-  assert.match(apiSource, /reportExport: "\/reports\/export"/);
   assert.match(apiSource, /savedReports: "\/saved-reports"/);
   assert.match(reportApi, /async runReport\(definition, \{ preview = false \} = \{\}\)/);
   assert.match(reportApi, /body: \{ definition, preview \}/);
@@ -145,6 +158,8 @@ test("önizleme yenilenirken eski sonuç yerinde kalır ve sönükleşir", () =>
 test("biçimlendirme var olan yardımcılarla yapılır, yeni biçimlendirici yazılmaz", () => {
   assert.match(reportScreen, /formatValue\(reportCellValue\(column\.key, cell, column\.type\), column\.type, row\)/);
   assert.match(reportScreen, /<Status>\{cell\}<\/Status>/);
+  // Ekrandaki hücre metni ile dosyadaki hücre metni aynı fonksiyondan gelir.
+  assert.match(reportScreen, /: reportCellText\(column, row\)\}<\/td>/);
 
   for (const source of [reportScreen, reportLabels]) {
     assert.doesNotMatch(source, /new Intl\.(NumberFormat|DateTimeFormat)/, "rapor kodu yeni bir biçimlendirici kurmamalı");
@@ -225,9 +240,11 @@ test("kaydedilmiş raporlar açılır, kopyalanır, silinir ve CSV olarak indiri
   assert.match(reportScreen, /onDuplicate=\{\(report\) => openSaved\(report, \{ asCopy: true \}\)\}/);
   assert.match(reportScreen, /\(kopya\)/);
   assert.match(reportScreen, /await api\.deleteReport\(removeTarget\.id\)/);
-  assert.match(reportScreen, /const csv = await api\.reportCsv\(report\.id\)/);
+  // CSV artık sunucudan hazır metin olarak alınmıyor; dosya, rapor motorunun
+  // döndürdüğü satırlardan arayüzde üretiliyor (aşağıdaki CSV testleri).
+  assert.match(reportScreen, /const csv = buildReportCsv\(columns, rows,/);
   assert.match(reportScreen, /new Blob\(\[csv\], \{ type: "text\/csv;charset=utf-8" \}\)/);
-  assert.match(reportApi, /async reportCsv\(id\)/);
+  assert.match(reportApi, /async exportReport\(savedReportId\)/);
   assert.match(reportApi, /async savedReports\(\)/);
   assert.match(reportApi, /async saveReport\(values, \{ id = null \} = \{\}\)/);
   assert.match(reportApi, /async deleteReport\(id\)/);
@@ -299,6 +316,159 @@ test("rapor ekranı 390 pikselde yatay taşma yapmaz", () => {
   assert.match(mobile, /\.live-report-row\{grid-template-columns:minmax\(0,1fr\) 34px\}/);
   assert.match(mobile, /\.live-report-groups>section>div\{grid-template-columns:1fr\}/);
   assert.match(mobile, /\.live-report-save\{grid-template-columns:1fr\}/);
+});
+
+// ——— CSV dökümü ———
+// Dosya artık sunucudan hazır metin olarak gelmiyor: rapor motorunun
+// döndürdüğü satırlar ekrandakiyle aynı biçimlendiricilerden geçirilip burada
+// yazılıyor. Denetim metin eşleştirmesiyle yetinmiyor; CSV üreticisi kaynaktan
+// derlenip gerçek satırlarla çalıştırılıyor.
+const reportCsvSection = section(liveSource, "// Bir rapor hücresinin kullanıcıya görünen metni", "function ReportCard(");
+const csvColumns = [
+  { key: "code", type: "text" },
+  { key: "customer_id", type: "text" },
+  { key: "customer_name", type: "text" },
+  { key: "name", type: "text" },
+  { key: "status", type: "status" },
+  { key: "subtotal_minor", type: "money" },
+  { key: "offer_date", type: "date" },
+];
+// Sunucunun bozuk çıktısındaki satırın aynısı: ham UUID, ikilenen sütun, "lead".
+const csvRow = {
+  code: "CP-5",
+  customer_id: "cus_ce699fc4-961a-4697-b610-4ea2d1540cc6",
+  customer_name: "Müşteri 1",
+  name: "Resepsiyon",
+  status: "lead",
+  subtotal_minor: 123450,
+  offer_date: "2026-03-09",
+  currency: "TRY",
+};
+const exportedCsv = helpers.buildReportCsv(
+  helpers.collapseReportColumns(csvColumns),
+  [csvRow],
+  (column) => helpers.reportHeaderLabel("projects", null, column),
+);
+const exportedLines = exportedCsv.replace(/^﻿/, "").split("\r\n");
+
+test("CSV dökümü /reports/run üzerinden alınır, /reports/export çağrılmaz", () => {
+  // Sunum tek yerde kalsın diye sunucudaki ikinci CSV katmanı kullanılmıyor.
+  assert.doesNotMatch(apiSource, /\/reports\/export/);
+  assert.doesNotMatch(apiSource, /reportExport|reportCsv/);
+  assert.doesNotMatch(liveSource, /api\.reportCsv|reports\/export/);
+
+  // İstek sözleşmedeki iki alanı taşır: tanım kayıttan okunur, dışa aktarma
+  // yetkisi ve denetim kaydı sunucuda çalışır, satır sınırı tam sınıra çıkar.
+  assert.match(reportApi, /async exportReport\(savedReportId\)/);
+  assert.match(reportApi, /API_CONFIG\.endpoints\.reportRun, \{ method: "POST", body: \{ savedReportId, export: true \}/);
+  assert.match(reportScreen, /await api\.exportReport\(stored\.id\)/);
+
+  // Önizleme yolu değişmedi; tanım hâlâ gövdede gidiyor.
+  assert.match(reportApi, /body: \{ definition, preview \}/);
+});
+
+test("indirilen CSV ekranda görünen tablonun aynısıdır", () => {
+  // Excel, BOM taşımayan UTF-8 dosyayı kendi kod sayfasıyla açar ve "Müşteri"
+  // bozulur. Sunucunun bugünkü BOM davranışı korunuyor.
+  assert.ok(exportedCsv.startsWith("﻿"), "dosya UTF-8 BOM ile başlamalı");
+
+  // Başlıklar ekrandaki Türkçe etiketlerin aynısı; İngilizce sütun adı yok.
+  assert.equal(exportedLines[0], '"Proje Kodu","Müşteri","Proje","Aşama","Ara toplam","Teklif tarihi"');
+  for (const raw of ["code", "customer_id", "customer_name", "status", "subtotal_minor", "offer_date"]) {
+    assert.ok(!exportedLines[0].includes(raw), `başlıkta ham sütun adı kalmış: ${raw}`);
+  }
+
+  // Bağlı kayıt tek sütun: ham kimlik dosyaya yazılmaz, _id/_name ikilenmez.
+  assert.doesNotMatch(exportedCsv, /cus_[0-9a-f-]{8}/);
+  assert.equal(exportedLines[0].match(/Müşteri/g).length, 1, "müşteri sütunu ikilenmemeli");
+  assert.equal(exportedCsv.split(",").length, exportedLines[0].split(",").length * 2, "başlık ve satır aynı sütun sayısını taşımalı");
+
+  // Durum Türkçe, para ve tarih ekrandaki biçimde.
+  assert.equal(exportedLines[1], '"CP-5","Müşteri 1","Resepsiyon","Talep","1.234,50 TL","09.03.2026"');
+
+  // Aynı kural gruplanmış raporun başlığında da geçerli.
+  const grouped = { group: { aggregates: [{ fn: "sum", field: "subtotal_minor", as: "toplam_subtotal_minor" }] } };
+  assert.equal(helpers.reportHeaderLabel("projects", grouped, { key: "toplam_subtotal_minor", type: "money" }), "Toplam · Ara toplam");
+});
+
+test("ekrandaki hücre metni ile dosyadaki hücre metni tek yerden gelir", () => {
+  // Önizleme tablosu da CSV de reportCellText'ten geçiyor.
+  assert.match(reportScreen, /: reportCellText\(column, row\)\}<\/td>/);
+  assert.match(reportCsvSection, /reportCsvField\(reportCellText\(column, row\)\)/);
+
+  // Durum sütununda rozetin yazdığı metnin aynısı dosyaya yazılır.
+  assert.match(liveSource, /return <span className=\{`live-status \$\{statusTone\(children\)\}`\}>\{localizedEnum\(children\) \|\| "—"\}<\/span>;/);
+  assert.match(reportCsvSection, /if \(column\.type === "status" && cell\) return localizedEnum\(cell\) \|\| "—";/);
+  assert.equal(helpers.reportCellText({ key: "status", type: "status" }, { status: "lead" }), "Talep");
+
+  // Bağlı kayıt adı, para ve tarih de aynı yardımcılardan geçer.
+  assert.equal(helpers.reportCellText({ key: "customer_id", type: "text" }, csvRow), "Müşteri 1");
+  assert.equal(helpers.reportCellText({ key: "subtotal_minor", type: "money" }, csvRow), "1.234,50 TL");
+  assert.equal(helpers.reportCellText({ key: "offer_date", type: "date" }, csvRow), "09.03.2026");
+  // Çözülemeyen kimlik dosyada da boş kalır; kırk karakterlik dizi yazılmaz.
+  assert.equal(helpers.reportCellText({ key: "customer_id", type: "text" }, { customer_id: "cus_ce699fc4-961a-4697-b610-4ea2d1540cc6" }), "—");
+});
+
+test("CSV kaçışı virgül, tırnak ve satır sonu taşıyan hücreyi bozmaz", () => {
+  // RFC 4180: her alan çift tırnakla sarılır, içteki tırnak ikilenir.
+  assert.equal(helpers.reportCsvField('Mermer "A", 3 adet'), '"Mermer ""A"", 3 adet"');
+  assert.equal(helpers.reportCsvField("iki\nsatır"), '"iki\nsatır"');
+  assert.equal(helpers.reportCsvField(null), '""');
+
+  const csv = helpers.buildReportCsv(
+    [{ key: "name", type: "text" }, { key: "description", type: "text" }],
+    [{ name: 'Lobi, "A" blok', description: "ilk satır\nikinci satır" }],
+    (column) => helpers.reportColumnLabel("projects", column.key),
+  );
+  const body = csv.replace(/^﻿/, "");
+  assert.equal(body.split("\r\n")[1], '"Lobi, ""A"" blok","ilk satır\nikinci satır"');
+  // Virgül ve satır sonu alanın içinde kalır: dosya iki satırdır, üç değil.
+  assert.equal(body.split("\r\n").filter(Boolean).length, 2);
+  // Satırlar sunucunun bugünkü çıktısıyla aynı biçimde biter.
+  assert.ok(body.endsWith("\r\n"), "satırlar CRLF ile bitmeli");
+});
+
+test("indirme kaydedilmiş rapora bağlıdır, beklemede görünür, hatası Türkçedir", () => {
+  // Kaydedilmemiş taslakta düğme kapalı ve ne yapılacağı yazıyor.
+  assert.match(reportScreen, /disabled=\{!reportMeta\.id \|\| Boolean\(exportingId\)\}/);
+  assert.match(reportScreen, /Kaydedip indirin/);
+  assert.match(reportScreen, /Kaydedilmemiş taslak indirilemez/);
+  assert.match(reportScreen, /if \(!stored\?\.id\) \{ setExportNotice\(\{ tone: "warning", message: "Bu raporu indirmeden önce kaydedin/);
+
+  // Beklemede durumu: hangi raporun hazırlandığı kimlikle tutulur, düğme
+  // yazısı değişir ve iş bitince bayrak her koşulda temizlenir.
+  assert.match(reportScreen, /const \[exportingId, setExportingId\] = useState\(null\)/);
+  assert.match(reportScreen, /busy=\{exportingId === row\.id\} exporting=\{Boolean\(exportingId\)\}/);
+  assert.match(reportScreen, /\{busy \? <><span className="live-spinner small" \/> Hazırlanıyor…<\/> : <><DownloadSimple \/> CSV<\/>\}/);
+  assert.match(reportScreen, /finally \{\n\s*setExportingId\(null\);/);
+
+  // Hata ham kod olarak değil, ne yapılacağını söyleyen bir cümleyle çıkar.
+  assert.match(reportScreen, /setExportNotice\(\{ tone: "warning", message: reportExportErrorMessage\(error\) \}\)/);
+  const message = section(reportScreen, "function reportExportErrorMessage(error)", "// Bir rapor hücresinin");
+  assert.match(message, /403[\s\S]*?dışa aktarma yetkiniz yok/);
+  assert.match(message, /404[\s\S]*?Rapor bulunamadı/);
+  assert.match(message, /return reportErrorMessage\(error\);/);
+  assert.doesNotMatch(reportScreen, /\{error\.code\}|\{error\.status\}/);
+});
+
+test("kırpılmış döküm kullanıcıya söylenir, önizlemede uyarı çıkmaz", () => {
+  const download = section(reportScreen, "async function downloadCsv(report)", "// Alan kataloğu gelmeden");
+  // Eksik dosyayı sessizce vermek, hata vermekten kötüdür.
+  assert.match(download, /result\.meta\?\.truncated/);
+  assert.match(download, /tone: "warning", message: `Dosya eksik/);
+  assert.match(download, /satır indirildi/);
+  assert.match(download, /satır sınırını yükseltin/);
+  assert.match(download, /tone: "success", message: `Rapor indirildi/);
+
+  // Mesaj kullanıcının baktığı yerde: hem kayıtlı rapor listesinde hem
+  // önizleme panelinde aynı kutu gösterilir.
+  assert.equal((reportScreen.match(/\{exportNoticeBox\}/g) || []).length, 2);
+  assert.match(reportScreen, /exportNotice\.tone === "warning" \? <WarningCircle \/> : <Check \/>/);
+
+  // Önizlemede kırpılma beklenen durumdur; orada ayrı bir uyarı kutusu yok.
+  const previewFooter = section(reportScreen, '<footer className="live-table-footer"><span>{preview.meta', "</footer>");
+  assert.match(previewFooter, /kırpıldı/);
+  assert.doesNotMatch(previewFooter, /Dosya eksik/);
 });
 
 // Etiket denetimi kaynak metni üzerinde değil, sunucunun gerçekten döndürdüğü
