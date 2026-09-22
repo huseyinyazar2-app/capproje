@@ -818,11 +818,23 @@ async function getPermissionCatalog(env, principal) {
 // "Resmi" / "Proje içi" sekmeleri boş görünüyordu.
 const booleanFilters = new Set(["official", "is_outsourced", "is_system"]);
 
+// Elektronik tablo `=`, `+`, `-`, `@` ile başlayan hücreyi formül olarak
+// çalıştırır ve DDE üzerinden komut çalıştırmaya kadar gidebilir. Müşteri adını,
+// proje açıklamasını, notu kullanıcı yazıyor; yani hücrenin içeriği saldırganın
+// denetiminde. Tehlikeli olan da bu: dosyayı açan kişi genelde o metni yazan
+// kişi değil. Tehlikeli karakter görünmez bir karakterin arkasına saklanabildiği
+// için (`\t=1+1`) baştaki boşluk ve denetim karakterleri atlanarak bakılır;
+// yalnız ilk karaktere bakmak yetmiyor.
+const CSV_FORMULA_START = /^[\s\u0000-\u001f\u200b-\u200f\u2060\ufeff]*[=+\-@]/;
+
 function csvCell(value) {
   if (value === null || value === undefined) return "";
+  // Sayı formül olamaz ve sayı kalmalıdır: `-150000` bir tutardır, önüne tek
+  // tırnak konursa Excel'de metne döner ve sütun toplanmaz. Bu yüzden koruma
+  // yalnız metin hücrelerine uygulanır.
+  const numeric = typeof value === "number" || typeof value === "bigint";
   const text = typeof value === "object" ? JSON.stringify(value) : String(value);
-  // Öndeki =,+,-,@ karakterleri elektronik tabloda formül olarak yorumlanır.
-  const guarded = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  const guarded = !numeric && CSV_FORMULA_START.test(text) ? `'${text}` : text;
   return `"${guarded.replaceAll('"', '""')}"`;
 }
 

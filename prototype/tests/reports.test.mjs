@@ -689,3 +689,64 @@ test("döküm sınırı: yazılmamış limit tavana çıkar, yazılmış limit k
   assert.equal(await dataLines(savedIds[0]), total, "CSV ucu da yazılmamış limitte tavana çıkmalı");
   assert.equal(await dataLines(savedIds[1]), 100);
 });
+
+// Hücre içeriğini kullanıcı yazar, dosyayı açan kişi genelde başkasıdır: metin
+// hücresi elektronik tabloda formüle dönüşmemeli.
+const formulaProjects = [
+  ["prj-f1", "F-1", "=1+1"],
+  ["prj-f2", "F-2", "+1"],
+  ["prj-f3", "F-3", "-1"],
+  ["prj-f4", "F-4", "@SUM(A1)"],
+  ["prj-f5", "F-5", "\t=1+1"],
+  ["prj-f6", "F-6", "Normal Proje"],
+];
+
+function seedFormulaProjects(database) {
+  for (const [id, code, name] of formulaProjects) {
+    database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,contract_amount_minor,planned_end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(id, "tenant-a", code, name, "production", -150_000, "2026-03-31", timestamp, timestamp);
+  }
+}
+
+const csvLines = async (response) => (await response.text()).replace(/^﻿/, "").trim().split("\r\n");
+
+test("CSV hücresi elektronik tabloda formüle dönüşmez, sayı ve tarih bozulmaz", async () => {
+  const { database, env } = await setup({ users: [exporter] });
+  seedFormulaProjects(database);
+
+  const saved = (await payload(await send(env, "/api/v1/saved-reports", {
+    method: "POST", email: exporter.email,
+    body: { name: "Formül denemesi", resource: "projects", definition_json: { resource: "projects", columns: ["code", "name", "planned_end_date", "contract_amount_minor"], sort: [{ field: "code", direction: "asc" }] } },
+  }))).data;
+
+  const lines = await csvLines(await send(env, `/api/v1/reports/export?id=${saved.id}`, { email: exporter.email }));
+  assert.deepEqual(lines, [
+    '"code","name","planned_end_date","contract_amount_minor"',
+    '"F-1","\'=1+1","2026-03-31","-150000"',
+    '"F-2","\'+1","2026-03-31","-150000"',
+    '"F-3","\'-1","2026-03-31","-150000"',
+    '"F-4","\'@SUM(A1)","2026-03-31","-150000"',
+    '"F-5","\'\t=1+1","2026-03-31","-150000"',
+    '"F-6","Normal Proje","2026-03-31","-150000"',
+  ]);
+  // Eksi işaretli tutar sayı olarak kalmalı: tek tırnak eklenseydi Excel'de
+  // metne döner ve sütun toplanmazdı.
+  assert.ok(lines.every((line) => !line.includes(`"'-150000"`)), "sayısal tutar korumaya takılmamalı");
+  assert.ok(lines.every((line) => !line.includes(`"'2026-03-31"`)), "tarih korumaya takılmamalı");
+});
+
+test("formül koruması genel liste dökümünde de geçerlidir", async () => {
+  const { database, env } = await setup({ users: [exporter] });
+  seedFormulaProjects(database);
+
+  // Rapor ucu ile liste ucu aynı CSV kapısından geçer; koruma tek yerde durduğu
+  // sürece ikisi ayrışamaz.
+  const text = (await csvLines(await send(env, "/api/v1/projects/export", { email: exporter.email }))).join("\r\n");
+  for (const [, code, name] of formulaProjects.filter(([, , value]) => /^\s*[=+\-@]/.test(value))) {
+    assert.ok(text.includes(`"'${name}"`), `${code} hücresi liste dökümünde de etkisizleşmeli`);
+    assert.ok(!text.includes(`"${name}"`), `${code} hücresi korumasız biçimde hiç geçmemeli`);
+  }
+  assert.ok(text.includes('"Normal Proje"'), "normal metin liste dökümünde de bozulmamalı");
+  assert.ok(text.includes('"-150000"') && !text.includes(`"'-150000"`), "sayısal tutar liste dökümünde de sayı kalmalı");
+  assert.ok(text.includes('"2026-03-31"') && !text.includes(`"'2026-03-31"`), "tarih liste dökümünde de bozulmamalı");
+});
