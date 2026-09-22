@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import worker from "../worker/index.js";
+
+const workerSource = await readFile(new URL("../worker/index.js", import.meta.url), "utf8");
 
 const normalizeSql = (sql) => sql.replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -200,6 +203,29 @@ test("read permission alone does not expose cost or salary fields", async () => 
   assert.equal("estimated_cost" in (await responseData(projectResponse)), false, "projects.read must not imply projects.view_cost");
   assert.equal("unit_cost" in (await responseData(workItemResponse)), false, "work-items.read must not imply work-items.view_cost");
   assert.equal("salary_amount" in (await responseData(employeeResponse)), false, "employees.read must not imply employees.view_salary");
+});
+
+test("the guarded field list has exactly one definition", () => {
+  // Okuma tarafı (serializeRow) ile yazma tarafı (sensitiveWriteProblem) uzun
+  // süre iki ayrı kopya taşıdı ve kopyalar ayrıştı: estimated_amount_minor ile
+  // average_cost_minor yazarken maliyet sayılıyor, okunurken silinmiyordu.
+  // Maliyeti göremeyen kullanıcı bu iki tutarı listede ve CSV dökümünde
+  // görebiliyordu. İkisi de tek listeden beslendiği sürece ayrışamazlar.
+  const body = (name) => {
+    const start = workerSource.indexOf(`function ${name}(`);
+    assert.ok(start >= 0, `${name} bulunamadı`);
+    return workerSource.slice(start, workerSource.indexOf("\n}", start));
+  };
+  for (const name of ["serializeRow", "sensitiveWriteProblem"]) {
+    assert.doesNotMatch(body(name), /["'][a-z_]+_(minor|masked)["']|["'](iban|birth_date|official)["']/,
+      `${name} korunan alan adlarını kendi içinde saymamalı, sensitiveFieldGuards listesinden beslenmeli`);
+    assert.match(body(name), /sensitiveFieldGuards|sensitivePermissionByField/, `${name} paylaşılan listeyi kullanmalı`);
+  }
+  // Liste, yazma tarafında maliyet sayılan iki alanı da kapsamalı.
+  const guards = workerSource.slice(workerSource.indexOf("const sensitiveFieldGuards"), workerSource.indexOf("const sensitivePermissionByField"));
+  for (const field of ["estimated_amount_minor", "average_cost_minor"]) {
+    assert.ok(guards.includes(`"${field}"`), `${field} korunan alanlar arasında olmalı`);
+  }
 });
 
 test("a read-only role is denied both create and update operations", async () => {

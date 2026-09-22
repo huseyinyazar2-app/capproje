@@ -8,7 +8,18 @@ function booleanValue(value) {
   return Boolean(value);
 }
 
-const JSON_COLUMNS = new Set(["settings_json", "metadata_json", "dependency_ids_json", "team_json", "payment_schedule_json", "attendees_json", "checklist_json"]);
+const JSON_COLUMNS = new Set(["settings_json", "metadata_json", "dependency_ids_json", "team_json", "payment_schedule_json", "attendees_json", "checklist_json", "definition_json"]);
+
+// Rapor tanımı kişisel veri değil, iş emeğidir: ayrılan birinin raporları
+// firmada kalmalı. Bu yüzden firma sahibi/yöneticisi özel raporları görebilir
+// ve silebilir. Değiştiremez — başkasının adı altında sessizce değişmiş bir
+// rapor, hiç olmayan rapordan daha kötüdür. `principal.isOwner`, ownerRoles
+// kümesinden türetilir.
+const savedReportRowScope = {
+  read: (principal) => (principal.isOwner ? null : { clause: "(visibility='shared' OR owner_user_id=?)", bindings: [principal.user.id] }),
+  write: (principal) => ({ clause: "owner_user_id=?", bindings: [principal.user.id] }),
+  delete: (principal) => (principal.isOwner ? null : { clause: "owner_user_id=?", bindings: [principal.user.id] }),
+};
 
 const resources = {
   customers: { table: "customers", required: ["name"], search: ["code", "name", "contact_name", "email", "phone"], fields: ["code","type","name","contact_name","email","phone","tax_office","tax_number","address","city","payment_terms","credit_limit_minor","notes","status","metadata_json"] },
@@ -55,6 +66,10 @@ const resources = {
   "production-issues": { table: "production_issues", required: ["production_order_id", "issue_type", "description"], search: ["issue_number", "description", "root_cause", "resolution"], filters: ["production_order_id", "production_operation_id", "project_id", "work_item_id", "issue_type", "severity", "status"], refs: { production_order_id: "production_orders", production_operation_id: "production_operations", project_id: "projects", work_item_id: "work_items" }, memberRefs: ["responsible_user_id"], serverDefaults: (principal, timestamp) => ({ reported_at: timestamp, reported_by: principal.user.id }), fields: ["production_order_id","production_operation_id","project_id","work_item_id","issue_number","issue_type","severity","description","responsible_user_id","rework_quantity","scrap_quantity","cost_impact_minor","delay_days","root_cause","status","metadata_json"] },
   "chat-channels": { table: "chat_channels", required: ["name"], search: ["name", "topic"], filters: ["kind", "project_id", "status"], refs: { project_id: "projects" }, serverDefaults: (principal) => ({ created_by: principal.user.id }), fields: ["name","kind","project_id","topic","status","metadata_json"] },
   "chat-messages": { table: "chat_messages", required: ["channel_id", "body"], search: ["body", "link_label"], filters: ["channel_id", "author_user_id", "link_module", "link_record_id", "status"], refs: { channel_id: "chat_channels" }, memberRefs: ["author_user_id"], serverDefaults: (principal) => ({ author_user_id: principal.user.id }), fields: ["channel_id","body","link_module","link_record_id","link_label","status","metadata_json"] },
+  // Rapor tanımı, sahibine özel olabildiği için satır kapsamı kancasıyla
+  // süzülür: paylaşılmayan bir rapor, listeleyende de dışa aktarımda da
+  // yalnız sahibine görünür.
+  "saved-reports": { table: "saved_reports", idPrefix: "rep_", required: ["name", "resource", "definition_json"], search: ["name", "description", "resource"], filters: ["resource", "visibility", "owner_user_id"], memberRefs: ["owner_user_id"], serverDefaults: (principal) => ({ owner_user_id: principal.user.id }), rowScope: savedReportRowScope, validateWrite: savedReportWriteProblem, fields: ["name","description","resource","definition_json","visibility"] },
 };
 
 const aliases = {
@@ -238,6 +253,7 @@ const enumFields = {
   "resource-assignments": { resource_type: ["employee","team","work_center","subcontractor"] },
   "design-revisions": { drawing_type: ["2d","3d","shop_drawing"] },
   contracts: { payment_model: ["progress_payment","advance_balance","custom"], photo_consent: ["not_requested","denied","internal_only","marketing_allowed"] },
+  "saved-reports": { visibility: ["private","shared"] },
 };
 // Serbest metin alanları için üst sınırlar. Gövde boyutu sınırı tek başına
 // veritabanına devasa tek alan yazılmasını engellemiyordu.
@@ -494,17 +510,19 @@ async function attachReferenceNames(env, principal, config, rows, serialized) {
   }
 }
 
+// Korunan alanların listesi tek yerde (sensitiveFieldGuards) durur. Burada ayrı
+// bir kopya tutulduğu sürece ikisi kaçınılmaz olarak ayrışıyordu: satın alma
+// talebindeki estimated_amount_minor ile stok kartındaki average_cost_minor
+// yazma tarafında maliyet sayılıyor ama okuma tarafında silinmiyordu, yani
+// maliyeti göremeyen kullanıcı bu iki tutarı listede ve CSV dökümünde
+// görebiliyordu.
 function serializeRow(row, slug, principal) {
   const result = decodeRow(row);
   if (!result) return result;
-  if (!allowed(principal, "cost.view")) {
-    for (const field of ["estimated_cost","cost_price","unit_cost","estimated_cost_minor","cost_price_minor","unit_cost_minor"]) delete result[field];
+  for (const [permission, fields] of sensitiveFieldGuards) {
+    if (allowed(principal, permission)) continue;
+    for (const field of fields) delete result[field];
   }
-  if (!allowed(principal, "salary.view")) {
-    for (const field of ["salary_amount","base_salary","overtime_amount","bonus_amount","allowance_amount","deduction_amount","advance_amount","net_preview","salary_amount_minor","base_salary_minor","overtime_amount_minor","bonus_amount_minor","allowance_amount_minor","deduction_amount_minor","advance_amount_minor","net_preview_minor"]) delete result[field];
-  }
-  if (!allowed(principal, "hr.sensitive.read")) for (const field of ["national_id_masked","birth_date","emergency_contact","address"]) delete result[field];
-  if (!allowed(principal, "finance.sensitive.read")) for (const field of ["iban","official","opening_balance_minor","current_balance_minor"]) delete result[field];
   return result;
 }
 
@@ -611,20 +629,50 @@ function allowed(principal, permission) {
 // Sohbetin iki tablosu tek yetkiyle yönetilir. Rol ekranında "sohbet kanalları"
 // ve "sohbet mesajları" diye iki ayrı satır görmek kullanıcıya hiçbir şey
 // anlatmaz; ikisi de aynı işin parçasıdır.
-const permissionAliases = { "chat-channels": "chat", "chat-messages": "chat" };
+// Aynı gerekçeyle kaydedilmiş raporlar da kendi adıyla değil "reports.*"
+// yetkileriyle yönetilir; göç dosyası bu üç kodu dağıtıyor.
+const permissionAliases = { "chat-channels": "chat", "chat-messages": "chat", "saved-reports": "reports" };
 
 function permissionFor(slug, action) {
   return `${permissionAliases[slug] || slug}.${action}`;
 }
 
+// Hassas sütunların tek listesi. serializeRow tarihsel olarak bunun biraz
+// darını siliyor (estimated_amount_minor ve average_cost_minor orada yok);
+// yazma denetimi ve rapor motoru en geniş listeyi kullanır, çünkü bir sütunu
+// göremeyen kullanıcı ona göre süzerek de sıralayarak da değerini öğrenebilir.
+const sensitiveFieldGuards = [
+  ["cost.view", ["estimated_cost","cost_price","unit_cost","estimated_cost_minor","cost_price_minor","unit_cost_minor","estimated_amount_minor","average_cost_minor"]],
+  ["salary.view", ["salary_amount","base_salary","overtime_amount","bonus_amount","allowance_amount","deduction_amount","advance_amount","net_preview","salary_amount_minor","base_salary_minor","overtime_amount_minor","bonus_amount_minor","allowance_amount_minor","deduction_amount_minor","advance_amount_minor","net_preview_minor"]],
+  ["hr.sensitive.read", ["national_id_masked","birth_date","emergency_contact","address"]],
+  ["finance.sensitive.read", ["iban","official","opening_balance_minor","current_balance_minor"]],
+];
+const sensitivePermissionByField = new Map(sensitiveFieldGuards.flatMap(([permission, fields]) => fields.map((field) => [field, permission])));
+
+function sensitiveFieldPermission(column) {
+  return sensitivePermissionByField.get(column) || null;
+}
+
+// Kaynağa özel `if` yığını yerine genel kanca: kayıt defterindeki `rowScope`,
+// principal'ı alıp { clause, bindings } döndürür ve listeleme, tekil okuma,
+// güncelleme, silme, dışa aktarma ile rapor motoru aynı kapıdan geçer. Yeni
+// bir kaynağa satır kapsamı gerektiğinde altı yeri ayrı ayrı hatırlamak
+// gerekmesin diye tek yerde tanımlanır.
+function rowScopeFor(config, principal, mode) {
+  // Silme kendi kuralını tanımlamamışsa güncellemeninkine düşer; böylece
+  // kancayı kullanan diğer kaynakların davranışı olduğu gibi kalır.
+  const source = config.rowScope?.[mode] || (mode === "delete" ? config.rowScope?.write : null);
+  const scope = source?.(principal);
+  if (!scope?.clause) return { clause: null, bindings: [] };
+  return { clause: scope.clause, bindings: scope.bindings || [] };
+}
+
+function scopedWhere(clauses, scope) {
+  return scope.clause ? [...clauses, scope.clause] : clauses;
+}
+
 function sensitiveWriteProblem(principal, body) {
-  const guarded = [
-    ["cost.view", ["estimated_cost","cost_price","unit_cost","estimated_cost_minor","cost_price_minor","unit_cost_minor","estimated_amount_minor","average_cost_minor"]],
-    ["salary.view", ["salary_amount","base_salary","overtime_amount","bonus_amount","allowance_amount","deduction_amount","advance_amount","net_preview","salary_amount_minor","base_salary_minor","overtime_amount_minor","bonus_amount_minor","allowance_amount_minor","deduction_amount_minor","advance_amount_minor","net_preview_minor"]],
-    ["hr.sensitive.read", ["national_id_masked","birth_date","emergency_contact","address"]],
-    ["finance.sensitive.read", ["iban","official","opening_balance_minor","current_balance_minor"]],
-  ];
-  for (const [permission, fields] of guarded) {
+  for (const [permission, fields] of sensitiveFieldGuards) {
     const attempted = fields.filter((field) => Object.prototype.hasOwnProperty.call(body, field));
     if (attempted.length && !allowed(principal, permission)) return problem(403, "sensitive_field_forbidden", `${attempted.join(", ")} alanları için ${permission} yetkisi gereklidir.`);
   }
@@ -790,16 +838,23 @@ async function exportResource(request, env, principal, slug, config) {
     clauses.push(`${field}=?`);
     bindings.push(booleanFilters.has(field) ? (["true", "1"].includes(value) ? 1 : 0) : value);
   }
+  const scope = rowScopeFor(config, principal, "read");
   const limit = Math.min(10000, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "5000", 10) || 5000));
-  const rows = await all(env.DB.prepare(`SELECT * FROM ${config.table} WHERE ${clauses.join(" AND ")} ORDER BY ${config.table === "audit_logs" ? "created_at" : "updated_at"} DESC LIMIT ?`).bind(...bindings, limit));
+  const rows = await all(env.DB.prepare(`SELECT * FROM ${config.table} WHERE ${scopedWhere(clauses, scope).join(" AND ")} ORDER BY ${config.table === "audit_logs" ? "created_at" : "updated_at"} DESC LIMIT ?`).bind(...bindings, ...scope.bindings, limit));
   const serialized = rows.map((row) => serializeRow(row, slug, principal));
   const columns = [...new Set(serialized.flatMap((row) => Object.keys(row)))];
-  const lines = [columns.map(csvCell).join(","), ...serialized.map((row) => columns.map((column) => csvCell(row[column])).join(","))];
   await audit(env, principal, request, "export", slug, null, { row_count: serialized.length });
+  return csvResponse(columns, serialized, slug);
+}
+
+// CSV üretimi tek yerde: kaynak dışa aktarımı ile rapor dışa aktarımı aynı
+// kaçış kurallarını ve aynı BOM'u kullanmalı, yoksa biri Excel'de bozuk açılır.
+function csvResponse(columns, rows, filenameBase) {
+  const lines = [columns.map(csvCell).join(","), ...rows.map((row) => columns.map((column) => csvCell(row[column])).join(","))];
   return new Response(`﻿${lines.join("\r\n")}\r\n`, {
     headers: {
       "content-type": "text/csv; charset=utf-8",
-      "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${slug}-${now().slice(0, 10)}.csv`)}`,
+      "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${filenameBase}-${now().slice(0, 10)}.csv`)}`,
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
     },
@@ -1157,6 +1212,11 @@ async function listResource(request, env, principal, slug, config) {
     const like = `%${escapeLike(q)}%`;
     for (let index = 0; index < config.search.length; index += 1) bindings.push(like);
   }
+  const scope = rowScopeFor(config, principal, "read");
+  if (scope.clause) {
+    clauses.push(scope.clause);
+    bindings.push(...scope.bindings);
+  }
   const where = clauses.join(" AND ");
   const totalRow = await one(env.DB.prepare(`SELECT COUNT(*) AS total FROM ${config.table} WHERE ${where}`).bind(...bindings));
   const rows = await all(env.DB.prepare(`SELECT * FROM ${config.table} WHERE ${where} ORDER BY ${config.table === "audit_logs" ? "created_at" : "updated_at"} DESC LIMIT ? OFFSET ?`).bind(...bindings, pageSize, (page - 1) * pageSize));
@@ -1190,7 +1250,8 @@ async function listResource(request, env, principal, slug, config) {
 
 async function getResource(env, principal, slug, config, resourceId) {
   if (!allowed(principal, permissionFor(slug, "read"))) return problem(403, "forbidden", "Bu kaydı görüntüleme yetkiniz yok.");
-  let row = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?`).bind(resourceId, principal.tenantId));
+  const scope = rowScopeFor(config, principal, "read");
+  let row = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(resourceId, principal.tenantId, ...scope.bindings));
   // Üyelik seçicileri kullanıcı kimliğiyle de aranabilmelidir.
   if (!row && slug === "memberships") row = await one(env.DB.prepare("SELECT * FROM memberships WHERE user_id=? AND tenant_id=?").bind(resourceId, principal.tenantId));
   if (!row) return problem(404, "not_found", "Kayıt bulunamadı.");
@@ -1242,6 +1303,8 @@ async function createResource(request, env, principal, slug, config) {
   if (normalized.error) return problem(422, "validation_error", normalized.error);
   const referenceError = await validateReferences(env, principal, config, normalized.values);
   if (referenceError) return problem(422, "cross_tenant_reference", referenceError);
+  const writeProblem = await config.validateWrite?.({ env, principal, slug, config, values: normalized.values, existing: null, creating: true });
+  if (writeProblem) return writeProblem;
   if (slug === "memberships") {
     const roleProblem = await privilegedRoleProblem(env, principal, [normalized.values.role_id]);
     if (roleProblem) return roleProblem;
@@ -1274,7 +1337,7 @@ async function createResource(request, env, principal, slug, config) {
     const handover = await workflowRow(env, principal, "handovers", normalized.values.handover_id);
     if (!handover || ["accepted", "closed"].includes(handover.status)) return problem(409, "handover_locked", "Kabul edilmiş teslime eksik kalemi eklenemez.");
   }
-  const resourceId = id(`${config.table.slice(0, 3)}_`);
+  const resourceId = id(config.idPrefix || `${config.table.slice(0, 3)}_`);
   const timestamp = now();
   // Sunucunun doldurduğu, istemcinin gönderemeyeceği alanlar.
   for (const [column, value] of Object.entries(config.serverDefaults?.(principal, timestamp) || {})) {
@@ -1303,8 +1366,11 @@ async function updateResource(request, env, principal, slug, config, resourceId)
   if (normalized.error) return problem(422, "validation_error", normalized.error);
   const referenceError = await validateReferences(env, principal, config, normalized.values);
   if (referenceError) return problem(422, "cross_tenant_reference", referenceError);
-  const existing = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?`).bind(resourceId, principal.tenantId));
+  const scope = rowScopeFor(config, principal, "write");
+  const existing = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(resourceId, principal.tenantId, ...scope.bindings));
   if (!existing) return problem(404, "not_found", "Kayıt bulunamadı.");
+  const writeProblem = await config.validateWrite?.({ env, principal, slug, config, values: normalized.values, existing, creating: false });
+  if (writeProblem) return writeProblem;
   if (slug === "memberships") {
     const roleProblem = await privilegedRoleProblem(env, principal, [normalized.values.role_id, existing.role_id]);
     if (roleProblem) return roleProblem;
@@ -1352,8 +1418,8 @@ async function updateResource(request, env, principal, slug, config, resourceId)
   if (!fields.length) return problem(422, "validation_error", "Güncellenecek alan bulunamadı.");
   const assignments = fields.map((field) => `${field}=?`);
   if (config.table !== "audit_logs") assignments.push("updated_at=?");
-  const values = [...fields.map((field) => normalized.values[field]), ...(config.table === "audit_logs" ? [] : [now()]), resourceId, principal.tenantId];
-  try { await run(env.DB.prepare(`UPDATE ${config.table} SET ${assignments.join(",")} WHERE id=? AND tenant_id=?`).bind(...values)); }
+  const values = [...fields.map((field) => normalized.values[field]), ...(config.table === "audit_logs" ? [] : [now()]), resourceId, principal.tenantId, ...scope.bindings];
+  try { await run(env.DB.prepare(`UPDATE ${config.table} SET ${assignments.join(",")} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(...values)); }
   catch (error) { return problem(409, "constraint_error", "Kayıt güncellenemedi.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
   await audit(env, principal, request, "update", slug, resourceId, normalized.values);
   return getResource(env, principal, slug, config, resourceId);
@@ -2733,7 +2799,8 @@ async function handoverTransition(request, env, principal, handoverId) {
 async function deleteResource(request, env, principal, slug, config, resourceId) {
   if (config.readOnly) return problem(405, "read_only", "Bu kaynak salt okunurdur.");
   if (!allowed(principal, permissionFor(slug, "delete"))) return problem(403, "forbidden", "Kayıt silme yetkiniz yok.");
-  const existing = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?`).bind(resourceId, principal.tenantId));
+  const scope = rowScopeFor(config, principal, "delete");
+  const existing = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(resourceId, principal.tenantId, ...scope.bindings));
   if (!existing) return problem(404, "not_found", "Kayıt bulunamadı.");
   if (slug === "financial-transactions" && ["approved", "reversed"].includes(existing.status)) return problem(409, "approved_record_immutable", "Onaylı finans kaydı silinemez; ters kayıt oluşturun.");
   const protectedStates = { "site-surveys": ["approved"], contracts: ["signed","active","completed","terminated"], "design-revisions": ["approved","superseded"], "progress-payments": ["approved","invoiced","paid"], "stock-movements": ["posted"], "project-meetings": ["published","closed"], "quality-inspections": ["completed","closed"], handovers: ["accepted","closed"], "supplier-quotations": ["selected"], "production-operations": ["completed"], "production-issues": ["resolved"] };
@@ -2752,7 +2819,7 @@ async function deleteResource(request, env, principal, slug, config, resourceId)
   }
   try {
     if (slug === "files" && existing.object_key && env.FILES) await env.FILES.delete(existing.object_key);
-    await run(env.DB.prepare(`DELETE FROM ${config.table} WHERE id=? AND tenant_id=?`).bind(resourceId, principal.tenantId));
+    await run(env.DB.prepare(`DELETE FROM ${config.table} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(resourceId, principal.tenantId, ...scope.bindings));
   } catch (error) { return problem(409, "record_in_use", "Bu kayıt ilişkili kayıtlarda kullanıldığı için silinemiyor.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
   await audit(env, principal, request, "delete", slug, resourceId, { previous: decodeRow(existing) });
   return new Response(null, { status: 204 });
@@ -3093,6 +3160,375 @@ async function chatStream(request, env, principal) {
 // Geçici şifreyle giren kullanıcı, şifresini değiştirmeden veri yazamaz.
 const passwordChangeExemptPaths = new Set(["/api/v1/session", "/api/v1/me", "/api/v1/auth/password/change", "/api/v1/permissions"]);
 
+// ——— Rapor motoru ———————————————————————————————————————————————————————
+// Kaydedilmiş rapor bir sorgu değil, sorguyu üreten tarifidir. Tarif her
+// çalıştırmada yetkiden ve sütun beyaz listesinden yeniden geçer; böylece
+// yetkisi sonradan daralan bir kullanıcı, dün kaydettiği raporla bugün
+// göremeyeceği veriyi çekemez.
+const REPORT_MAX_LIMIT = 5000;
+const REPORT_DEFAULT_LIMIT = 500;
+const REPORT_PREVIEW_LIMIT = 20;
+const REPORT_MAX_COLUMNS = 60;
+const REPORT_MAX_FILTERS = 20;
+const REPORT_MAX_SORTS = 5;
+const REPORT_MAX_GROUP_BY = 5;
+const REPORT_MAX_AGGREGATES = 10;
+const REPORT_MAX_IN_VALUES = 200;
+const REPORT_OPERATORS = new Set(["eq", "ne", "gt", "gte", "lt", "lte", "between", "contains", "starts", "in", "empty", "not_empty"]);
+const REPORT_COMPARISONS = { eq: "=", ne: "<>", gt: ">", gte: ">=", lt: "<", lte: "<=" };
+const REPORT_AGGREGATES = new Set(["count", "sum", "avg", "min", "max"]);
+// Toplama ve ortalama yalnız sayısal sütunda anlamlıdır; metnin ortalaması
+// SQLite'ta sessizce 0 döner ve kullanıcı yanlış bir rakama bakar.
+const REPORT_NUMERIC_TYPES = new Set(["money", "number", "percent"]);
+
+// Beyaz liste yalnız tabloda gerçekten var olan sütunlarla kesiştirilir: kayıt
+// defterindeki bir yazım hatası SQL hatasına değil "böyle sütun yok" yanıtına
+// dönüşsün. Şema süreç boyunca değişmediği için tek okuma yeterli.
+const reportTableColumnCache = new Map();
+async function reportTableColumns(env, table) {
+  const cached = reportTableColumnCache.get(table);
+  if (cached) return cached;
+  const rows = await all(env.DB.prepare(`PRAGMA table_info(${table})`));
+  const names = new Set(rows.map((row) => row.name).filter(Boolean));
+  reportTableColumnCache.set(table, names);
+  return names;
+}
+
+async function reportColumnsFor(env, config) {
+  const actual = await reportTableColumns(env, config.table);
+  // JSON sütunları beyaz listeye hiç girmez, yalnız listeden gizlenmez: bir
+  // hücrede serileştirilmiş nesne yığını gösteren rapor kimsenin işine yaramaz
+  // ve süzgeç/sıralama/gruplama yolları da istemciden doğrudan gelebilir.
+  return [...new Set(["id", ...(config.fields || []), "status", "created_at", "updated_at"])]
+    .filter((column) => actual.has(column) && !JSON_COLUMNS.has(column));
+}
+
+// Tip, sütun adından çıkarılır; arayüz tarih alanını takvimle, para alanını
+// kuruş çevirisiyle göstersin diye.
+function reportColumnType(column) {
+  if (column.endsWith("_minor")) return "money";
+  if (column.endsWith("_at")) return "datetime";
+  if (column.endsWith("_date") || column.startsWith("date_")) return "date";
+  if (column === "status" || column.endsWith("_status") || column === "result" || column.endsWith("_result")) return "status";
+  if (column.endsWith("_percent")) return "percent";
+  if (column.endsWith("_count") || column.endsWith("_minutes") || column === "quantity" || column.endsWith("_quantity")) return "number";
+  return "text";
+}
+
+function reportVisibleColumns(principal, columns) {
+  return columns.filter((column) => {
+    const permission = sensitiveFieldPermission(column);
+    return !permission || allowed(principal, permission);
+  });
+}
+
+// Sütun adı SQL'e ancak buradan geçtikten sonra gömülür. Eşleşmeyen ad sessizce
+// atılmaz; kullanıcı raporunun neden eksik döndüğünü tahmin etmek zorunda
+// kalmasın diye 422 ile geri çevrilir.
+function reportColumnProblem(principal, columnSet, column, usage) {
+  if (typeof column !== "string" || !columnSet.has(column)) {
+    return problem(422, "unknown_report_column", `${usage} içinde tanınmayan sütun: ${typeof column === "string" ? column : "geçersiz değer"}`);
+  }
+  const permission = sensitiveFieldPermission(column);
+  if (permission && !allowed(principal, permission)) {
+    return problem(403, "sensitive_field_forbidden", `${column} sütunu için ${permission} yetkisi gereklidir.`);
+  }
+  return null;
+}
+
+function reportScalar(value) {
+  if (value === null) return null;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string") return value.length <= TEXT_FIELD_LIMIT ? value : undefined;
+  return undefined;
+}
+
+function reportFilterProblem(filter) {
+  return problem(422, "invalid_report_filter", `${filter?.field || "süzgeç"} için geçersiz değer.`);
+}
+
+function reportFilterClause(filter, field, clauses, bindings) {
+  const op = filter.op;
+  if (!REPORT_OPERATORS.has(op)) return problem(422, "unsupported_report_operator", `Desteklenmeyen süzgeç işleci: ${typeof op === "string" ? op : "geçersiz değer"}`);
+  if (op === "empty") { clauses.push(`(${field} IS NULL OR ${field}='')`); return null; }
+  if (op === "not_empty") { clauses.push(`(${field} IS NOT NULL AND ${field}<>'')`); return null; }
+  if (op === "between") {
+    if (!Array.isArray(filter.value) || filter.value.length !== 2) return reportFilterProblem(filter);
+    const [low, high] = filter.value.map(reportScalar);
+    if (low === undefined || high === undefined || low === null || high === null) return reportFilterProblem(filter);
+    clauses.push(`${field} BETWEEN ? AND ?`);
+    bindings.push(low, high);
+    return null;
+  }
+  if (op === "in") {
+    if (!Array.isArray(filter.value) || !filter.value.length || filter.value.length > REPORT_MAX_IN_VALUES) return reportFilterProblem(filter);
+    const values = filter.value.map(reportScalar);
+    if (values.some((value) => value === undefined || value === null)) return reportFilterProblem(filter);
+    clauses.push(`${field} IN (${values.map(() => "?").join(",")})`);
+    bindings.push(...values);
+    return null;
+  }
+  if (op === "contains" || op === "starts") {
+    if (typeof filter.value !== "string" || !filter.value || filter.value.length > TEXT_FIELD_LIMIT) return reportFilterProblem(filter);
+    clauses.push(`COALESCE(${field},'') LIKE ? ESCAPE '\\'`);
+    bindings.push(op === "contains" ? `%${escapeLike(filter.value)}%` : `${escapeLike(filter.value)}%`);
+    return null;
+  }
+  const value = reportScalar(filter.value);
+  if (value === undefined) return reportFilterProblem(filter);
+  // NULL karşılaştırması SQL'de hiçbir zaman doğru olmaz; "boş olanlar" ve
+  // "şu değerde olmayanlar" beklentisi sessizce boş sonuca dönmesin.
+  if (value === null) {
+    if (op !== "eq" && op !== "ne") return reportFilterProblem(filter);
+    clauses.push(`${field} IS ${op === "ne" ? "NOT " : ""}NULL`);
+    return null;
+  }
+  if (op === "ne") clauses.push(`(${field} IS NULL OR ${field}<>?)`);
+  else clauses.push(`${field}${REPORT_COMPARISONS[op]}?`);
+  bindings.push(value);
+  return null;
+}
+
+async function buildReportPlan(env, principal, definition, preview) {
+  if (!definition || typeof definition !== "object" || Array.isArray(definition)) return { error: problem(422, "validation_error", "Rapor tanımı bir JSON nesnesi olmalıdır.") };
+  const slug = aliases[definition.resource] || definition.resource;
+  const config = resources[slug];
+  if (!config) return { error: problem(422, "unknown_report_resource", "Bu kaynak üzerinde rapor kurulamıyor.") };
+  // Rapor yetkisi tek başına yetmez: raporun okuduğu kaynağın kendi okuma
+  // yetkisi de aranır, yoksa rapor motoru yetki sisteminin etrafından dolaşan
+  // bir arka kapıya dönüşür.
+  if (!allowed(principal, permissionFor(slug, "read"))) return { error: problem(403, "forbidden", "Bu kaynağı görüntüleme yetkiniz yok.") };
+
+  const columnSet = new Set(await reportColumnsFor(env, config));
+  const clauses = ["tenant_id=?"];
+  const bindings = [principal.tenantId];
+  const scope = rowScopeFor(config, principal, "read");
+  if (scope.clause) {
+    clauses.push(scope.clause);
+    bindings.push(...scope.bindings);
+  }
+
+  const filters = definition.filters === undefined || definition.filters === null ? [] : definition.filters;
+  if (!Array.isArray(filters) || filters.length > REPORT_MAX_FILTERS) return { error: problem(422, "validation_error", `filters en fazla ${REPORT_MAX_FILTERS} öğeli bir dizi olmalıdır.`) };
+  for (const filter of filters) {
+    if (!filter || typeof filter !== "object" || Array.isArray(filter)) return { error: problem(422, "validation_error", "Her süzgeç bir JSON nesnesi olmalıdır.") };
+    const columnProblem = reportColumnProblem(principal, columnSet, filter.field, "filters");
+    if (columnProblem) return { error: columnProblem };
+    const clauseProblem = reportFilterClause(filter, filter.field, clauses, bindings);
+    if (clauseProblem) return { error: clauseProblem };
+  }
+
+  const group = definition.group === undefined || definition.group === null ? null : definition.group;
+  if (group !== null && (typeof group !== "object" || Array.isArray(group))) return { error: problem(422, "validation_error", "group bir JSON nesnesi olmalıdır.") };
+  const grouped = group !== null;
+
+  const outputColumns = [];
+  const aggregateAliases = [];
+  let groupBy = [];
+  let selectParts = [];
+  let selectedColumns = [];
+
+  if (grouped) {
+    groupBy = group.by;
+    if (!Array.isArray(groupBy) || !groupBy.length || groupBy.length > REPORT_MAX_GROUP_BY) return { error: problem(422, "validation_error", `group.by 1-${REPORT_MAX_GROUP_BY} sütunlu bir dizi olmalıdır.`) };
+    for (const column of groupBy) {
+      const columnProblem = reportColumnProblem(principal, columnSet, column, "group.by");
+      if (columnProblem) return { error: columnProblem };
+    }
+    groupBy = [...new Set(groupBy)];
+    selectParts = [...groupBy];
+    for (const column of groupBy) outputColumns.push({ key: column, type: reportColumnType(column) });
+
+    const aggregates = group.aggregates === undefined || group.aggregates === null ? [] : group.aggregates;
+    if (!Array.isArray(aggregates) || aggregates.length > REPORT_MAX_AGGREGATES) return { error: problem(422, "validation_error", `group.aggregates en fazla ${REPORT_MAX_AGGREGATES} öğeli bir dizi olmalıdır.`) };
+    const usedLabels = new Set(groupBy);
+    for (let index = 0; index < aggregates.length; index += 1) {
+      const aggregate = aggregates[index];
+      if (!aggregate || typeof aggregate !== "object" || Array.isArray(aggregate)) return { error: problem(422, "validation_error", "Her toplam bir JSON nesnesi olmalıdır.") };
+      const fn = aggregate.fn;
+      if (!REPORT_AGGREGATES.has(fn)) return { error: problem(422, "unsupported_report_aggregate", `Desteklenmeyen toplam işlevi: ${typeof fn === "string" ? fn : "geçersiz değer"}`) };
+      let expression;
+      let type;
+      if (fn === "count" && (aggregate.field === undefined || aggregate.field === null)) {
+        expression = "COUNT(*)";
+        type = "number";
+      } else {
+        const columnProblem = reportColumnProblem(principal, columnSet, aggregate.field, "aggregates.field");
+        if (columnProblem) return { error: columnProblem };
+        const fieldType = reportColumnType(aggregate.field);
+        if ((fn === "sum" || fn === "avg") && !REPORT_NUMERIC_TYPES.has(fieldType)) {
+          return { error: problem(422, "non_numeric_aggregate", `${aggregate.field} sayısal bir sütun değil; ${fn} uygulanamaz.`) };
+        }
+        expression = `${fn.toUpperCase()}(${aggregate.field})`;
+        type = fn === "count" ? "number" : fieldType;
+      }
+      // İstemcinin verdiği başlık SQL'e hiç girmez: sorguda üretilmiş güvenli
+      // takma ad kullanılır, başlık yalnız sonuç satırlarında yerine konur.
+      const label = typeof aggregate.as === "string" && aggregate.as.trim() ? aggregate.as.trim().slice(0, 60) : `${fn}_${index + 1}`;
+      if (usedLabels.has(label)) return { error: problem(422, "duplicate_report_alias", `Aynı başlık iki kez kullanılamaz: ${label}`) };
+      usedLabels.add(label);
+      const alias = `agg_${index}`;
+      selectParts.push(`${expression} AS ${alias}`);
+      aggregateAliases.push({ alias, label });
+      outputColumns.push({ key: label, type });
+    }
+  } else {
+    const visible = reportVisibleColumns(principal, [...columnSet]);
+    const requested = definition.columns === undefined || definition.columns === null ? visible : definition.columns;
+    if (!Array.isArray(requested) || !requested.length || requested.length > REPORT_MAX_COLUMNS) return { error: problem(422, "validation_error", `columns 1-${REPORT_MAX_COLUMNS} sütunlu bir dizi olmalıdır.`) };
+    for (const column of requested) {
+      const columnProblem = reportColumnProblem(principal, columnSet, column, "columns");
+      if (columnProblem) return { error: columnProblem };
+    }
+    selectedColumns = [...new Set(requested)];
+    selectParts = [...selectedColumns];
+    for (const column of selectedColumns) outputColumns.push({ key: column, type: reportColumnType(column) });
+  }
+
+  const sort = definition.sort === undefined || definition.sort === null ? [] : definition.sort;
+  if (!Array.isArray(sort) || sort.length > REPORT_MAX_SORTS) return { error: problem(422, "validation_error", `sort en fazla ${REPORT_MAX_SORTS} öğeli bir dizi olmalıdır.`) };
+  const sortTargets = grouped
+    ? new Map([...groupBy.map((column) => [column, column]), ...aggregateAliases.map((item) => [item.label, item.alias])])
+    : null;
+  const orderParts = [];
+  for (const entry of sort) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return { error: problem(422, "validation_error", "Her sıralama bir JSON nesnesi olmalıdır.") };
+    const direction = entry.direction === undefined || entry.direction === null ? "asc" : entry.direction;
+    if (direction !== "asc" && direction !== "desc") return { error: problem(422, "validation_error", "sort.direction yalnız asc veya desc olabilir.") };
+    if (grouped) {
+      const target = sortTargets.get(entry.field);
+      if (!target) return { error: problem(422, "unknown_report_column", `sort içinde tanınmayan sütun: ${typeof entry.field === "string" ? entry.field : "geçersiz değer"}`) };
+      orderParts.push(`${target} ${direction.toUpperCase()}`);
+    } else {
+      const columnProblem = reportColumnProblem(principal, columnSet, entry.field, "sort");
+      if (columnProblem) return { error: columnProblem };
+      orderParts.push(`${entry.field} ${direction.toUpperCase()}`);
+    }
+  }
+  if (!orderParts.length) {
+    if (grouped) orderParts.push(`${groupBy[0]} ASC`);
+    else if (columnSet.has("updated_at")) orderParts.push("updated_at DESC");
+    else if (columnSet.has("created_at")) orderParts.push("created_at DESC");
+  }
+
+  const requestedLimit = Number(definition.limit);
+  let limit = Number.isFinite(requestedLimit) && Math.floor(requestedLimit) >= 1 ? Math.min(REPORT_MAX_LIMIT, Math.floor(requestedLimit)) : REPORT_DEFAULT_LIMIT;
+  // Önizlemede istemcinin gönderdiği sınır hiç dikkate alınmaz; "önizleme"
+  // diyip 5000 satır çekmek mümkün olmamalı.
+  if (preview) limit = REPORT_PREVIEW_LIMIT;
+
+  const where = clauses.join(" AND ");
+  const order = orderParts.length ? ` ORDER BY ${orderParts.join(",")}` : "";
+  const sql = grouped
+    ? `SELECT ${selectParts.join(",")} FROM ${config.table} WHERE ${where} GROUP BY ${groupBy.join(",")}${order} LIMIT ?`
+    : `SELECT ${selectParts.join(",")} FROM ${config.table} WHERE ${where}${order} LIMIT ?`;
+  return { slug, config, sql, bindings: [...bindings, limit], limit, grouped, groupBy, selectedColumns, aggregateAliases, columns: outputColumns };
+}
+
+async function runReportPlan(env, principal, plan) {
+  const rows = await all(env.DB.prepare(plan.sql).bind(...plan.bindings));
+  const serialized = rows.map((row) => serializeRow(row, plan.slug, principal));
+  // Gruplu sonuçta da grup anahtarı bir referans kimliği olabilir; aynı toplu
+  // çözümleme müşteri kimliği yerine müşteri adını getirir.
+  await attachReferenceNames(env, principal, plan.config, rows, serialized);
+  const columns = [...plan.columns];
+  for (const column of plan.grouped ? plan.groupBy : plan.selectedColumns) {
+    const key = `${column.replace(/_id$/, "")}_name`;
+    if (columns.some((item) => item.key === key)) continue;
+    if (!serialized.some((row) => row[key] !== undefined && row[key] !== null)) continue;
+    columns.splice(columns.findIndex((item) => item.key === column) + 1, 0, { key, type: "text" });
+  }
+  if (plan.grouped) {
+    for (const { alias, label } of plan.aggregateAliases) {
+      for (const row of serialized) {
+        row[label] = row[alias] ?? null;
+        if (label !== alias) delete row[alias];
+      }
+    }
+  }
+  return { columns, rows: serialized };
+}
+
+// Çalışmayacağı baştan belli bir rapor kaydedilememeli: kullanıcı kaydedip
+// günler sonra açtığında 422 görmesin. Doğrulama motorun kendi kapısından
+// geçer, ayrı bir kural kopyası tutulmaz — biri değişirse ikisi birlikte
+// değişir. `validateWrite` kancası kayıt defterinde tanımlıdır; başka bir
+// kaynak da kendi yazma kuralını aynı yoldan bağlayabilir.
+async function savedReportWriteProblem({ env, principal, values, existing }) {
+  const touchesDefinition = values.resource !== undefined || values.definition_json !== undefined;
+  if (!touchesDefinition) return null;
+  const resource = values.resource ?? existing?.resource;
+  if (!resources[aliases[resource] || resource]) return problem(422, "unknown_report_resource", "Bu kaynak üzerinde rapor kurulamıyor.");
+  const raw = values.definition_json ?? existing?.definition_json;
+  let definition;
+  try { definition = typeof raw === "string" ? JSON.parse(raw) : raw; }
+  catch { return problem(422, "invalid_report_definition", "Rapor tanımı okunamadı."); }
+  // Kaynak iki yerde duruyor: süzülebilen `resource` sütunu ve tanımın içi.
+  // İkisinin ayrışması, listede bir şey gösterip başka bir şey çalıştıran bir
+  // kayıt üretir; bu yüzden sütun tek yetkilidir ve tanım ona uymak zorundadır.
+  if (definition && typeof definition === "object" && definition.resource !== undefined && definition.resource !== resource) {
+    return problem(422, "report_resource_mismatch", "Rapor tanımındaki kaynak, raporun kaynağıyla aynı olmalıdır.");
+  }
+  const plan = await buildReportPlan(env, principal, { ...definition, resource }, false);
+  return plan.error || null;
+}
+
+async function reportFields(env, principal) {
+  if (!allowed(principal, "reports.read")) return problem(403, "forbidden", "Rapor görüntüleme yetkiniz yok.");
+  const data = [];
+  for (const [slug, config] of Object.entries(resources)) {
+    if (!allowed(principal, permissionFor(slug, "read"))) continue;
+    // Durum kodunu elle yazdırmak en kötü hata türünü üretiyor: yanlış yazılan
+    // kod sessizce boş rapor döndürüyor. İzin verilen değerler uydurulmaz,
+    // doğrulamada kullanılan kümelerin ta kendisinden gelir; küme yoksa alan
+    // hiç konmaz ve arayüz serbest metne düşer.
+    const otherEnums = enumFields[slug] || {};
+    const columns = reportVisibleColumns(principal, await reportColumnsFor(env, config)).map((column) => {
+      const values = column === "status" ? statusEnums[slug] : otherEnums[column];
+      return values?.length ? { key: column, type: reportColumnType(column), values: [...values] } : { key: column, type: reportColumnType(column) };
+    });
+    if (!columns.length) continue;
+    data.push({ resource: slug, columns });
+  }
+  return json({ data });
+}
+
+async function runReport(request, env, principal) {
+  if (!allowed(principal, "reports.read")) return problem(403, "forbidden", "Rapor çalıştırma yetkiniz yok.");
+  let body;
+  try { body = await parseBody(request); } catch (response) { return problem(response.status, "invalid_body", response.status === 415 ? "Content-Type application/json olmalıdır." : "Geçersiz JSON."); }
+  const preview = body?.preview === true;
+  const plan = await buildReportPlan(env, principal, body?.definition, preview);
+  if (plan.error) return plan.error;
+  let result;
+  try { result = await runReportPlan(env, principal, plan); }
+  catch (error) { return problem(422, "report_query_failed", "Rapor çalıştırılamadı; tanımı kontrol edin.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
+  return json({ data: { columns: result.columns, rows: result.rows }, meta: { rowCount: result.rows.length, truncated: result.rows.length >= plan.limit, preview } });
+}
+
+async function exportReport(request, env, principal) {
+  if (!allowed(principal, "export")) return problem(403, "forbidden", "Dışa aktarma yetkiniz yok.");
+  if (!allowed(principal, "reports.read")) return problem(403, "forbidden", "Rapor görüntüleme yetkiniz yok.");
+  const reportId = new URL(request.url).searchParams.get("id");
+  if (!validId(reportId)) return problem(400, "invalid_id", "Geçersiz rapor kimliği.");
+  const config = resources["saved-reports"];
+  const scope = rowScopeFor(config, principal, "read");
+  const row = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(reportId, principal.tenantId, ...scope.bindings));
+  if (!row) return problem(404, "not_found", "Rapor bulunamadı.");
+  let definition;
+  try { definition = typeof row.definition_json === "string" ? JSON.parse(row.definition_json) : row.definition_json; }
+  catch { return problem(422, "invalid_report_definition", "Rapor tanımı okunamadı."); }
+  // Yetkili kaynak, tanımın içi değil raporun kendi sütunudur.
+  const plan = await buildReportPlan(env, principal, { ...definition, resource: row.resource }, false);
+  if (plan.error) return plan.error;
+  let result;
+  try { result = await runReportPlan(env, principal, plan); }
+  catch (error) { return problem(422, "report_query_failed", "Rapor çalıştırılamadı; tanımı kontrol edin.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
+  await audit(env, principal, request, "export", "saved-reports", reportId, { resource: plan.slug, row_count: result.rows.length });
+  return csvResponse(result.columns.map((column) => column.key), result.rows, `rapor-${plan.slug}`);
+}
+
 async function dispatchAuthenticated(request, env, principal, url, segments) {
   if (principal.mustChangePassword && !passwordChangeExemptPaths.has(url.pathname) && !["GET", "HEAD"].includes(request.method)) {
     return problem(403, "password_change_required", "Devam etmeden önce geçici şifrenizi değiştirmelisiniz.");
@@ -3114,6 +3550,9 @@ async function dispatchAuthenticated(request, env, principal, url, segments) {
   if (segments.length === 5 && segments[2] === "projects" && segments[4] === "cost-breakdown" && request.method === "GET" && validId(segments[3])) return getProjectCostBreakdown(request, env, principal, segments[3]);
   if (segments.length === 5 && segments[2] === "purchase-requests" && segments[4] === "quotation-comparison" && request.method === "GET" && validId(segments[3])) return compareQuotations(env, principal, segments[3]);
   if (url.pathname === "/api/v1/work-centers/load" && request.method === "GET") return workCenterLoad(request, env, principal);
+  if (url.pathname === "/api/v1/reports/fields" && request.method === "GET") return reportFields(env, principal);
+  if (url.pathname === "/api/v1/reports/run" && request.method === "POST") return runReport(request, env, principal);
+  if (url.pathname === "/api/v1/reports/export" && request.method === "GET") return exportReport(request, env, principal);
   if (url.pathname === "/api/v1/password-reset-requests") return passwordResetRequestsRoute(request, env, principal);
   if (segments.length === 5 && segments[2] === "memberships" && segments[4] === "reset-password" && request.method === "POST" && validId(segments[3])) return resetMemberPassword(request, env, principal, segments[3]);
   if (segments[2] === "tokens") return tokenManagement(request, env, principal, segments);

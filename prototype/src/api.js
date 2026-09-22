@@ -59,6 +59,10 @@ export const API_CONFIG = Object.freeze({
     chatMessages: "/chat-messages",
     notifications: "/notifications",
     search: "/search",
+    savedReports: "/saved-reports",
+    reportFields: "/reports/fields",
+    reportRun: "/reports/run",
+    reportExport: "/reports/export",
   }),
 });
 
@@ -132,9 +136,13 @@ export const RESOURCE_SLUGS = Object.freeze({
   bomLines: "bom-lines",
   productionOperations: "production-operations",
   productionIssues: "production-issues",
+  savedReports: "saved-reports",
 });
 
-const FIELD_MAPS = Object.freeze({
+// Rapor kurucusu bu haritayı ters yönde okur: sunucudan gelen snake_case sütun
+// adının hangi form alanına -dolayısıyla hangi Türkçe etikete- karşılık geldiğini
+// başka yerde bulamaz.
+export const FIELD_MAPS = Object.freeze({
   projects: { customerId: "customer_id", projectManager: "manager_user_id", progress: "progress_percent", startDate: "planned_start_date", targetDate: "planned_end_date", contractAmount: "contract_amount_minor", photoConsent: "photo_consent", address: "site_address" },
   offers: { referenceNo: "offer_number", projectId: "project_id", customerId: "customer_id", totalAmount: "grand_total_minor", validUntil: "valid_until", lossReason: "rejection_reason" },
   purchases: { number: "request_number", projectId: "project_id", itemName: "description", preferredSupplierId: "preferred_supplier_id", requiredAt: "needed_by", estimatedAmount: "estimated_amount_minor", specification: "notes" },
@@ -773,6 +781,47 @@ export const api = {
   },
   async tokenAction(tokenId, action, values = {}) {
     return mapIncoming("tokens", (await request(`/tokens/${encodeURIComponent(tokenId)}/${action}`, { method: "POST", body: values })).data);
+  },
+  // Rapor motoru. Rapor tanımı veritabanı sütun adlarını taşır; bu yüzden gövde
+  // mapOutgoing'den geçirilmez ve yanıt mapIncoming'e sokulmaz. camelCase'e
+  // çevrilen bir tanım sunucudaki sütun beyaz listesine takılır ve 422 döner.
+  async reportFields() {
+    const result = await request(API_CONFIG.endpoints.reportFields);
+    return { data: Array.isArray(result.data) ? result.data : [], meta: result.meta || null };
+  },
+  async runReport(definition, { preview = false } = {}) {
+    const result = await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { definition, preview } });
+    const payload = result.data || {};
+    return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
+  },
+  async savedReports() {
+    const result = await request(API_CONFIG.endpoints.savedReports);
+    const rows = Array.isArray(result.data) ? result.data : result.data?.items || [];
+    return { data: rows, meta: result.meta || null };
+  },
+  async saveReport(values, { id = null } = {}) {
+    const body = {
+      name: values.name,
+      description: values.description || null,
+      resource: values.resource,
+      definition_json: values.definition,
+      visibility: values.visibility || "private",
+    };
+    const path = API_CONFIG.endpoints.savedReports;
+    const result = id
+      ? await request(`${path}/${encodeURIComponent(id)}`, { method: "PATCH", body })
+      : await request(path, { method: "POST", body, headers: { "Idempotency-Key": idempotencyKey("savedReports", "create") } });
+    return result.data;
+  },
+  async deleteReport(id) {
+    return (await request(`${API_CONFIG.endpoints.savedReports}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "Idempotency-Key": idempotencyKey("savedReports", "delete") },
+    })).data;
+  },
+  async reportCsv(id) {
+    const result = await request(withQuery(API_CONFIG.endpoints.reportExport, { id }));
+    return typeof result.data === "string" ? result.data : String(result.data ?? "");
   },
   async workflow(resource, resourceId, action, body = {}) {
     const endpoint = API_CONFIG.endpoints[resource];

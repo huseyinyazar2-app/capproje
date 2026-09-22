@@ -10,12 +10,15 @@ import {
   CaretLeft,
   CaretRight,
   ChartLineUp,
+  ChartPieSlice,
   ChatCircleText,
   Check,
   ClipboardText,
   CloudArrowUp,
   CurrencyCircleDollar,
+  DownloadSimple,
   Factory,
+  FloppyDisk,
   FolderSimple,
   Handshake,
   House,
@@ -28,6 +31,7 @@ import {
   Plus,
   ShoppingCart,
   SignOut,
+  Trash,
   Truck,
   UserCircle,
   UsersThree,
@@ -35,7 +39,7 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { api, ApiError, demoAuthEnabled, permissionAllows, RESOURCE_SLUGS, statusCodeFor } from "./api";
+import { api, ApiError, demoAuthEnabled, FIELD_MAPS, permissionAllows, RESOURCE_SLUGS, statusCodeFor } from "./api";
 import { ErrorBoundary } from "./ErrorBoundary.jsx";
 
 // Sayı ve tarih biçimleri tek yerde. Türkiye'de binlik ayracı nokta, küsürat
@@ -88,6 +92,7 @@ const projectStageLabels = { lead: "Talep", discovery: "Keşif", estimating: "Te
 
 const modules = [
   { id: "dashboard", group: "Genel", title: "Ana Sayfa", icon: House, resource: "dashboard", singular: "kayıt" },
+  { id: "reports", group: "Genel", title: "Raporlar", icon: ChartPieSlice, resource: "reports", singular: "rapor", readOnly: true },
   { id: "notifications", group: "Genel", title: "Bildirimler", icon: Bell, resource: "notifications", singular: "bildirim", authenticated: true },
   { id: "chat", group: "Genel", title: "Ekip Sohbeti", icon: ChatCircleText, resource: "chat", singular: "mesaj" },
   { id: "fieldMode", group: "Genel", title: "Saha Modu", icon: Camera, resource: "field-mode", singular: "saha kaydı", authenticated: true },
@@ -791,6 +796,60 @@ const resourceTitles = {
   "chat-channels": "Ekip Sohbeti", "chat-messages": "Ekip Sohbeti",
 };
 
+// Rapor tanımı sunucudaki sütun adlarını (snake_case) taşır, kullanıcı ise
+// ekranlarda gördüğü Türkçe etiketi tanır. Sözlük her kaynağın liste sütunları
+// ve form alanlarından üretilir: etiket tek yerde yazılır, rapor kurucusu da
+// oradan okur. FIELD_MAPS bu yüzden ters yönde taranıyor.
+const reportColumnNameFor = (resourceKey, uiName) => FIELD_MAPS[resourceKey]?.[uiName] || uiName.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+const reportColumnLabels = Object.fromEntries(Object.entries(RESOURCE_SLUGS).map(([key, slug]) => {
+  const config = configs[key];
+  const labels = {};
+  for (const [name, label] of config?.columns || []) labels[reportColumnNameFor(key, name)] ??= label;
+  for (const item of config?.fields || []) labels[reportColumnNameFor(key, item.name)] ??= item.label;
+  return [slug, labels];
+}));
+// Her kaynakta aynı anlama gelen teknik sütunlar. Kaynağın kendi sözlüğünde
+// karşılığı yoksa buradan okunur.
+const sharedColumnLabels = {
+  id: "Kayıt kimliği", status: "Durum", created_at: "Oluşturulma", updated_at: "Güncellenme",
+  created_by: "Oluşturan", updated_by: "Güncelleyen", code: "Kod", name: "Ad", title: "Başlık",
+  description: "Açıklama", notes: "Notlar", currency: "Para birimi", quantity: "Miktar", unit: "Birim",
+  type: "Tür", project_id: "Proje", customer_id: "Müşteri", supplier_id: "Tedarikçi",
+  employee_id: "Personel", work_item_id: "İş kalemi", tenant_id: "Firma",
+};
+const reportColumnTypeLabels = { text: "Metin", money: "Tutar", date: "Tarih", datetime: "Tarih ve saat", status: "Durum", percent: "Yüzde", number: "Sayı" };
+
+// Etiketi bulunamayan sütun ham adıyla bırakılmaz: "planned_end_date" kimseye
+// bir şey anlatmaz. Alt çizgiler ayrılır, teknik ekler atılır, ilk harf
+// büyütülür; ham ad ipucu olarak başlık niteliğinde kalır.
+function humanizeColumnName(column) {
+  const base = String(column).replace(/_(minor|json)$/, "").replace(/_id$/, "");
+  const words = base.split("_").filter(Boolean);
+  if (!words.length) return String(column);
+  const joined = words.join(" ");
+  return joined.charAt(0).toLocaleUpperCase("tr-TR") + joined.slice(1);
+}
+
+function reportColumnLabel(slug, column) {
+  return reportColumnLabels[slug]?.[column] || sharedColumnLabels[column] || humanizeColumnName(column);
+}
+
+// Para sütunları kuruş olarak gelir; listelerde mapIncoming aynı bölmeyi yapıyor,
+// formatValue ise lira bekliyor.
+function reportCellValue(column, value, type) {
+  if (type === "money" && typeof value === "number" && String(column).endsWith("_minor")) return value / 100;
+  return value;
+}
+
+// Sunucu `definition_json` sütununu çözerek gönderiyor; yine de metin gelirse
+// ekran boş kalmasın diye bir kez çözmeyi deniyoruz.
+function reportDefinitionOf(report) {
+  const raw = report?.definition_json;
+  if (!raw) return null;
+  if (typeof raw !== "string") return raw;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
 const auditActionLabels = {
   create: "Kayıt oluşturdu", update: "Kaydı düzenledi", delete: "Kaydı sildi",
   upload: "Dosya yükledi", export: "Dışa aktardı", invite: "Kullanıcı davet etti",
@@ -1472,6 +1531,506 @@ function WorkCenterLoadView({ online }) {
       </tbody></table></div>
     </>}
   </section>;
+}
+
+// Rapor motoru arayüzü. Sunucu sözleşmesi gereği rapor tanımı veritabanı sütun
+// adlarını taşır; kullanıcıya ise ekranlarda zaten kullanılan Türkçe etiketler
+// gösterilir. Çeviri sözlüğü reportColumnLabel ile tek yerden okunur.
+const REPORT_PREVIEW_DELAY_MS = 400;
+const reportVisibilityLabels = { private: "Özel", shared: "Paylaşılan" };
+const reportOperatorLabels = {
+  eq: "eşittir", ne: "eşit değildir", gt: "büyüktür", gte: "büyük veya eşit", lt: "küçüktür", lte: "küçük veya eşit",
+  between: "arasında", contains: "içerir", starts: "ile başlar", in: "şunlardan biri", empty: "boş", not_empty: "dolu",
+};
+const reportOperatorsByType = {
+  text: ["contains", "starts", "eq", "ne", "in", "empty", "not_empty"],
+  status: ["eq", "ne", "in", "empty", "not_empty"],
+  date: ["between", "eq", "gte", "lte", "empty", "not_empty"],
+  datetime: ["between", "eq", "gte", "lte", "empty", "not_empty"],
+  money: ["gte", "lte", "between", "eq", "gt", "lt", "empty", "not_empty"],
+  number: ["gte", "lte", "between", "eq", "gt", "lt", "empty", "not_empty"],
+  percent: ["gte", "lte", "between", "eq", "gt", "lt", "empty", "not_empty"],
+};
+const reportAggregateLabels = { count: "Adet", sum: "Toplam", avg: "Ortalama", min: "En küçük", max: "En büyük" };
+const reportAggregateAliases = { count: "adet", sum: "toplam", avg: "ortalama", min: "en_kucuk", max: "en_buyuk" };
+const reportValuelessOps = new Set(["empty", "not_empty"]);
+const reportNumericTypes = new Set(["money", "number", "percent"]);
+const reportOperatorsFor = (type) => reportOperatorsByType[type] || reportOperatorsByType.text;
+const emptyReportDraft = { resource: "", columns: [], filters: [], sort: [], group: null, limit: 500 };
+const emptyReportMeta = { id: null, name: "", description: "", visibility: "private", ownerUserId: null };
+
+// Kuruş/lira dönüşümü listelerdeki mapIncoming ile aynı kuralı izler: sütun adı
+// `_minor` ile bitiyorsa değer kuruştur. Kullanıcı süzgece lira yazar.
+const reportMoneyColumn = (column, type) => type === "money" && String(column).endsWith("_minor");
+
+function reportFilterReady(item) {
+  if (!item.field || !item.op) return false;
+  if (reportValuelessOps.has(item.op)) return true;
+  if (item.op === "between") return Array.isArray(item.value) && item.value.length === 2 && item.value.every((part) => part !== "" && part != null);
+  if (item.op === "in") return Array.isArray(item.value) && item.value.length > 0;
+  return item.value !== "" && item.value != null;
+}
+
+function reportFilterValue(item) {
+  const toServer = (part) => (reportMoneyColumn(item.field, item.type) ? Math.round(Number(part) * 100) : reportNumericTypes.has(item.type) ? Number(part) : part);
+  if (item.op === "between") return item.value.map(toServer);
+  if (item.op === "in") return item.value.map(toServer);
+  return toServer(item.value);
+}
+
+// Taslaktan sunucuya gidecek tanım. Yarım bırakılmış süzgeç satırları elenir;
+// aksi halde kullanıcı alanı seçer seçmez değersiz bir süzgeçle 422 alırdı.
+function reportRequestDefinition(draft) {
+  const definition = {
+    resource: draft.resource,
+    columns: draft.group ? [] : draft.columns,
+    filters: draft.filters.filter(reportFilterReady).map((item) => (reportValuelessOps.has(item.op)
+      ? { field: item.field, op: item.op }
+      : { field: item.field, op: item.op, value: reportFilterValue(item) })),
+    sort: draft.sort.filter((item) => item.field).map((item) => ({ field: item.field, direction: item.direction === "desc" ? "desc" : "asc" })),
+    limit: Number(draft.limit) || 500,
+  };
+  if (draft.group) {
+    definition.group = {
+      by: draft.group.by,
+      aggregates: draft.group.aggregates
+        .filter((item) => item.fn === "count" || item.field)
+        .map((item) => (item.fn === "count" ? { fn: "count", as: item.as } : { fn: item.fn, field: item.field, as: item.as })),
+    };
+  }
+  return definition;
+}
+
+// Eksik tanımla sunucuya gitmenin anlamı yok; kullanıcıya neyin eksik olduğu
+// söylenir. Hata değil, yönlendirmedir.
+function reportDefinitionProblem(definition) {
+  if (!definition.resource) return "Önce raporun okuyacağı kaynağı seçin.";
+  if (definition.group) {
+    if (!definition.group.by.length) return "Gruplamak için en az bir alan seçin.";
+    if (!definition.group.aggregates.length) return "Gruplanmış raporda en az bir toplam sütunu gerekir.";
+    return null;
+  }
+  if (!definition.columns.length) return "Önizleme için en az bir sütun seçin.";
+  return null;
+}
+
+// Sunucu hataları kullanıcıya kod olarak değil, ne yapması gerektiğini söyleyen
+// bir cümleyle gösterilir.
+function reportErrorMessage(error) {
+  if (error?.status === 403 || error?.code === "forbidden") return "Bu raporu çalıştırma yetkiniz yok. Seçtiğiniz kaynak ya da sütunlardan biri size kapalı olabilir; maliyet ve maaş gibi alanlar süzgeçte ve sıralamada da yetki ister.";
+  if (error?.status === 422) return "Rapor tanımı kabul edilmedi. Listede olmayan bir sütun ya da desteklenmeyen bir süzgeç seçilmiş olabilir; seçimleri gözden geçirin.";
+  return error?.message || "Rapor şu an çalıştırılamadı.";
+}
+
+function reportAggregateAlias(fn, field) {
+  return [reportAggregateAliases[fn] || fn, fn === "count" ? "" : field].filter(Boolean).join("_");
+}
+
+function ReportCard({ report, mine, ready, canRemove, canExport, busy, onOpen, onDuplicate, onExport, onRemove }) {
+  return <article className="live-report-card">
+    <div>
+      <b>{report.name || "Adsız rapor"}</b>
+      <small>{resourceTitles[report.resource] || localizedEnum(report.resource)} · {reportVisibilityLabels[report.visibility] || localizedEnum(report.visibility)}</small>
+      {report.description && <p>{report.description}</p>}
+      <em>{formatValue(report.updated_at || report.created_at, "date")}</em>
+    </div>
+    <footer>
+      <button type="button" className="live-workflow-button" disabled={!ready} onClick={() => onOpen(report)}>Aç</button>
+      <button type="button" className="live-workflow-button" disabled={!ready} onClick={() => onDuplicate(report)}>Kopyala</button>
+      {canExport && <button type="button" className="live-workflow-button" disabled={busy} onClick={() => onExport(report)}><DownloadSimple /> CSV</button>}
+      {canRemove && mine && <button type="button" className="live-icon-button danger" title="Raporu sil" onClick={() => onRemove(report)}><Trash /></button>}
+    </footer>
+  </article>;
+}
+
+function ReportsView({ session, online }) {
+  const [catalog, setCatalog] = useState({ loading: true, resources: [], error: null });
+  const [saved, setSaved] = useState({ loading: true, rows: [], error: null });
+  const [draft, setDraft] = useState(emptyReportDraft);
+  const [reportMeta, setReportMeta] = useState(emptyReportMeta);
+  const [preview, setPreview] = useState({ loading: false, data: null, meta: null, error: null, notice: "Önce raporun okuyacağı kaynağı seçin." });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState(null);
+  const [removeError, setRemoveError] = useState(null);
+  const [removing, setRemoving] = useState(false);
+  // Önizleme sırası. Yavaş kalan eski bir yanıt, yerini alan yeni sonucun
+  // üstüne yazmamalı; her istek kendi sıra numarasıyla döner ve numara
+  // güncel değilse yanıt sessizce atılır.
+  const previewTicket = useRef(0);
+
+  const canWrite = online && permissionAllows(session, "create", "reports");
+  const canRemove = online && permissionAllows(session, "delete", "reports");
+  const canExport = online && hasCapability(session, "export");
+
+  const loadCatalog = () => {
+    setCatalog((current) => ({ ...current, loading: true, error: null }));
+    api.reportFields().then(({ data }) => setCatalog({ loading: false, resources: data, error: null })).catch((error) => setCatalog({ loading: false, resources: [], error }));
+  };
+  const loadSaved = () => {
+    setSaved((current) => ({ ...current, loading: true, error: null }));
+    api.savedReports().then(({ data }) => setSaved({ loading: false, rows: data, error: null })).catch((error) => setSaved({ loading: false, rows: [], error }));
+  };
+  useEffect(() => { loadCatalog(); loadSaved(); }, [session?.tenant?.id]);
+
+  const activeResource = catalog.resources.find((item) => item.resource === draft.resource) || null;
+  const resourceColumns = activeResource?.columns || [];
+  const columnType = (key) => resourceColumns.find((item) => item.key === key)?.type || "text";
+  const numericColumns = resourceColumns.filter((item) => reportNumericTypes.has(item.type));
+  // Durum seçenekleri yalnız alan kataloğundan okunur. Tahmin edilen bir liste,
+  // o kaynakta hiç bulunmayan bir durumu seçtirir ve rapor sessizce boş döner;
+  // sunucu güvenilir bir küme çıkaramadıysa alan serbest metin olarak kalır.
+  const statusChoicesFor = (key) => (resourceColumns.find((item) => item.key === key)?.values || []).map((value) => ({ value, label: localizedEnum(value) }));
+  const columnLabel = (key) => reportColumnLabel(draft.resource, key);
+
+  const requestDefinition = useMemo(() => reportRequestDefinition(draft), [draft]);
+  const definitionKey = JSON.stringify(requestDefinition);
+
+  // Canlı önizleme: tanım her değiştiğinde değil, kullanıcı durduğunda çalışır.
+  useEffect(() => {
+    const problem = reportDefinitionProblem(requestDefinition);
+    if (problem) {
+      previewTicket.current += 1;
+      setPreview({ loading: false, data: null, meta: null, error: null, notice: problem });
+      return undefined;
+    }
+    if (!online) {
+      setPreview((current) => ({ ...current, loading: false, notice: "Önizleme için bağlantı gerekiyor." }));
+      return undefined;
+    }
+    const ticket = previewTicket.current + 1;
+    previewTicket.current = ticket;
+    // Eski sonuç ekranda kalır ve sönükleşir; tablo kaybolup geri gelmediği için
+    // ekran zıplamaz.
+    setPreview((current) => ({ ...current, loading: true, error: null, notice: null }));
+    const timer = setTimeout(() => {
+      api.runReport(requestDefinition, { preview: true })
+        .then((result) => {
+          if (previewTicket.current !== ticket) return;
+          setPreview({ loading: false, data: result.data, meta: result.meta, error: null, notice: null });
+        })
+        .catch((error) => {
+          if (previewTicket.current !== ticket) return;
+          setPreview({ loading: false, data: null, meta: null, error, notice: null });
+        });
+    }, REPORT_PREVIEW_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [definitionKey, online]);
+
+  function chooseResource(value) {
+    // Kaynak değişince eski sütun ve süzgeçler geçersizdir; taşınırsa sunucu
+    // 422 döner ve kullanıcı nedenini anlamaz.
+    setDraft({ ...emptyReportDraft, resource: value });
+    setReportMeta((current) => ({ ...current, id: null }));
+    setNotice(null);
+  }
+  const patchDraft = (patch) => setDraft((current) => ({ ...current, ...patch }));
+  function toggleColumn(key) {
+    setDraft((current) => ({ ...current, columns: current.columns.includes(key) ? current.columns.filter((item) => item !== key) : [...current.columns, key] }));
+  }
+  function addFilter() {
+    const first = resourceColumns[0];
+    if (!first) return;
+    const op = reportOperatorsFor(first.type)[0];
+    patchDraft({ filters: [...draft.filters, { field: first.key, op, type: first.type, value: op === "between" ? ["", ""] : op === "in" ? [] : "" }] });
+  }
+  function updateFilter(index, patch) {
+    setDraft((current) => ({ ...current, filters: current.filters.map((item, position) => (position === index ? { ...item, ...patch } : item)) }));
+  }
+  function changeFilterField(index, key) {
+    const type = columnType(key);
+    updateFilter(index, { field: key, type, op: reportOperatorsFor(type)[0], value: reportOperatorsFor(type)[0] === "between" ? ["", ""] : "" });
+  }
+  function changeFilterOp(index, op) {
+    updateFilter(index, { op, value: op === "between" ? ["", ""] : op === "in" ? [] : "" });
+  }
+  const removeFilter = (index) => patchDraft({ filters: draft.filters.filter((_, position) => position !== index) });
+  function addSort() {
+    const first = resourceColumns[0];
+    if (!first) return;
+    patchDraft({ sort: [...draft.sort, { field: first.key, direction: "asc" }] });
+  }
+  function updateSort(index, patch) {
+    setDraft((current) => ({ ...current, sort: current.sort.map((item, position) => (position === index ? { ...item, ...patch } : item)) }));
+  }
+  const removeSort = (index) => patchDraft({ sort: draft.sort.filter((_, position) => position !== index) });
+  function toggleGrouping(enabled) {
+    patchDraft({ group: enabled ? { by: [], aggregates: [{ fn: "count", field: "", as: reportAggregateAlias("count") }] } : null });
+  }
+  function toggleGroupBy(key) {
+    setDraft((current) => ({ ...current, group: { ...current.group, by: current.group.by.includes(key) ? current.group.by.filter((item) => item !== key) : [...current.group.by, key] } }));
+  }
+  function updateAggregate(index, patch) {
+    setDraft((current) => ({
+      ...current,
+      group: {
+        ...current.group,
+        aggregates: current.group.aggregates.map((item, position) => {
+          if (position !== index) return item;
+          const next = { ...item, ...patch };
+          // Takma ad SQL takma adı olarak gidiyor; kullanıcı yazmaz, işlev ve
+          // alandan türetilir. Başlıkta zaten Türkçe karşılığı görünür.
+          return { ...next, as: reportAggregateAlias(next.fn, next.field) };
+        }),
+      },
+    }));
+  }
+  function addAggregate() {
+    const first = numericColumns[0];
+    setDraft((current) => ({ ...current, group: { ...current.group, aggregates: [...current.group.aggregates, first ? { fn: "sum", field: first.key, as: reportAggregateAlias("sum", first.key) } : { fn: "count", field: "", as: reportAggregateAlias("count") }] } }));
+  }
+  const removeAggregate = (index) => setDraft((current) => ({ ...current, group: { ...current.group, aggregates: current.group.aggregates.filter((_, position) => position !== index) } }));
+
+  function startNew() {
+    setDraft(emptyReportDraft);
+    setReportMeta(emptyReportMeta);
+    setSaveError(null);
+    setNotice(null);
+  }
+  // Kaydedilmiş rapor arayüze geri yüklenirken süzgeç değerleri kullanıcının
+  // gördüğü birime (lira) çevrilir; tanımda kuruş olarak duruyorlar.
+  function draftFromDefinition(definition) {
+    const typeOf = (key) => catalog.resources.find((item) => item.resource === definition.resource)?.columns.find((item) => item.key === key)?.type || "text";
+    const fromServer = (field, type, part) => (reportMoneyColumn(field, type) ? Number(part) / 100 : part);
+    return {
+      resource: definition.resource || "",
+      columns: Array.isArray(definition.columns) ? definition.columns : [],
+      filters: (Array.isArray(definition.filters) ? definition.filters : []).map((item) => {
+        const type = typeOf(item.field);
+        const value = reportValuelessOps.has(item.op)
+          ? ""
+          : Array.isArray(item.value) ? item.value.map((part) => fromServer(item.field, type, part)) : fromServer(item.field, type, item.value);
+        return { field: item.field, op: item.op, type, value };
+      }),
+      sort: Array.isArray(definition.sort) ? definition.sort : [],
+      group: definition.group ? { by: definition.group.by || [], aggregates: (definition.group.aggregates || []).map((item) => ({ fn: item.fn, field: item.field || "", as: item.as || reportAggregateAlias(item.fn, item.field) })) } : null,
+      limit: definition.limit || 500,
+    };
+  }
+  function openSaved(report, { asCopy = false } = {}) {
+    const definition = reportDefinitionOf(report);
+    if (!definition) {
+      setNotice("Bu raporun tanımı okunamadı; yeniden kurup kaydetmeniz gerekiyor.");
+      return;
+    }
+    setDraft(draftFromDefinition(definition));
+    setReportMeta({
+      id: asCopy ? null : report.id,
+      name: asCopy ? `${report.name} (kopya)` : report.name || "",
+      description: report.description || "",
+      visibility: asCopy ? "private" : report.visibility || "private",
+      ownerUserId: report.owner_user_id || null,
+    });
+    setSaveError(null);
+    setNotice(asCopy ? "Kopya açıldı. Değiştirip kendi raporunuz olarak kaydedebilirsiniz." : null);
+  }
+
+  async function saveReport() {
+    const problem = reportDefinitionProblem(requestDefinition);
+    if (problem) { setSaveError(new ApiError(problem, { code: "INVALID_DEFINITION" })); return; }
+    if (!reportMeta.name.trim()) { setSaveError(new ApiError("Rapora bir ad verin.", { code: "INVALID_DEFINITION" })); return; }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const stored = await api.saveReport({
+        name: reportMeta.name.trim(),
+        description: reportMeta.description.trim(),
+        resource: draft.resource,
+        definition: requestDefinition,
+        visibility: reportMeta.visibility,
+      }, { id: reportMeta.id });
+      setReportMeta((current) => ({ ...current, id: stored?.id || current.id, ownerUserId: stored?.owner_user_id || current.ownerUserId }));
+      setNotice("Rapor kaydedildi.");
+      loadSaved();
+    } catch (error) {
+      setSaveError(error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeReport() {
+    if (!removeTarget) return;
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      await api.deleteReport(removeTarget.id);
+      if (reportMeta.id === removeTarget.id) setReportMeta((current) => ({ ...current, id: null }));
+      setRemoveTarget(null);
+      loadSaved();
+    } catch (error) {
+      setRemoveError(error);
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  // CSV dökümü kayıtlı rapor kimliğiyle alınır; sunucu denetim kaydına da yazar.
+  async function downloadCsv(report) {
+    if (!online || busy) return;
+    setBusy(true);
+    try {
+      const csv = await api.reportCsv(report.id);
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${(report.name || "rapor").replace(/[^\wğüşiöçİĞÜŞÖÇ -]/gi, "").trim() || "rapor"}-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setNotice(reportErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Alan kataloğu gelmeden kayıtlı rapor açılmamalı: süzgeç değerinin birimi
+  // (kuruş mu, lira mı) sütunun tipinden okunuyor.
+  // Kayıt defteri alan adlarını sunucudaki hâliyle döndürüyor; saved-reports için
+  // camelCase karşılığı üretilmiyor.
+  const myReports = saved.rows.filter((row) => row.owner_user_id === session?.user?.id);
+  const sharedReports = saved.rows.filter((row) => !myReports.includes(row));
+  const savedGroups = [{ key: "mine", title: "Benim raporlarım", rows: myReports }, { key: "shared", title: "Paylaşılanlar", rows: sharedReports }].filter((group) => group.rows.length);
+
+  function valueInput(type, value, onChange, placeholder) {
+    const inputType = type === "date" || type === "datetime" ? "date" : reportNumericTypes.has(type) ? "number" : "text";
+    return <input type={inputType} value={value ?? ""} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />;
+  }
+  function filterValueFields(item, index) {
+    if (reportValuelessOps.has(item.op)) return <label><span>Değer</span><input value="" disabled placeholder="Bu işleç değer almaz" /></label>;
+    const type = item.type || columnType(item.field);
+    const unit = reportMoneyColumn(item.field, type) ? " (TL)" : "";
+    if (item.op === "between") {
+      const pair = Array.isArray(item.value) ? item.value : ["", ""];
+      return <>
+        <label><span>Başlangıç{unit}</span>{valueInput(type, pair[0], (next) => updateFilter(index, { value: [next, pair[1]] }))}</label>
+        <label><span>Bitiş{unit}</span>{valueInput(type, pair[1], (next) => updateFilter(index, { value: [pair[0], next] }))}</label>
+      </>;
+    }
+    const statusChoices = statusChoicesFor(item.field);
+    if (item.op === "in") {
+      const selected = Array.isArray(item.value) ? item.value : [];
+      if (type === "status" && statusChoices.length) {
+        return <div className="live-report-chips" role="group" aria-label="Durum seçimi">{statusChoices.map((option) => <label key={option.value}><input type="checkbox" checked={selected.includes(option.value)} onChange={() => updateFilter(index, { value: selected.includes(option.value) ? selected.filter((code) => code !== option.value) : [...selected, option.value] })} /><span>{option.label}</span></label>)}</div>;
+      }
+      return <label><span>Değerler</span><input value={selected.join(", ")} placeholder="Virgülle ayırın" onChange={(event) => updateFilter(index, { value: event.target.value.split(",").map((part) => part.trim()).filter(Boolean) })} /></label>;
+    }
+    if (type === "status" && statusChoices.length) {
+      return <label><span>Durum</span><select value={item.value ?? ""} onChange={(event) => updateFilter(index, { value: event.target.value })}><option value="">Seçin</option>{statusChoices.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+    }
+    return <label><span>Değer{unit}</span>{valueInput(type, item.value, (next) => updateFilter(index, { value: next }), type === "status" ? "Durum kodu" : undefined)}</label>;
+  }
+
+  const previewColumns = preview.data?.columns || [];
+  const previewRows = preview.data?.rows || [];
+  const previewColumnLabel = (column) => {
+    const aggregate = requestDefinition.group?.aggregates?.find((item) => item.as === column.key);
+    if (aggregate) return `${reportAggregateLabels[aggregate.fn] || aggregate.fn}${aggregate.field ? ` · ${columnLabel(aggregate.field)}` : ""}`;
+    return columnLabel(column.key);
+  };
+
+  return <>
+    <section className="live-panel">
+      <header className="live-toolbar">
+        <div><small>RAPOR MERKEZİ</small><h2>Kaydedilmiş raporlar</h2><p>Kendi raporlarınız ve ekiple paylaşılanlar. Açıp sürdürebilir, kopyalayıp kendinize uyarlayabilir, CSV olarak indirebilirsiniz.</p></div>
+        <div className="live-toolbar-actions"><button type="button" className="live-button secondary" onClick={loadSaved} disabled={!online}><ArrowClockwise /> Yenile</button><button type="button" className="live-button primary" onClick={startNew}><Plus /> Yeni rapor</button></div>
+      </header>
+      {saved.loading ? <LoadingState /> : saved.error?.status === 403 || saved.error?.code === "forbidden" ? <PermissionDeniedState /> : saved.error ? <ErrorState error={saved.error} retry={loadSaved} /> : !savedGroups.length ? <div className="live-view-empty"><ChartPieSlice /><b>Henüz kayıtlı rapor yok</b><small>Aşağıdaki kurucuda kaynağı, sütunları ve süzgeçleri seçip raporu kaydedin.</small></div> : <div className="live-report-groups">{savedGroups.map((group) => <section key={group.key}><h3>{group.title}</h3><div>{group.rows.map((row) => <ReportCard key={row.id} report={row} mine={group.key === "mine"} ready={!catalog.loading && !catalog.error} canRemove={canRemove} canExport={canExport} busy={busy} onOpen={openSaved} onDuplicate={(report) => openSaved(report, { asCopy: true })} onExport={downloadCsv} onRemove={(report) => { setRemoveError(null); setRemoveTarget(report); }} />)}</div></section>)}</div>}
+    </section>
+
+    <section className="live-panel live-report-panel">
+      <header className="live-toolbar">
+        <div><small>RAPOR KURUCUSU</small><h2>{reportMeta.id ? reportMeta.name || "Rapor" : "Yeni rapor"}</h2><p>Kaynağı seçin, göstermek istediğiniz sütunları işaretleyin; alttaki önizleme her değişiklikten sonra kendiliğinden tazelenir.</p></div>
+      </header>
+      {catalog.loading ? <LoadingState /> : catalog.error?.status === 403 || catalog.error?.code === "forbidden" ? <PermissionDeniedState /> : catalog.error ? <ErrorState error={catalog.error} retry={loadCatalog} /> : !catalog.resources.length ? <div className="live-view-empty"><ChartPieSlice /><b>Rapor kurulabilecek kaynak yok</b><small>Rapor yalnız okuma yetkiniz olan kayıtlar üzerinde kurulabilir.</small></div> : <div className="live-report-builder">
+        <div className="live-report-block">
+          <header><b>1 · Kaynak</b><small>Yalnız okuma yetkiniz olan kayıtlar listelenir.</small></header>
+          <label className="live-report-resource"><span>Rapor kaynağı</span><select value={draft.resource} onChange={(event) => chooseResource(event.target.value)}><option value="">Seçin</option>{catalog.resources.map((item) => <option key={item.resource} value={item.resource}>{resourceTitles[item.resource] || localizedEnum(item.resource)}</option>)}</select></label>
+        </div>
+
+        {draft.resource && <>
+          <div className="live-report-block">
+            <header><b>2 · Sütunlar</b><small>{draft.group ? "Gruplu raporda sütunlar yerine gruplama alanları ve toplamlar gösterilir." : `${draft.columns.length} sütun seçildi`}</small></header>
+            {!draft.group && <div className="live-multi-select" role="group" aria-label="Rapor sütunları">{resourceColumns.map((item) => <label key={item.key}><input type="checkbox" checked={draft.columns.includes(item.key)} onChange={() => toggleColumn(item.key)} /><span><b title={item.key}>{columnLabel(item.key)}</b><small>{reportColumnTypeLabels[item.type] || "Metin"}</small></span></label>)}</div>}
+          </div>
+
+          <div className="live-report-block">
+            <header><b>3 · Süzgeçler</b><small>Alan, işleç ve değer. Tarihte takvim, durumda liste, sayıda sayı girişi açılır.</small><button type="button" className="live-workflow-button" onClick={addFilter}><Plus /> Süzgeç ekle</button></header>
+            {draft.filters.length ? draft.filters.map((item, index) => <div className="live-report-row" key={`filter-${index}`}>
+              <label><span>Alan</span><select value={item.field} onChange={(event) => changeFilterField(index, event.target.value)}>{resourceColumns.map((column) => <option key={column.key} value={column.key}>{columnLabel(column.key)}</option>)}</select></label>
+              <label><span>İşleç</span><select value={item.op} onChange={(event) => changeFilterOp(index, event.target.value)}>{reportOperatorsFor(item.type || columnType(item.field)).map((op) => <option key={op} value={op}>{reportOperatorLabels[op]}</option>)}</select></label>
+              {filterValueFields(item, index)}
+              <button type="button" className="live-icon-button danger" title="Süzgeci kaldır" onClick={() => removeFilter(index)}><X /></button>
+            </div>) : <p className="live-report-hint">Süzgeç eklemezseniz kaynaktaki tüm kayıtlar raporlanır.</p>}
+          </div>
+
+          <div className="live-report-block">
+            <header><b>4 · Sıralama</b><small>Üstte görmek istediğiniz kayıtlara göre.</small><button type="button" className="live-workflow-button" onClick={addSort}><Plus /> Sıralama ekle</button></header>
+            {draft.sort.length ? draft.sort.map((item, index) => <div className="live-report-row" key={`sort-${index}`}>
+              <label><span>Alan</span><select value={item.field} onChange={(event) => updateSort(index, { field: event.target.value })}>{resourceColumns.map((column) => <option key={column.key} value={column.key}>{columnLabel(column.key)}</option>)}</select></label>
+              <label><span>Yön</span><select value={item.direction} onChange={(event) => updateSort(index, { direction: event.target.value })}><option value="asc">Artan</option><option value="desc">Azalan</option></select></label>
+              <span />
+              <button type="button" className="live-icon-button danger" title="Sıralamayı kaldır" onClick={() => removeSort(index)}><X /></button>
+            </div>) : <p className="live-report-hint">Sıralama seçilmezse sunucunun varsayılan sırası kullanılır.</p>}
+          </div>
+
+          <div className="live-report-block">
+            <header><b>5 · Gruplama ve toplam</b><small>İsteğe bağlı. Açarsanız rapor tek tek kayıtlar yerine özet satırları döner.</small><label className="live-report-toggle"><input type="checkbox" checked={Boolean(draft.group)} onChange={(event) => toggleGrouping(event.target.checked)} /><span>Grupla ve topla</span></label></header>
+            {draft.group && <>
+              <div className="live-multi-select" role="group" aria-label="Gruplama alanları">{resourceColumns.map((item) => <label key={item.key}><input type="checkbox" checked={draft.group.by.includes(item.key)} onChange={() => toggleGroupBy(item.key)} /><span><b title={item.key}>{columnLabel(item.key)}</b></span></label>)}</div>
+              {draft.group.aggregates.map((item, index) => <div className="live-report-row" key={`aggregate-${index}`}>
+                <label><span>Toplama</span><select value={item.fn} onChange={(event) => updateAggregate(index, { fn: event.target.value, field: event.target.value === "count" ? "" : item.field || numericColumns[0]?.key || "" })}>{Object.entries(reportAggregateLabels).map(([fn, label]) => <option key={fn} value={fn}>{label}</option>)}</select></label>
+                <label><span>Alan</span><select value={item.field} disabled={item.fn === "count"} onChange={(event) => updateAggregate(index, { field: event.target.value })}><option value="">{item.fn === "count" ? "Gerekmez" : "Seçin"}</option>{numericColumns.map((column) => <option key={column.key} value={column.key}>{columnLabel(column.key)}</option>)}</select></label>
+                <span className="live-report-hint">{reportAggregateLabels[item.fn]}{item.field ? ` · ${columnLabel(item.field)}` : ""}</span>
+                <button type="button" className="live-icon-button danger" title="Toplamı kaldır" onClick={() => removeAggregate(index)}><X /></button>
+              </div>)}
+              <button type="button" className="live-workflow-button" onClick={addAggregate}><Plus /> Toplam ekle</button>
+              {draft.group.aggregates.some((item) => item.fn !== "count" && !item.field) && <p className="live-report-hint">Sayım dışındaki toplamlar için bir sayısal alan seçin.</p>}
+            </>}
+          </div>
+
+          <div className="live-report-block">
+            <header><b>6 · Kaydet</b><small>Paylaşılan rapor firmadaki herkese görünür; özel rapor yalnız size.</small></header>
+            <div className="live-report-save">
+              <label><span>Rapor adı</span><input value={reportMeta.name} onChange={(event) => setReportMeta({ ...reportMeta, name: event.target.value })} placeholder="Örn. Bu çeyrek teslim edilecek projeler" /></label>
+              <label><span>Açıklama</span><input value={reportMeta.description} onChange={(event) => setReportMeta({ ...reportMeta, description: event.target.value })} placeholder="İsteğe bağlı" /></label>
+              <label><span>Görünürlük</span><select value={reportMeta.visibility} onChange={(event) => setReportMeta({ ...reportMeta, visibility: event.target.value })}><option value="private">Özel</option><option value="shared">Paylaşılan</option></select></label>
+              <label><span>Satır sınırı</span><input type="number" min="1" max="5000" value={draft.limit} onChange={(event) => patchDraft({ limit: Math.min(5000, Math.max(1, Number(event.target.value) || 1)) })} /></label>
+            </div>
+            {saveError && <div className="live-form-alert"><WarningCircle />{reportErrorMessage(saveError)}</div>}
+            {notice && <div className="live-field-note"><Check />{notice}</div>}
+            <footer>
+              {reportMeta.id && <button type="button" className="live-button secondary" onClick={startNew}>Yeni rapor</button>}
+              <button type="button" className="live-button primary" disabled={!canWrite || saving} onClick={saveReport}><FloppyDisk /> {saving ? "Kaydediliyor…" : reportMeta.id ? "Değişiklikleri kaydet" : "Raporu kaydet"}</button>
+            </footer>
+            {!canWrite && <p className="live-report-hint">Rapor kaydetmek için yetkiniz yok; kurduğunuz raporu yine de önizleyebilirsiniz.</p>}
+          </div>
+        </>}
+      </div>}
+    </section>
+
+    <section className="live-panel live-report-preview-panel">
+      <header className="live-toolbar">
+        <div><small>CANLI ÖNİZLEME</small><h2>Rapor önizlemesi</h2><p>İlk 20 satır gösterilir; tam sonuç kaydedip CSV indirdiğinizde alınır.</p></div>
+        {preview.loading && <span className="live-report-refreshing"><span className="live-spinner small" /> Tazeleniyor…</span>}
+      </header>
+      {preview.notice ? <div className="live-view-empty"><ChartPieSlice /><b>Önizleme için biraz daha bilgi gerekiyor</b><small>{preview.notice}</small></div>
+        : preview.error ? <div className="live-view-empty"><WarningCircle /><b>Rapor çalıştırılamadı</b><small>{reportErrorMessage(preview.error)}</small></div>
+          : !preview.data ? <LoadingState />
+            : !previewRows.length ? <div className="live-view-empty"><ChartPieSlice /><b>Bu tanıma uyan kayıt yok</b><small>Süzgeçleri gevşetip tekrar deneyin.</small></div>
+              : <div className={`live-report-preview ${preview.loading ? "refreshing" : ""}`}>
+                <div className="live-table-wrap"><table className="live-table"><thead><tr>{previewColumns.map((column) => <th key={column.key} title={column.key}>{previewColumnLabel(column)}</th>)}</tr></thead><tbody>
+                  {previewRows.map((row, index) => <tr key={index}>{previewColumns.map((column) => <td key={column.key}>{column.type === "status" && row[column.key] ? <Status>{row[column.key]}</Status> : formatValue(reportCellValue(column.key, row[column.key], column.type), column.type, row)}</td>)}</tr>)}
+                </tbody></table></div>
+                <footer className="live-table-footer"><span>{preview.meta?.rowCount ?? previewRows.length} satır{preview.meta?.truncated ? " (kırpıldı)" : ""}</span><small>Önizleme sunucu tarafında 20 satırla sınırlıdır</small></footer>
+              </div>}
+    </section>
+    {removeTarget && <WorkflowConfirmModal workflow={{ row: { name: removeTarget.name, status: reportVisibilityLabels[removeTarget.visibility] || "Rapor" }, action: { title: "Raporu sil", message: "Kaydedilmiş rapor kalıcı olarak silinecek. Paylaşılan bir raporsa diğer kullanıcılar da erişemeyecek.", tone: "danger" } }} saving={removing} error={removeError} onClose={() => setRemoveTarget(null)} onConfirm={removeReport} />}
+  </>;
 }
 
 function ProjectCommandCenterModal({ record, onClose, onNavigate, onCostBreakdown, onShare }) {
@@ -2508,7 +3067,7 @@ export function LiveWorkspace({ initialModule = "dashboard" }) {
   };
   const openModule = (moduleId, group) => { navigate(moduleId); if (group) setOpenNavGroup(group); };
   const shareToChat = (target) => { setChatShare(target); navigate("chat"); };
-  return <div className="live-shell"><LiveStyles />{!online && <div className="live-offline"><WarningCircle /> Çevrimdışısınız. Uygun yeni saha kayıtları kuyruğa alınır; onay, silme ve dosya işlemleri bağlantı bekler.</div>}<aside className={`live-sidebar ${mobileMenuOpen ? "open" : ""}`} aria-hidden={false}><div className="live-brand"><span><Buildings /></span><div><b>Capproje</b><small>Yönetim Platformu</small></div></div><TenantSelector session={session} onChange={changeTenant} /><nav aria-label="Ana menü">{Object.entries(navGroups).map(([group, items], groupIndex) => { const expanded = openNavGroup === group; const panelId = `live-nav-group-${groupIndex}`; return <section className={`live-nav-group ${expanded ? "open" : ""}`} key={group}><button type="button" className="live-nav-group-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpenNavGroup((current) => current === group ? null : group)}><span>{group}</span><CaretDown /></button><div id={panelId} className="live-nav-group-items" hidden={!expanded}>{items.map((item) => <button type="button" key={item.id} className={`live-nav-item ${item.id === selectedModule?.id ? "active" : ""}`} onClick={() => openModule(item.id, group)}><item.icon /><span>{item.title}</span></button>)}</div></section>; })}</nav><a className="live-guide-link" href="/kilavuz" target="_blank" rel="noreferrer"><BookOpen /><span>Kullanım Kılavuzu</span></a><div className="live-user"><UserCircle /><span><b>{session?.user?.name || session?.user?.full_name || `${session?.user?.firstName || ""} ${session?.user?.lastName || ""}`.trim() || session?.user?.email}</b><small>{session?.role?.name || session?.user?.role || "Kullanıcı"}</small></span><button onClick={() => setSecurityOpen(true)} title="Şifre ve oturumlar"><UserCircle /></button><button onClick={logout} title="Çıkış yap"><SignOut /></button></div></aside>{mobileMenuOpen && <button type="button" className="live-drawer-backdrop" aria-label="Menüyü kapat" onClick={() => setMobileMenuOpen(false)} />}<nav className="live-tabbar" aria-label="Hızlı menü">{tabbarModules.map((item) => <button type="button" key={item.id} className={item.id === selectedModule?.id && !mobileMenuOpen ? "active" : ""} aria-current={item.id === selectedModule?.id ? "page" : undefined} onClick={() => openModule(item.id, item.group)}><item.icon /><span>{item.title}</span></button>)}<button type="button" className={mobileMenuOpen ? "active" : ""} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X /> : <ListBullets />}<span>{mobileMenuOpen ? "Kapat" : "Tüm Menü"}</span></button></nav><main className="live-main"><header className="live-topbar"><div><small>{session?.tenant?.name || "Firma"}<span className="live-build" title={buildTitle}>{buildLabel}</span></small><h1>{selectedModule?.title || "Çalışma alanı"}</h1></div><GlobalSearch onNavigate={navigate} /><div className="live-top-actions">{visibleModules.some((item) => item.id === "chat") && <button className="live-top-icon" onClick={() => navigate("chat")} title="Ekip sohbeti"><ChatCircleText /></button>}<OfflineQueueControl state={queueState} online={online} onSynced={() => setDataVersion((value) => value + 1)} /><a className="live-top-icon" href="/kilavuz" target="_blank" rel="noreferrer" title="Kullanım kılavuzu"><BookOpen /></a><button className="live-top-icon" onClick={() => navigate("notifications")} title="Bildirimler"><Bell /></button><span className="live-connection"><i /> {online ? "Canlı" : "Çevrimdışı"}</span></div></header><div className="live-content"><ErrorBoundary inline resetKey={selectedModule?.id}>{!selectedModule ? <PermissionDeniedState /> : selectedModule.id === "fieldMode" ? <FieldMode session={session} online={online} queueState={queueState} onNavigate={navigate} onDataChanged={() => setDataVersion((value) => value + 1)} /> : selectedModule.id === "dashboard" ? <Dashboard session={session} onNavigate={navigate} refreshKey={dataVersion} /> : selectedModule.id === "chat" ? <ChatView online={online} onNavigate={navigate} share={chatShare} onShareConsumed={() => setChatShare(null)} /> : selectedModule.id === "notifications" ? <NotificationsView onNavigate={navigate} /> : selectedModule.id === "backups" ? <BackupView online={online} /> : selectedModule.id === "tokens" ? <TokenView online={online} /> : selectedModule.id === "workCenterLoad" ? <WorkCenterLoadView online={online} /> : <>{selectedModule.id === "memberships" && hasCapability(session, "users.reset-password") && <PasswordResetPanel online={online} onChanged={() => setDataVersion((value) => value + 1)} />}<ResourceView module={selectedModule} session={session} online={online} refreshKey={dataVersion} onNavigate={navigate} onShare={shareToChat} focusRecordId={focusRecord?.moduleId === selectedModule.id ? focusRecord.recordId : null} onFocusHandled={() => setFocusRecord(null)} onDataChanged={() => setDataVersion((value) => value + 1)} /></>}</ErrorBoundary></div></main>{securityOpen && <SecuritySettingsModal onClose={() => setSecurityOpen(false)} />}</div>;
+  return <div className="live-shell"><LiveStyles />{!online && <div className="live-offline"><WarningCircle /> Çevrimdışısınız. Uygun yeni saha kayıtları kuyruğa alınır; onay, silme ve dosya işlemleri bağlantı bekler.</div>}<aside className={`live-sidebar ${mobileMenuOpen ? "open" : ""}`} aria-hidden={false}><div className="live-brand"><span><Buildings /></span><div><b>Capproje</b><small>Yönetim Platformu</small></div></div><TenantSelector session={session} onChange={changeTenant} /><nav aria-label="Ana menü">{Object.entries(navGroups).map(([group, items], groupIndex) => { const expanded = openNavGroup === group; const panelId = `live-nav-group-${groupIndex}`; return <section className={`live-nav-group ${expanded ? "open" : ""}`} key={group}><button type="button" className="live-nav-group-toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => setOpenNavGroup((current) => current === group ? null : group)}><span>{group}</span><CaretDown /></button><div id={panelId} className="live-nav-group-items" hidden={!expanded}>{items.map((item) => <button type="button" key={item.id} className={`live-nav-item ${item.id === selectedModule?.id ? "active" : ""}`} onClick={() => openModule(item.id, group)}><item.icon /><span>{item.title}</span></button>)}</div></section>; })}</nav><a className="live-guide-link" href="/kilavuz" target="_blank" rel="noreferrer"><BookOpen /><span>Kullanım Kılavuzu</span></a><div className="live-user"><UserCircle /><span><b>{session?.user?.name || session?.user?.full_name || `${session?.user?.firstName || ""} ${session?.user?.lastName || ""}`.trim() || session?.user?.email}</b><small>{session?.role?.name || session?.user?.role || "Kullanıcı"}</small></span><button onClick={() => setSecurityOpen(true)} title="Şifre ve oturumlar"><UserCircle /></button><button onClick={logout} title="Çıkış yap"><SignOut /></button></div></aside>{mobileMenuOpen && <button type="button" className="live-drawer-backdrop" aria-label="Menüyü kapat" onClick={() => setMobileMenuOpen(false)} />}<nav className="live-tabbar" aria-label="Hızlı menü">{tabbarModules.map((item) => <button type="button" key={item.id} className={item.id === selectedModule?.id && !mobileMenuOpen ? "active" : ""} aria-current={item.id === selectedModule?.id ? "page" : undefined} onClick={() => openModule(item.id, item.group)}><item.icon /><span>{item.title}</span></button>)}<button type="button" className={mobileMenuOpen ? "active" : ""} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X /> : <ListBullets />}<span>{mobileMenuOpen ? "Kapat" : "Tüm Menü"}</span></button></nav><main className="live-main"><header className="live-topbar"><div><small>{session?.tenant?.name || "Firma"}<span className="live-build" title={buildTitle}>{buildLabel}</span></small><h1>{selectedModule?.title || "Çalışma alanı"}</h1></div><GlobalSearch onNavigate={navigate} /><div className="live-top-actions">{visibleModules.some((item) => item.id === "chat") && <button className="live-top-icon" onClick={() => navigate("chat")} title="Ekip sohbeti"><ChatCircleText /></button>}<OfflineQueueControl state={queueState} online={online} onSynced={() => setDataVersion((value) => value + 1)} /><a className="live-top-icon" href="/kilavuz" target="_blank" rel="noreferrer" title="Kullanım kılavuzu"><BookOpen /></a><button className="live-top-icon" onClick={() => navigate("notifications")} title="Bildirimler"><Bell /></button><span className="live-connection"><i /> {online ? "Canlı" : "Çevrimdışı"}</span></div></header><div className="live-content"><ErrorBoundary inline resetKey={selectedModule?.id}>{!selectedModule ? <PermissionDeniedState /> : selectedModule.id === "fieldMode" ? <FieldMode session={session} online={online} queueState={queueState} onNavigate={navigate} onDataChanged={() => setDataVersion((value) => value + 1)} /> : selectedModule.id === "dashboard" ? <Dashboard session={session} onNavigate={navigate} refreshKey={dataVersion} /> : selectedModule.id === "chat" ? <ChatView online={online} onNavigate={navigate} share={chatShare} onShareConsumed={() => setChatShare(null)} /> : selectedModule.id === "notifications" ? <NotificationsView onNavigate={navigate} /> : selectedModule.id === "backups" ? <BackupView online={online} /> : selectedModule.id === "tokens" ? <TokenView online={online} /> : selectedModule.id === "workCenterLoad" ? <WorkCenterLoadView online={online} /> : selectedModule.id === "reports" ? <ReportsView session={session} online={online} /> : <>{selectedModule.id === "memberships" && hasCapability(session, "users.reset-password") && <PasswordResetPanel online={online} onChanged={() => setDataVersion((value) => value + 1)} />}<ResourceView module={selectedModule} session={session} online={online} refreshKey={dataVersion} onNavigate={navigate} onShare={shareToChat} focusRecordId={focusRecord?.moduleId === selectedModule.id ? focusRecord.recordId : null} onFocusHandled={() => setFocusRecord(null)} onDataChanged={() => setDataVersion((value) => value + 1)} /></>}</ErrorBoundary></div></main>{securityOpen && <SecuritySettingsModal onClose={() => setSecurityOpen(false)} />}</div>;
 }
 
 export default LiveWorkspace;
@@ -2637,6 +3196,56 @@ function LiveStyles() {
     .live-chat-new-channel input,.live-chat-new-channel select{border:1px solid #ced3cf;border-radius:8px;padding:10px 11px;font:inherit;font-size:12px;outline:0}
     .live-chat-new-channel .live-form-alert{grid-column:1/-1}
     .live-chat-new-channel footer{grid-column:1/-1;display:flex;justify-content:flex-end;gap:9px}
+    /* Rapor merkezi, rapor kurucusu ve canlı önizleme */
+    .live-report-groups{padding:18px 24px;display:flex;flex-direction:column;gap:18px}
+    .live-report-groups h3{margin:0 0 9px;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--live-muted)}
+    .live-report-groups>section>div{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+    .live-report-card{border:1px solid var(--live-line);border-radius:11px;padding:13px;background:#fafaf8;display:flex;flex-direction:column;gap:9px;min-width:0}
+    .live-report-card b{font-size:12px;overflow-wrap:anywhere}
+    .live-report-card small{display:block;margin-top:3px;font-size:9px;color:var(--live-muted)}
+    .live-report-card p{margin:6px 0 0;font-size:11px;color:#46524c;overflow-wrap:anywhere}
+    .live-report-card em{display:block;margin-top:6px;font-style:normal;font-size:9px;color:var(--live-muted)}
+    .live-report-card footer{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+    .live-report-builder{padding:18px 24px 22px;display:flex;flex-direction:column;gap:16px}
+    .live-report-block{border:1px solid var(--live-line);border-radius:11px;padding:13px;display:flex;flex-direction:column;gap:10px;min-width:0}
+    .live-report-block>header{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+    .live-report-block>header b{font-size:12px}
+    .live-report-block>header small{flex:1;min-width:130px;font-size:9px;color:var(--live-muted)}
+    .live-report-block>header .live-report-toggle{flex-direction:row;align-items:center;gap:7px;font-size:11px;font-weight:700;cursor:pointer}
+    .live-report-block>label,.live-report-row>label,.live-report-save>label{display:flex;flex-direction:column;gap:5px;min-width:0}
+    .live-report-block>label>span,.live-report-row>label>span,.live-report-save>label>span{font-size:10px;font-weight:700;color:#46524c}
+    .live-report-block>label input,.live-report-block>label select,.live-report-row input:not([type="checkbox"]),.live-report-row select,.live-report-save input,.live-report-save select{width:100%;min-width:0;border:1px solid #ced3cf;border-radius:8px;background:#fff;padding:9px 10px;font:inherit;font-size:12px;outline:0}
+    .live-report-block>label input:focus,.live-report-row input:focus,.live-report-row select:focus,.live-report-save input:focus,.live-report-save select:focus{border-color:var(--live-green-2);box-shadow:0 0 0 3px #dcece4}
+    .live-report-row input:disabled,.live-report-row select:disabled{background:#f3f4f1;color:var(--live-muted)}
+    .live-report-resource{max-width:420px}
+    .live-report-row{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.5fr) 34px;gap:8px;align-items:end}
+    .live-report-row>span:empty{display:none}
+    .live-report-row>.live-icon-button{flex:none}
+    .live-report-chips{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+    .live-report-chips>label{display:inline-flex;flex-direction:row;align-items:center;gap:6px;border:1px solid var(--live-line);background:#fff;border-radius:16px;padding:6px 10px;font-size:10px;cursor:pointer}
+    .live-report-chips input{width:auto;min-width:0;accent-color:var(--live-green)}
+    .live-report-toggle input{width:auto;min-width:0;accent-color:var(--live-green)}
+    .live-report-hint{margin:0;font-size:10px;color:var(--live-muted)}
+    .live-report-save{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+    .live-report-block>footer{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+    .live-report-refreshing{display:flex;align-items:center;gap:7px;font-size:10px;color:var(--live-muted);white-space:nowrap}
+    .live-report-refreshing .live-spinner{border-color:#d7ded9;border-top-color:var(--live-green)}
+    /* Tazelenirken eski sonuç yerinde kalıp sönükleşir; tablo kaybolup geri
+       gelmediği için ekran zıplamaz. */
+    .live-report-preview{transition:opacity .16s ease}
+    .live-report-preview.refreshing{opacity:.5}
+    @media(max-width:720px){
+      .live-report-groups,.live-report-builder{padding:14px 16px 18px}
+      .live-report-groups>section>div{grid-template-columns:1fr}
+      /* Dar ekranda süzgeç satırı alt alta iner; kaldırma düğmesi ilk satırın
+         sağında kalır ve hiçbir alan yatay taşmaya yol açmaz. */
+      .live-report-row{grid-template-columns:minmax(0,1fr) 34px}
+      .live-report-row>label,.live-report-row>.live-report-chips,.live-report-row>.live-report-hint{grid-column:1}
+      .live-report-row>.live-icon-button{grid-row:1;grid-column:2}
+      .live-report-save{grid-template-columns:1fr}
+      .live-report-block>footer .live-button{width:100%}
+      .live-report-panel .live-toolbar,.live-report-preview-panel .live-toolbar{flex-direction:column}
+    }
     @media(max-width:1050px){.live-guide-link{justify-content:center;padding:0}.live-guide-link span{display:none}}
     @media(max-width:720px){
       .live-guide-link{justify-content:flex-start;padding:0 12px}.live-guide-link span{display:block}
