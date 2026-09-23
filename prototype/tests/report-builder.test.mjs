@@ -1231,3 +1231,72 @@ test("uygulanmayan görünüm Türkçe anlatılır, tercih silinmez", () => {
   assert.match(viewPicker, /disabled=\{state\.saving \|\| !dirty \|\| ignored\}/);
   assert.match(viewPicker, /disabled=\{state\.saving \|\| \(!saved && !dirty\)\}/, "vazgeçme yolu açık kalmalı");
 });
+
+// ——— 4. aşama: komuta merkezinde gizlenen maliyet alanları ———
+// Sunucu, `cost.view` yetkisi olmayan kullanıcıya komuta merkezindeki maliyet,
+// kâr ve marj alanlarını hiç göndermiyor. Kutuyu yine çizip "0 TL" ya da "%0"
+// yazmak kârın gerçekten sıfır olduğunu söylerdi; karar biçimlendirmeden önce
+// veriliyor ve burada metin eşleştirmesiyle değil gerçekten çalıştırılarak
+// denetleniyor.
+const commandCenterModal = section(liveSource, "function ProjectCommandCenterModal(", "const projectFinanceCardFields");
+function loadProjectFinanceHelpers() {
+  const parts = [
+    section(liveSource, "const moneyWhole = new Intl.NumberFormat", "// Derleme damgası"),
+    section(liveSource, "const currencyLabels = {", '// "2026-07-22"'),
+    section(liveSource, "const projectFinanceCardFields = [", "function RecordDetailModal("),
+    "return { projectFinanceCards, projectFinanceCardFields };",
+  ];
+  return new Function(parts.join("\n"))();
+}
+const projectFinance = loadProjectFinanceHelpers();
+
+test("komuta merkezi: gelmeyen maliyet alanı için kutu çizilmez", () => {
+  // Yetkisiz kullanıcıda yanıt yalnız korumasız sözleşme bedelini taşır.
+  assert.deepEqual(projectFinance.projectFinanceCards({ contractValueMinor: 2_500_000 }), []);
+  assert.deepEqual(projectFinance.projectFinanceCards({}), []);
+  assert.deepEqual(projectFinance.projectFinanceCards(undefined), []);
+
+  // Sunucu yarın başka bir tutarı da kapatırsa liste kendiliğinden kısalmalı:
+  // her alan kendi varlığına bakılarak üretiliyor, tek bir yetki bayrağına değil.
+  for (const [key] of projectFinance.projectFinanceCardFields) {
+    const withoutOne = Object.fromEntries(projectFinance.projectFinanceCardFields.filter(([other]) => other !== key).map(([other]) => [other, 1_000_00]));
+    assert.ok(projectFinance.projectFinanceCards(withoutOne).every((card) => card.key !== key), `${key} yokken kutusu çizilmemeli`);
+  }
+});
+
+test("komuta merkezi: alanlar varken kutu çizilir ve Türkçe biçimlenir", () => {
+  const cards = projectFinance.projectFinanceCards({ estimatedProfitMinor: 123_456_789, marginPercent: 12.5 });
+  assert.equal(cards.length, projectFinance.projectFinanceCardFields.length);
+  const [card] = cards;
+  assert.equal(card.key, "estimatedProfitMinor");
+  assert.equal(card.label, "TAHMİNİ KÂR");
+  assert.equal(card.value, "1.234.567,89 TL");
+  assert.equal(card.note, "%12,5 tahmini marj");
+
+  // Gerçekten sıfır olan kâr gizlenen alanla karıştırılmamalı: bu kutu çizilir.
+  assert.deepEqual(projectFinance.projectFinanceCards({ estimatedProfitMinor: 0, marginPercent: 0 }), [
+    { key: "estimatedProfitMinor", label: "TAHMİNİ KÂR", value: "0 TL", note: "%0 tahmini marj" },
+  ]);
+
+  // Yüzde `null` ise sunucu hesaplayabildi ama sözleşme bedeli yok; bu bir
+  // yetki durumu değil, söylenmesi gereken bir eksiklik.
+  assert.equal(projectFinance.projectFinanceCards({ estimatedProfitMinor: 500_00, marginPercent: null })[0].note, "Sözleşme bedeli bekleniyor");
+  // Yüzde hiç gelmediyse alt satır da yok; "%0" yazılmıyor.
+  assert.equal(projectFinance.projectFinanceCards({ estimatedProfitMinor: 500_00 })[0].note, null);
+});
+
+test("komuta merkezi: kalan kutular boşluk bırakmadan yerleşir", () => {
+  // Ekran artık alanları tek tek okumuyor; hepsi üretilen listeden geliyor.
+  assert.match(commandCenterModal, /const financeCards = projectFinanceCards\(data\?\.finance\);/);
+  assert.doesNotMatch(commandCenterModal, /data\.finance\.|finance\.marginPercent|estimatedProfitMinor \|\| 0/, "alanlar doğrudan okunmamalı");
+  assert.doesNotMatch(commandCenterModal, /TAHMİNİ KÂR/, "başlık da listeden gelmeli");
+
+  // Kutu sayısı sütun sayısını belirliyor: kaldırılan kutu arkasında boş göz bırakmaz.
+  assert.match(commandCenterModal, /<section className="live-project-summary" style=\{\{ "--live-summary-columns": 2 \+ financeCards\.length \}\}>/);
+  assert.match(commandCenterModal, /\{financeCards\.map\(\(card\) => <article key=\{card\.key\}><small>\{card\.label\}<\/small><strong>\{card\.value\}<\/strong>\{card\.note && <p>\{card\.note\}<\/p>\}/);
+  assert.match(liveStyles, /\.live-project-summary\{display:grid;grid-template-columns:1\.25fr repeat\(var\(--live-summary-columns,3\),1fr\)/);
+
+  // Dar ekranda yerleşim iki sütuna düşmeye devam etmeli; değişken oradaki
+  // kuralı ezmiyor.
+  assert.match(liveStyles, /@media\(max-width:720px\)[\s\S]*\.live-project-summary\{grid-template-columns:1fr 1fr\}/);
+});

@@ -77,6 +77,18 @@ const resources = {
   "production-issues": { table: "production_issues", required: ["production_order_id", "issue_type", "description"], search: ["issue_number", "description", "root_cause", "resolution"], filters: ["production_order_id", "production_operation_id", "project_id", "work_item_id", "issue_type", "severity", "status"], refs: { production_order_id: "production_orders", production_operation_id: "production_operations", project_id: "projects", work_item_id: "work_items" }, memberRefs: ["responsible_user_id"], serverDefaults: (principal, timestamp) => ({ reported_at: timestamp, reported_by: principal.user.id }), fields: ["production_order_id","production_operation_id","project_id","work_item_id","issue_number","issue_type","severity","description","responsible_user_id","rework_quantity","scrap_quantity","cost_impact_minor","delay_days","root_cause","status","metadata_json"] },
   "chat-channels": { table: "chat_channels", required: ["name"], search: ["name", "topic"], filters: ["kind", "project_id", "status"], refs: { project_id: "projects" }, serverDefaults: (principal) => ({ created_by: principal.user.id }), fields: ["name","kind","project_id","topic","status","metadata_json"] },
   "chat-messages": { table: "chat_messages", required: ["channel_id", "body"], search: ["body", "link_label"], filters: ["channel_id", "author_user_id", "link_module", "link_record_id", "status"], refs: { channel_id: "chat_channels" }, memberRefs: ["author_user_id"], serverDefaults: (principal) => ({ author_user_id: principal.user.id }), fields: ["channel_id","body","link_module","link_record_id","link_label","status","metadata_json"] },
+  // Kârlılık tek tabloda durmuyor: sözleşme bedeli projede, gider finansta,
+  // malzeme stokta, fire üretimde. Motora genel bir JOIN yeteneği eklemek
+  // yerine birleştirme veritabanındaki `project_profitability` görünümünde bir
+  // kez yapıldı (göç 0017) ve motora sıradan bir kaynak olarak bağlandı;
+  // böylece süzme, gruplama, CSV ve kişisel görünüm kendiliğinden çalışıyor.
+  // `readOnly`: görünüme yazılamaz ve yazılmamalı da — sayılar kaynak
+  // kayıtlardan türer, buradan düzeltilen bir rakam kaynağıyla çelişirdi.
+  // Maliyet, marj ve tahsilat sütunları `sensitiveFieldGuards` üzerinden
+  // `cost.view` ile korunuyor: kaynağın yetki kapısı `projects.read` olduğu
+  // için korumasız bırakılan tek tutar, proje ekranında zaten görünen sözleşme
+  // bedelidir — yani bu kaynak hiçbir yetkiyi genişletmiyor.
+  "project-profitability": { table: "project_profitability", readOnly: true, search: ["code", "name"], filters: ["project_id", "customer_id", "manager_user_id", "status"], refs: { customer_id: "customers" }, fields: ["project_id","code","name","customer_id","manager_user_id","status","progress_percent","contract_amount_minor","estimated_cost_minor","expense_minor","collected_minor","material_cost_minor","issue_cost_minor","actual_cost_minor","margin_minor","margin_percent"] },
   // Rapor tanımı, sahibine özel olabildiği için satır kapsamı kancasıyla
   // süzülür: paylaşılmayan bir rapor, listeleyende de dışa aktarımda da
   // yalnız sahibine görünür.
@@ -96,7 +108,12 @@ const aliases = {
 };
 
 const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","membership_roles","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements","supplier_quotations","work_centers","bom_lines","production_operations","production_issues","chat_channels","chat_messages","chat_reads","saved_reports","report_views"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql", "0015_reports.sql", "0016_report_views.sql"];
+// `project_profitability` bu listede yok ve olmamalı: o bir tablo değil,
+// projects/financial_transactions/stock_movements/production_issues üzerinden
+// hesaplanan bir görünüm. Kaynakları zaten yukarıda yedekleniyor, türetilmiş
+// satırları yedeğe yazmak aynı veriyi ikinci kez saklamak olurdu ve geri
+// yükleme sırasında görünüme INSERT edilemeyeceği için yedek hataya düşerdi.
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql", "0015_reports.sql", "0016_report_views.sql", "0017_project_profitability.sql"];
 const BACKUP_SCHEMA_VERSION = backupMigrations.length;
 const dailyBackupSeen = new Map();
 const DAILY_BACKUP_SEEN_LIMIT = 500;
@@ -253,6 +270,10 @@ const statusEnums = {
   "project-communications": ["open","follow_up","closed"],
   "resource-assignments": ["planned","confirmed","active","completed","cancelled"],
 };
+// Kârlılık görünümü projenin durumunu olduğu gibi taşır. Kümeyi kopyalamak
+// yerine aynı diziye bağlanıyor ki proje aşamaları değiştiğinde rapor
+// kurucusunun sunduğu liste sessizce eskimesin.
+statusEnums["project-profitability"] = statusEnums.projects;
 const enumFields = {
   "work-items": { revision_status: ["draft","review","changes_requested","approved","superseded"], production_type: ["internal","external"] },
   "production-orders": { production_type: ["internal","external"], trade_type: ["internal","cila","metal","glass_mirror","door","upholstery","stone","other"] },
@@ -548,11 +569,23 @@ async function attachReferenceNames(env, principal, config, rows, serialized) {
 function serializeRow(row, slug, principal) {
   const result = decodeRow(row);
   if (!result) return result;
+  // Silinecek alanların tek kaynağı sensitiveFieldGuards; burada ikinci bir
+  // kopya tutulmaz, döngünün kendisi stripSensitiveFields içinde durur.
+  return stripSensitiveFields(result, principal);
+}
+
+// Silme döngüsü serializeRow'dan ayrıldı, çünkü kaynak satırı olmayan türetilmiş
+// yanıtların da aynı listeden geçmesi gerekiyor: proje komuta merkezi hesaplanmış
+// bir özet döndürdüğü için bu kapıdan hiç geçmiyordu ve maliyeti göremeyen
+// kullanıcı aynı rakamı oradan okuyabiliyordu. Alan `null`'a çekilmez, nesneden
+// tamamen çıkarılır — arayüz yokluğu görüp kutuyu hiç çizmesin, "0 TL maliyet"
+// diye okunabilecek bir boşluk kalmasın.
+function stripSensitiveFields(record, principal) {
   for (const [permission, fields] of sensitiveFieldGuards) {
     if (allowed(principal, permission)) continue;
-    for (const field of fields) delete result[field];
+    for (const field of fields) delete record[field];
   }
-  return result;
+  return record;
 }
 
 function clientIp(request) {
@@ -672,6 +705,14 @@ const permissionAliases = {
   "chat-messages": "chat",
   "saved-reports": "reports",
   "report-views": { read: "reports.read", write: "reports.read", delete: "reports.read" },
+  // Kârlılık görünümü projenin kendi verisinin türevidir: projeyi görebilen
+  // kârlılığını da görebilmeli, göremeyen hiçbirini. Ayrı bir kod açmak, her
+  // firmada yönetici o kodu elle dağıtana kadar raporun görünmemesi demek
+  // olurdu — üstelik "projeler" ile "proje kârlılığı" diye iki ayrı satırın
+  // farkı rol ekranında kimseye bir şey anlatmazdı. Maliyet ve marj sütunları
+  // zaten ayrıca `cost.view` ile korunuyor, yani projeyi görmek maliyeti
+  // görmeye yetmiyor.
+  "project-profitability": "projects",
 };
 
 function permissionFor(slug, action) {
@@ -685,7 +726,22 @@ function permissionFor(slug, action) {
 // yazma denetimi ve rapor motoru en geniş listeyi kullanır, çünkü bir sütunu
 // göremeyen kullanıcı ona göre süzerek de sıralayarak da değerini öğrenebilir.
 const sensitiveFieldGuards = [
-  ["cost.view", ["estimated_cost","cost_price","unit_cost","estimated_cost_minor","cost_price_minor","unit_cost_minor","estimated_amount_minor","average_cost_minor"]],
+  // Kârlılık görünümünün (göç 0017) sütunları da buraya bağlı. Marj ayrı bir
+  // "kâr" alanı değil, maliyetin başka bir yazılışıdır: sözleşme bedeli
+  // korumasız olduğu için marjı gören kişi maliyeti çıkarma işlemiyle bulur.
+  // Aynı şey marj yüzdesi için de geçerli.
+  //
+  // Tahsilat (`collected_minor`, komuta merkezindeki karşılığı `income_minor`)
+  // aslında maliyet değildir, ama `project-profitability` kaynağının yetki
+  // kapısı `projects.read`'e bağlandığı için tek koruma noktası burası: aksi
+  // hâlde finans yetkisi olmayan bir üretim sorumlusu projenin tahsilatını
+  // görmeye başlardı. Korumasız kalan tek tutar sözleşme bedelidir ve o zaten
+  // proje ekranında duruyor, yani bu kaynak hiçbir yetkiyi genişletmiyor.
+  //
+  // Satın alma taahhüdü ve bitiş tahmini de maliyetin parçasıdır: taahhüt,
+  // henüz faturalanmamış maliyettir ve ikisinden biri görünürse gerçekleşen
+  // maliyet çıkarma işlemiyle bulunur.
+  ["cost.view", ["estimated_cost","cost_price","unit_cost","estimated_cost_minor","cost_price_minor","unit_cost_minor","estimated_amount_minor","average_cost_minor","expense_minor","material_cost_minor","issue_cost_minor","actual_cost_minor","margin_minor","margin_percent","collected_minor","income_minor","committed_purchase_minor","invoiced_purchase_minor","forecast_cost_minor"]],
   ["salary.view", ["salary_amount","base_salary","overtime_amount","bonus_amount","allowance_amount","deduction_amount","advance_amount","net_preview","salary_amount_minor","base_salary_minor","overtime_amount_minor","bonus_amount_minor","allowance_amount_minor","deduction_amount_minor","advance_amount_minor","net_preview_minor"]],
   ["hr.sensitive.read", ["national_id_masked","birth_date","emergency_contact","address"]],
   ["finance.sensitive.read", ["iban","official","opening_balance_minor","current_balance_minor"]],
@@ -1102,18 +1158,32 @@ async function projectCommandCenterData(env, principal, project) {
   const forecastCost = actualCost + openCommitment;
   const nextActions = [...blockers, ...warnings].map((item) => ({ title: item.message, module: item.module, priority: item.severity === "blocker" ? "high" : "normal" }));
   if (!nextActions.length && nextStatus) nextActions.push({ title: `${projectStageDefinitions.find(([status]) => status === nextStatus)?.[1] || nextStatus} aşamasına geçmeye hazır`, module: "projects", priority: "normal" });
+  // Finans kutusunun alanları camelCase, hassas alan listesi ise sütun adlarıyla
+  // yazılı. İkinci bir "şunlar gizli" listesi açmak yerine her alan karşılık
+  // geldiği sütun adına bağlanıyor: koruma tek yerden, `sensitiveFieldGuards`'tan
+  // soruluyor ve oraya yarın bir ad eklendiğinde burası kendiliğinden uyuyor.
+  // Sözleşme bedeli korumasızdır, proje ekranında zaten görünüyor.
+  const financeColumns = {
+    contractValueMinor: ["contract_amount_minor", contractValue],
+    actualCostMinor: ["actual_cost_minor", actualCost],
+    openCommitmentMinor: ["committed_purchase_minor", openCommitment],
+    forecastCostMinor: ["forecast_cost_minor", forecastCost],
+    estimatedProfitMinor: ["margin_minor", contractValue - forecastCost],
+    realisedProfitMinor: ["margin_minor", contractValue - actualCost],
+    marginPercent: ["margin_percent", contractValue ? Math.round(((contractValue - forecastCost) / contractValue) * 1000) / 10 : null],
+  };
+  const finance = {};
+  for (const [key, [column, value]] of Object.entries(financeColumns)) {
+    const permission = sensitiveFieldPermission(column);
+    if (!permission || allowed(principal, permission)) finance[key] = value;
+  }
   return {
     project: serializeRow(project, "projects", principal), stages, nextStatus, readiness, blockers, warnings, nextActions, recentMedia,
-    facts: normalizedFacts,
-    finance: {
-      contractValueMinor: contractValue,
-      actualCostMinor: actualCost,
-      openCommitmentMinor: openCommitment,
-      forecastCostMinor: forecastCost,
-      estimatedProfitMinor: contractValue - forecastCost,
-      realisedProfitMinor: contractValue - actualCost,
-      marginPercent: contractValue ? Math.round(((contractValue - forecastCost) / contractValue) * 1000) / 10 : null,
-    },
+    // Aşama kapıları yalnız sayıları kullanıyor (transitionConditions), tutarları
+    // değil; bu yüzden süzme hesaplamadan sonra, yanıtın sınırında yapılıyor ve
+    // maliyeti göremeyen kullanıcı için geçiş kuralları değişmiyor.
+    facts: stripSensitiveFields(normalizedFacts, principal),
+    finance,
   };
 }
 

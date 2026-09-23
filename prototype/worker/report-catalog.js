@@ -110,6 +110,56 @@ export const builtinReports = [
     },
   },
   {
+    id: "project-profitability",
+    category: "Proje",
+    name: "Gerçekleşen proje kârlılığı",
+    description:
+      "Projelerin sözleşme tutarını; kesinleşmiş giderler, projeye çıkan malzeme ve üretim sorunu maliyetleriyle karşılaştırıp gerçek kâr marjını gösterir, tahmini ve taslak kayıtları saymaz.",
+    definition: {
+      resource: "project-profitability",
+      columns: [
+        "code",
+        "name",
+        "customer_id",
+        "status",
+        "progress_percent",
+        "contract_amount_minor",
+        "actual_cost_minor",
+        "margin_minor",
+        "margin_percent",
+        "collected_minor",
+      ],
+      // "lost" ve "cancelled" (statusEnums.projects'teki gerçek kodlar)
+      // bilinçli olarak dışarıda: kapanmış/gerçekleşmemiş bir işin marjı
+      // bakılacak bir şey değildir, listeyi kalabalıklaştırır. Burada niyet
+      // "şu durumlar" değil "kayıp ve iptal hariç hepsi" olduğu için pozitif
+      // bir liste yerine iki "ne" süzgeci kullanıldı (motor süzgeçleri VE ile
+      // birleştiriyor): projelere yarın yeni bir aşama eklenirse rapor onu
+      // elle güncellemeye gerek kalmadan kendiliğinden kapsar. Pozitif liste
+      // olsaydı yeni durum sessizce dışarıda kalırdı — fark edilmesi zor,
+      // bu projede en çok kaçınılan hata türü. (overdue-receivables'daki
+      // pozitif liste burada model alınmadı: orada niyet gerçekten "şu
+      // durumlar alacaktır", bir dışlama değil.)
+      // Sözleşme bedeli 0 olan proje (henüz teklif aşamasında, bedel hiç
+      // girilmemiş) görünümde margin_percent'i zaten NULL döner çünkü
+      // kârlılık orada tanımsızdır. Böyle bir satırın margin_minor'ı da 0
+      // olduğu için "marja göre artan" sıralamada listenin en tepesine
+      // düşer ve asıl bakılması gereken — gerçekten zarar eden — projeleri
+      // aşağı iter. contract_amount_minor > 0 koşuluyla bu satırlar rapora
+      // hiç girmez.
+      filters: [
+        { field: "status", op: "ne", value: "lost" },
+        { field: "status", op: "ne", value: "cancelled" },
+        { field: "contract_amount_minor", op: "gt", value: 0 },
+      ],
+      // Marja göre artan: zarar eden (ya da en düşük marjlı) proje en üstte
+      // görünsün, yöneticinin asıl bakması gereken satır odur.
+      sort: [{ field: "margin_minor", direction: "asc" }],
+      // limit bilinçli olarak yok: dışa aktarımda motorun tavanı (5000)
+      // geçerli olsun, ekran önizlemesi zaten 20'ye sabit.
+    },
+  },
+  {
     id: "pending-follow-ups",
     category: "Proje",
     name: "Takip bekleyen görüşmeler",
