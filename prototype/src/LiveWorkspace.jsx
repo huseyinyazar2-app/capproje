@@ -246,7 +246,12 @@ const configs = {
   },
   finance: {
     description: "Proje gelir, gider, hakediş ve tahmini kârlılık hareketleri",
-    query: { official: false }, officialScope: true,
+    // Varsayılan "Tümü": tahsil edilecek gelirlerin tamamı resmi kayıt olduğu
+    // için gayri resmi varsayılan, alacakları ve üzerlerindeki tahsilat
+    // düğmesini ekrandan tamamen gizliyordu — kullanıcı önce süzgeci
+    // değiştirmeden parayı kapatamıyordu. Süzgeç yerinde duruyor, yalnız
+    // açılıştaki seçim değişti.
+    officialScope: true,
     columns: [["projectName", "Proje"], ["type", "Hareket"], ["category", "Kategori"], ["amount", "Tutar", "money"], ["dueDate", "Vade", "date"], ["status", "Durum", "status"]],
     fields: [
       field("transactionNo", "Hareket numarası", "text", { required: true }), field("projectId", "Proje ID", "text"),
@@ -924,6 +929,7 @@ const auditActionLabels = {
   transition: "Aşama değiştirdi", approve: "Onayladı", reject: "Reddetti",
   release: "Üretime saldı", complete: "Tamamladı", receive: "Mal kabulü yaptı",
   order: "Sipariş oluşturdu", post: "Stok hareketini kesinleştirdi", reverse: "Ters kayıt oluşturdu",
+  collect: "Tahsilatı kaydetti", pay: "Ödemeyi kaydetti",
   select: "Tedarikçi teklifini seçti", publish: "Yayınladı", resolve: "Çözüme kapattı",
   convert: "Projeye dönüştürdü", sign: "İmzaladı", accept: "Kabul etti",
   "password.change": "Şifresini değiştirdi", "password.reset": "Şifre sıfırladı",
@@ -1037,8 +1043,39 @@ function coreWorkflowActions(module, row, session) {
   }
   if (module.id === "leaves" && status === "pending" && hasCapability(session, "leaves.approve")) return [{ key: "approve", label: "Onayla", title: "İzin talebini onayla", message: "Personelin izin talebi onaylanacak.", tone: "success" }, { key: "reject", label: "Reddet", title: "İzin talebini reddet", message: "Ret nedeni personele ait karar kaydında tutulacak.", reasonRequired: true, tone: "danger" }];
   if (module.id === "finance") {
+    // Ters kayıt bir düzeltme fişidir, kasadan geçmez: ne tahsil edilir, ne
+    // ödenir, ne de kendisi tekrar ters kaydedilir. Sunucu da üç ucun hepsinde
+    // aynı kaydı reddediyor, yani düğmeyi göstermek boş yere hata aldırırdı.
+    if (row.reversalOfId) return [];
     if (["draft", "planned", "pending"].includes(status) && hasCapability(session, "financial-transactions.approve")) return [{ key: "approve", label: "Onayla", title: "Finans hareketini onayla", message: "Onaylanan finans kaydı değiştirilemez; düzeltme ters kayıtla yapılır.", tone: "success" }];
-    if (status === "approved" && hasCapability(session, "financial-transactions.reverse")) return [{ key: "reverse", label: "Ters kayıt", title: "Finans hareketini ters kaydet", message: "Orijinal hareket korunacak ve eşit tutarlı ters kayıt oluşturulacak.", reasonRequired: true, tone: "danger" }];
+    const actions = [];
+    // Onaylı hareketin kapanışı: gelir tahsil edilir, gider ödenir. Bu iki adım
+    // olmadan kayıt para kasaya girdikten sonra da `approved` kalıyor, proje
+    // kârlılığı ise yalnız `collected`/`paid` hareketleri tahsilat sayıyordu —
+    // yani kullanıcı tahsil ettiği parayı hiçbir yerde kaydedemiyordu.
+    // `overdue` de kapanabilir ve asıl derdi o çözer: vadesi geçmiş alacak
+    // listesinden bir kalemin düşmesinin tek yolu budur.
+    // Tür ayrımı sunucununkiyle aynı: tahsilat yalnız `income`, ödeme yalnız
+    // `expense` hareketinde. Hakediş ve avans sunucuda karşı taraftan okunuyor
+    // ama bu ekranda müşteri/tedarikçi alanı hiç yok; hakediş zaten kendi
+    // zincirinden (hakediş → fatura → ödeme) kapanıyor ve o zincir bağladığı
+    // finans hareketini `approved` durumunda bekliyor — buradan kapatmak onu
+    // kilitlerdi. Maliyet tahmini ise gerçekleşmiş bir hareket değil.
+    if (["approved", "overdue"].includes(status)) {
+      if (row.type === "income" && hasCapability(session, "financial-transactions.collect")) {
+        actions.push({ key: "collect", label: "Tahsil edildi", title: "Tahsilatı kaydet", message: "Gelir hareketi tahsil edildi olarak kapanacak ve proje kârlılığındaki tahsilata eklenecek.", tone: "success" });
+      }
+      if (row.type === "expense" && hasCapability(session, "financial-transactions.pay")) {
+        actions.push({ key: "pay", label: "Ödendi", title: "Ödemeyi kaydet", message: "Gider hareketi ödendi olarak kapanacak.", tone: "success" });
+      }
+    }
+    // Yanlış girilmiş bir tahsilat da düzeltilebilmeli: kesinleşmiş kayıt
+    // düzenlenemediği ve silinemediği için ters kayıt tek çıkış yolu. Vadesi
+    // geçmiş kayıt henüz kesinleşmediğinden sunucu onu ters kayda almıyor.
+    if (["approved", "collected", "paid"].includes(status) && hasCapability(session, "financial-transactions.reverse")) {
+      actions.push({ key: "reverse", label: "Ters kayıt", title: "Finans hareketini ters kaydet", message: "Orijinal hareket korunacak ve eşit tutarlı ters kayıt oluşturulacak.", reasonRequired: true, tone: "danger" });
+    }
+    return actions;
   }
   return [];
 }
@@ -3231,7 +3268,10 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
   function mayDelete(row) {
     if (!canDelete || row._offlineQueued) return false;
     if (module.id === "roles" && row.isSystem) return false;
-    if (module.id === "finance" && ["approved", "reversed"].includes(statusCodeFor(module.id, row.status))) return false;
+    // Tahsil edilmiş ya da ödenmiş hareket de en az onaylı hareket kadar
+    // kesinleşmiştir; bu iki durum yeni ulaşılabilir olduğu için silme
+    // düğmesinin oradan geri gelmemesi gerekiyor.
+    if (module.id === "finance" && ["approved", "collected", "paid", "reversed"].includes(statusCodeFor(module.id, row.status))) return false;
     return true;
   }
 

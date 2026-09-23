@@ -71,8 +71,15 @@ async function olustur(kaynak, govde) {
   const mevcut = await bul(kaynak, anahtar);
   if (mevcut) return mevcut;
   // Numarası olmayan alt kayıtlar (metraj satırı, reçete satırı) aranamıyor;
-  // 409 bunların ikinci kez yazılmaya çalışıldığını gösterir.
-  if (yanit.status === 409) { atlanan += 1; return null; }
+  // ikinci kez yazılmaya çalışıldıklarında benzersizlik çakışması dönüyor ve
+  // bu beklenen bir durum. Ama 409'un tamamını "zaten vardı" saymak hatayı
+  // gizliyordu: `workflow_endpoint_required` de 409 dönüyor ve bu yüzden
+  // yazılamayan 12 kayıt "atlandı" diye sayılıp betik "Tüm kayıtlar yazıldı"
+  // dedi. Yalnız çakışma kodları atlanır, kalan her 409 hata olarak raporlanır.
+  const cakisma = new Set(["constraint_error", "identity_conflict", "membership_exists", "record_in_use"]);
+  let kod = "";
+  try { kod = JSON.parse(yanit.metin)?.error?.code || ""; } catch { /* gövde JSON değilse kod da yok */ }
+  if (yanit.status === 409 && cakisma.has(kod)) { atlanan += 1; return null; }
   hatalar.push(`${kaynak} · ${anahtar || "?"} · ${yanit.status} ${yanit.metin.slice(0, 160)}`);
   return null;
 }
@@ -477,13 +484,40 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
         amount_minor: lira(Math.round(proje.bedel * tahsilat.oran)), currency: "TRY", official: 1, payment_method: "havale",
         reference: `SZL-${proje.code.slice(3)}`, description: tahsilat.description, status: "pending",
       });
-      // Bir finans kaydının API üzerinden ulaşabildiği son durum "approved":
-      // `collected` ve `paid` durumları şemada var ama onlara götüren bir iş
-      // akışı ucu yok (worker/index.js → financialAction yalnız approve ve
-      // reverse tanıyor, PATCH ile durum değiştirmek de kapalı).
-      if (kayit) await akis("financial-transactions", kayit.id, "approve", {});
+      // Tahsilat planındaki kalemlerin açıklaması "tahsil edildi" diyor; veri
+      // de öyle olmalı. Önce onaylanır, sonra gerçekten tahsil edilir —
+      // `collected` durumu alacak toplamından düşer ve kârlılık raporunun
+      // "Tahsil edilen" sütununu doldurur.
+      if (kayit) {
+        await akis("financial-transactions", kayit.id, "approve", {});
+        await akis("financial-transactions", kayit.id, "collect", {});
+      }
       tahsilatKayit.push(kayit);
     }
+
+    // Tahsil edilmemiş bakiye. Yukarıdaki plan sözleşme bedelinin tamamını
+    // tahsil etmiyor; kalanı açık alacak olarak yazmazsak ana sayfadaki
+    // "Alacaklar" kartı ve "Vadesi geçmiş alacaklar" raporu boş kalır, üstelik
+    // veri de yalan söyler: para tahsil edilmediği hâlde ortada alacak
+    // görünmez. Teslim edilmiş ama bakiyesi gelmemiş projelerde vade bilerek
+    // geçmişe alındı ki tahsilat düğmesinin üzerinde duracağı bir kayıt olsun.
+    //
+    // Kayıt `pending` doğup onaylanır: bir finans hareketi `approved` durumuyla
+    // doğamaz, onu yalnız iş akışı ucu verir. Vadesi geçmiş alacak, ayrı bir
+    // durum değil onaylı ama vadesi dolmuş kayıttır — panodaki alt toplam da
+    // `due_date`e bakarak hesaplanıyor.
+    const bakiyeOran = d >= 10 ? 0.05 : d >= 7 ? 0.3 : 0.6;
+    const bakiyeGecikti = d >= 8 && d < 10;
+    const bakiye = await olustur("financial-transactions", {
+      transaction_number: `FN-${proje.code.slice(3)}-BK`, project_id: projeId, account_id: hesapKayit[1]?.id,
+      customer_id: musteri?.id, type: "income", category: d >= 10 ? "Teminat bakiyesi" : "Sözleşme bakiyesi",
+      transaction_date: gecmis(bakiyeGecikti ? -38 : proje.baslangic + 70, 2),
+      due_date: gun(bakiyeGecikti ? -8 : proje.bitis + 30),
+      amount_minor: lira(Math.round(proje.bedel * bakiyeOran)), currency: "TRY", official: 1, payment_method: "havale",
+      reference: `SZL-${proje.code.slice(3)}`, status: "pending",
+      description: bakiyeGecikti ? "Kapanış bakiyesi; vadesi geçti, tahsilat bekleniyor." : "Sözleşme bakiyesi; vadesinde tahsil edilecek.",
+    });
+    if (bakiye) await akis("financial-transactions", bakiye.id, "approve", {});
 
     // Tahmini maliyet (proje içi / gayri resmi). Gerçekleşenle karışmaz;
     // kârlılık raporu bunu bilerek saymaz. Toplamı projenin tahmini maliyetine
@@ -539,7 +573,12 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
         amount_minor: tutar, currency: "TRY", official: kalem.resmi, payment_method: sec(["havale", "nakit", "kredi kartı"], indeks),
         reference: proje.code, description: kalem.description, status: "pending",
       });
-      if (kayit) await akis("financial-transactions", kayit.id, "approve", {});
+      // Teslim edilmiş projelerin tedarikçi faturaları kapanmış olur; borç
+      // kartında yalnız devam eden projelerin gideri kalsın.
+      if (kayit) {
+        await akis("financial-transactions", kayit.id, "approve", {});
+        if (d >= 9) await akis("financial-transactions", kayit.id, "pay", {});
+      }
     }
 
     // Onay bekleyen gider. Gerçek hayatta tedarikçi faturasının bir kısmı her

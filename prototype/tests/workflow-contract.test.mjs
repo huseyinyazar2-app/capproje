@@ -335,6 +335,212 @@ test("purchase, leave and finance approvals enforce immutable accounting", async
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM financial_transactions WHERE reversal_of_id='finance-a'").get().count, 1);
 });
 
+// Tahsilat ve ödeme. `financial_transactions` durum kümesinde `collected` ve
+// `paid` baştan beri vardı ama oraya ulaşan hiçbir yol yoktu: POST da PATCH de
+// iş akışı kapısına takılıyor, yönlendirici yalnız `approve` ve `reverse`
+// tanıyordu. Bu testler yolu ve yolun sınırlarını sabitliyor.
+function seedFinanceRole(database) {
+  database.prepare("INSERT INTO users (id,email,full_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("finance-a", "finance@a.test", "Finansçı", "active", timestamp, timestamp);
+  database.prepare("INSERT INTO roles (id,tenant_id,code,name,is_system,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("role-finance", "tenant-a", "finance", "Finans / Ön Muhasebe", 1, timestamp, timestamp);
+  // Yetkiler elle sayılmıyor: rol, bootstrap'in kurduğu gibi şablondan
+  // dolduruluyor. Göç yeni kodları şablona yazmamışsa bu testler kırılır ve
+  // uç, gerçek bir finans kullanıcısında görünmez kalır.
+  database.prepare("INSERT INTO role_permissions (tenant_id,role_id,permission_code) SELECT 'tenant-a','role-finance',j.value FROM role_templates rt JOIN json_each(rt.permissions_json) j WHERE rt.code='finance'").run();
+  database.prepare("INSERT INTO memberships (id,tenant_id,user_id,role_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("member-finance", "tenant-a", "finance-a", "role-finance", "active", timestamp, timestamp);
+}
+
+function financeInserter(database, tenantId = "tenant-a") {
+  const statement = database.prepare("INSERT INTO financial_transactions (id,tenant_id,transaction_number,project_id,customer_id,type,transaction_date,amount_minor,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+  return (id, number, type, status, amount = 10_000, projectId = "project-a") => statement.run(id, tenantId, number, projectId, tenantId === "tenant-a" ? "customer-a" : null, type, "2026-08-01", amount, status, timestamp, timestamp);
+}
+
+test("collect and pay close settled finance records and feed the collection reports", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,contract_amount_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-1", "Otel lobisi", "production", 1_000_000, timestamp, timestamp);
+  seedFinanceRole(database);
+  const insertFinance = financeInserter(database);
+  insertFinance("inc-1", "F-1", "income", "approved", 400_000);
+  insertFinance("inc-2", "F-2", "income", "overdue", 60_000);
+  insertFinance("exp-1", "F-3", "expense", "approved", 120_000);
+
+  const catalog = database.prepare("SELECT code FROM permissions").all().map((row) => row.code);
+  for (const code of ["financial-transactions.collect", "financial-transactions.pay"]) assert.ok(catalog.includes(code), `${code} permission katalogunda olmalı`);
+
+  // Onaylı ama henüz tahsil edilmemiş gelir tahsilat değil alacaktır; komuta
+  // merkezi onu tahsilat sayarsa aynı lira hem beklenen hem girmiş görünür.
+  const commandCenter = async () => (await (await worker.fetch(request("/api/v1/projects/project-a/command-center", { method: "GET" }), env)).json()).data;
+  assert.equal((await commandCenter()).facts.income_minor, 0);
+
+  let response = await worker.fetch(request("/api/v1/financial-transactions/inc-1/collect", { email: "finance@a.test", body: { payment_method: "havale", reference: "DEK-77", settled_on: "2026-08-05" } }), env);
+  assert.equal(response.status, 200);
+  let data = (await response.json()).data;
+  assert.equal(data.status, "collected");
+  assert.equal(data.payment_method, "havale");
+  assert.equal(data.reference, "DEK-77");
+  // Tahsilat tarihinin kendi sütunu yok; tahakkuk tarihi (`transaction_date`)
+  // üzerine yazılmıyor, tarih kayıt defterine ek bilgi olarak giriyor.
+  assert.equal(data.transaction_date, "2026-08-01");
+  assert.equal(data.metadata_json.collected_on, "2026-08-05");
+  assert.equal(data.metadata_json.collected_by, "finance-a");
+
+  const auditRow = database.prepare("SELECT action,entity_type,entity_id,user_id,changes_json FROM audit_logs WHERE action='collect'").get();
+  assert.equal(auditRow.entity_type, "financial-transactions");
+  assert.equal(auditRow.entity_id, "inc-1");
+  assert.equal(auditRow.user_id, "finance-a");
+  assert.deepEqual(JSON.parse(auditRow.changes_json), { from: "approved", to: "collected", settled_on: "2026-08-05", payment_method: "havale", reference: "DEK-77" });
+
+  response = await worker.fetch(request("/api/v1/financial-transactions/exp-1/pay", { email: "finance@a.test" }), env);
+  assert.equal(response.status, 200);
+  data = (await response.json()).data;
+  assert.equal(data.status, "paid");
+  assert.match(data.metadata_json.paid_on, /^\d{4}-\d{2}-\d{2}$/);
+
+  // Vadesi geçmiş alacağın kapanabildiği tek yol bu uç; `overdue` dışarıda
+  // kalsaydı rapor hiç kapanmayan bir alacak göstermeye devam ederdi.
+  assert.equal((await worker.fetch(request("/api/v1/financial-transactions/inc-2/collect", { email: "finance@a.test" }), env)).status, 200);
+
+  // Aynı kayıt iki kez tahsil edilemez: ikinci istek ne kaydı ne denetim izini
+  // değiştirir, ilk tahsilatın ödeme yöntemi de ezilmez.
+  response = await worker.fetch(request("/api/v1/financial-transactions/inc-1/collect", { email: "finance@a.test", body: { payment_method: "nakit" } }), env);
+  assert.equal(response.status, 200);
+  const replay = await response.json();
+  assert.equal(replay.meta.replayed, true);
+  assert.equal(replay.data.payment_method, "havale");
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action='collect' AND entity_id='inc-1'").get().count, 1);
+
+  // Tahsil edilen kayıt kârlılık görünümüne gerçekten giriyor ve komuta merkezi
+  // artık görünümle aynı şeyi söylüyor.
+  const view = database.prepare("SELECT collected_minor,expense_minor FROM project_profitability WHERE id='project-a'").get();
+  assert.equal(view.collected_minor, 460_000);
+  assert.equal(view.expense_minor, 120_000);
+  assert.equal((await commandCenter()).facts.income_minor, view.collected_minor);
+});
+
+test("collect and pay refuse the wrong direction, unsettled records and other tenants", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-1", "Otel lobisi", "production", timestamp, timestamp);
+  database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-b", "Firma B", "firma-b", timestamp, timestamp);
+  seedFinanceRole(database);
+  const insertFinance = financeInserter(database);
+  insertFinance("inc-approved", "F-1", "income", "approved", 50_000);
+  insertFinance("inc-draft", "F-2", "income", "draft", 50_000);
+  insertFinance("inc-cancelled", "F-3", "income", "cancelled", 50_000);
+  insertFinance("exp-approved", "F-4", "expense", "approved", 50_000);
+  insertFinance("forecast-1", "F-5", "cost_forecast", "approved", 50_000);
+  insertFinance("inc-reversed", "F-6", "income", "approved", 50_000);
+  financeInserter(database, "tenant-b")("inc-other", "F-7", "income", "approved", 50_000, null);
+
+  const call = async (id, action, options = {}) => worker.fetch(request(`/api/v1/financial-transactions/${id}/${action}`, { email: "finance@a.test", ...options }), env);
+  const refuses = async (id, action, status, expectedStatus = 409) => {
+    const response = await call(id, action);
+    assert.equal(response.status, expectedStatus, `${id}/${action} ${expectedStatus} dönmeli`);
+    if (status) assert.equal(database.prepare("SELECT status FROM financial_transactions WHERE id=?").get(id).status, status);
+  };
+
+  // Tür kuralı: gelir tahsil edilir, gider ödenir. Gideri "tahsil edildi"
+  // yapmak anlamsızdır ve tahsilat toplamını gideri kadar şişirirdi.
+  await refuses("exp-approved", "collect", "approved");
+  await refuses("inc-approved", "pay", "approved");
+  // Maliyet tahmini gerçekleşmiş bir hareket değildir; iki uç da kapalı.
+  await refuses("forecast-1", "collect", "approved");
+  await refuses("forecast-1", "pay", "approved");
+  // Kesinleşmemiş ve iptal edilmiş hareket kapanamaz: önce onaylanmalı.
+  await refuses("inc-draft", "collect", "draft");
+  await refuses("inc-cancelled", "collect", "cancelled");
+
+  // Ters kayıt olmuş asli hareket de, düzeltme fişinin kendisi de tahsil
+  // edilemez: ikisi de kasadan geçmedi.
+  const reversal = await (await call("inc-reversed", "reverse", { body: { reason: "Hatalı kayıt" } })).json();
+  await refuses("inc-reversed", "collect", "reversed");
+  await refuses(reversal.meta.reversed_transaction_id, "collect", "approved");
+
+  // Başka firmanın kaydı yok sayılır, yetkisiz kullanıcı kapıda durur.
+  await refuses("inc-other", "collect", "approved", 404);
+  database.prepare("INSERT INTO users (id,email,full_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("clerk-a", "clerk@a.test", "Kayıt Memuru", "active", timestamp, timestamp);
+  database.prepare("INSERT INTO roles (id,tenant_id,code,name,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("role-clerk", "tenant-a", "clerk", "Kayıt Memuru", timestamp, timestamp);
+  for (const permission of ["financial-transactions.read", "financial-transactions.write"]) database.prepare("INSERT INTO role_permissions (tenant_id,role_id,permission_code) VALUES (?,?,?)").run("tenant-a", "role-clerk", permission);
+  database.prepare("INSERT INTO memberships (id,tenant_id,user_id,role_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run("member-clerk", "tenant-a", "clerk-a", "role-clerk", "active", timestamp, timestamp);
+  let response = await worker.fetch(request("/api/v1/financial-transactions/inc-approved/collect", { email: "clerk@a.test" }), env);
+  assert.equal(response.status, 403);
+  assert.equal(database.prepare("SELECT status FROM financial_transactions WHERE id='inc-approved'").get().status, "approved");
+  // Reddedilen isteklerin hiçbiri denetim kaydı bırakmadı; yalnız ters kayıt yazdı.
+  assert.deepEqual(database.prepare("SELECT DISTINCT action FROM audit_logs ORDER BY action").all().map((row) => row.action), ["reverse"]);
+
+  // Tahsil edilmiş kayıt kesinleşmiştir: tutarı değiştirilemez, silinemez.
+  // Düzeltmenin tek yolu ters kayıttır ve o yol açık kalmalıdır.
+  assert.equal((await call("inc-approved", "collect")).status, 200);
+  assert.equal((await worker.fetch(request("/api/v1/financial-transactions/inc-approved", { method: "PATCH", body: { amount_minor: 1 } }), env)).status, 409);
+  assert.equal((await worker.fetch(request("/api/v1/financial-transactions/inc-approved", { method: "DELETE" }), env)).status, 409);
+  assert.equal(database.prepare("SELECT amount_minor FROM financial_transactions WHERE id='inc-approved'").get().amount_minor, 50_000);
+  response = await call("inc-approved", "reverse", { body: { reason: "Tahsilat yanlış kaydedildi" } });
+  assert.equal(response.status, 201);
+  assert.equal(database.prepare("SELECT status FROM financial_transactions WHERE id='inc-approved'").get().status, "reversed");
+});
+
+// Ters kayıt, düzeltmeyi iki kez saymamalı. Asli kayıt `reversed` olup
+// toplamdan düşerken düzeltme fişi eksi tutarıyla toplama giriyordu: 300.000
+// onaylı gider ters kaydedildiğinde maliyet sıfıra değil -300.000'e gidiyor,
+// proje 600.000 TL daha kârlı görünüyordu. Aynı hata tahsilat, alacak, borç ve
+// maliyet kırılımı toplamlarında da vardı; bu test hepsini birden tutuyor.
+test("reversing a finance record nets every total back to zero", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,contract_amount_minor,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").run("project-a", "tenant-a", "P-1", "Otel lobisi", "production", 1_000_000, timestamp, timestamp);
+  database.prepare("INSERT INTO work_items (id,tenant_id,project_id,space_name,description,quantity,unit_cost_minor,status,revision_no,revision_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run("work-a", "tenant-a", "project-a", "Lobi", "Resepsiyon bankosu", 1, 400_000, "planned", 1, "approved", timestamp, timestamp);
+  seedFinanceRole(database);
+  const insertFinance = financeInserter(database);
+  insertFinance("inc-1", "F-1", "income", "approved", 400_000);
+  insertFinance("inc-2", "F-2", "income", "approved", 250_000);
+  // Gider, satın alma siparişine bağlı: sipariş ters kayıttan sonra yeniden
+  // "faturalanmamış taahhüt" olmalı, fişin referansı onu kapatmaya devam
+  // etmemeli.
+  database.prepare("INSERT INTO suppliers (id,tenant_id,code,name,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("supplier-a", "tenant-a", "S-1", "Tedarikçi A", timestamp, timestamp);
+  database.prepare("INSERT INTO purchase_orders (id,tenant_id,order_number,project_id,supplier_id,grand_total_minor,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").run("po-1", "tenant-a", "SA-1", "project-a", "supplier-a", 300_000, "ordered", timestamp, timestamp);
+  database.prepare("INSERT INTO financial_transactions (id,tenant_id,transaction_number,project_id,work_item_id,supplier_id,reference,type,transaction_date,amount_minor,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").run("exp-1", "tenant-a", "F-3", "project-a", "work-a", "supplier-a", "SA-1", "expense", "2026-08-01", 300_000, "approved", timestamp, timestamp);
+  // İş kalemine bağlanmamış genel gider: kırılımda ayrı kovaya düşüyor.
+  insertFinance("exp-2", "F-4", "expense", "approved", 100_000);
+  assert.equal((await worker.fetch(request("/api/v1/financial-transactions/inc-1/collect", { email: "finance@a.test" }), env)).status, 200);
+
+  const readAll = async () => {
+    const dashboard = (await (await worker.fetch(request("/api/v1/dashboard", { method: "GET" }), env)).json()).data;
+    const center = (await (await worker.fetch(request("/api/v1/projects/project-a/command-center", { method: "GET" }), env)).json()).data;
+    const breakdown = (await (await worker.fetch(request("/api/v1/projects/project-a/cost-breakdown", { method: "GET" }), env)).json()).data;
+    return {
+      receivables: dashboard.receivables.amount_minor,
+      payables: dashboard.payables.amount_minor,
+      income: center.facts.income_minor,
+      expense: center.facts.expense_minor,
+      realisedProfit: center.finance.realisedProfitMinor,
+      invoicedPurchase: center.facts.invoiced_purchase_minor,
+      openCommitment: center.finance.openCommitmentMinor,
+      breakdownActual: breakdown.totals.actual_cost_minor,
+      view: { ...database.prepare("SELECT collected_minor,expense_minor,margin_minor FROM project_profitability WHERE id='project-a'").get() },
+    };
+  };
+
+  const before = await readAll();
+  assert.deepEqual(before, {
+    receivables: 250_000, payables: 400_000, income: 400_000, expense: 400_000,
+    realisedProfit: 600_000, breakdownActual: 400_000,
+    invoicedPurchase: 300_000, openCommitment: 0,
+    view: { collected_minor: 400_000, expense_minor: 400_000, margin_minor: 600_000 },
+  });
+
+  for (const transactionId of ["inc-1", "inc-2", "exp-1", "exp-2"]) {
+    const response = await worker.fetch(request(`/api/v1/financial-transactions/${transactionId}/reverse`, { email: "finance@a.test", body: { reason: "Yanlış kaydedildi" } }), env);
+    assert.equal(response.status, 201, `${transactionId} ters kaydedilebilmeli`);
+  }
+  // Fişler kayıt olarak duruyor: iz kaybolmadı, yalnız toplamlara girmiyorlar.
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM financial_transactions WHERE tenant_id='tenant-a' AND reversal_of_id IS NOT NULL").get().count, 4);
+
+  const after = await readAll();
+  assert.deepEqual(after, {
+    receivables: 0, payables: 0, income: 0, expense: 0,
+    realisedProfit: 1_000_000, breakdownActual: 0,
+    invoicedPurchase: 0, openCommitment: 300_000,
+    view: { collected_minor: 0, expense_minor: 0, margin_minor: 1_000_000 },
+  });
+});
+
 test("scheduled backups include the latest schema manifest and never mix tenants", async () => {
   const { database, env } = await setup();
   database.prepare("INSERT INTO tenants (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run("tenant-b", "Firma B", "firma-b", timestamp, timestamp);

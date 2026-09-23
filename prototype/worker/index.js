@@ -113,7 +113,7 @@ const backupTables = ["customers","suppliers","projects","offers","offer_items",
 // hesaplanan bir görünüm. Kaynakları zaten yukarıda yedekleniyor, türetilmiş
 // satırları yedeğe yazmak aynı veriyi ikinci kez saklamak olurdu ve geri
 // yükleme sırasında görünüme INSERT edilemeyeceği için yedek hataya düşerdi.
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql", "0015_reports.sql", "0016_report_views.sql", "0017_project_profitability.sql"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql", "0015_reports.sql", "0016_report_views.sql", "0017_project_profitability.sql", "0018_finance_settlement.sql"];
 const BACKUP_SCHEMA_VERSION = backupMigrations.length;
 const dailyBackupSeen = new Map();
 const DAILY_BACKUP_SEEN_LIMIT = 500;
@@ -982,8 +982,19 @@ async function getDashboard(env, principal) {
     ["installations", "SELECT COUNT(*) AS count FROM installations WHERE tenant_id=? AND status NOT IN ('completed','cancelled')"],
     // Alacak: tahsil edilmemiş tüm gelir hareketleri. Onaylı ama henüz tahsil
     // edilmemiş kayıtlar da alacaktır; önceden kapsam dışıydı.
-    ["receivables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor,COALESCE(SUM(CASE WHEN due_date IS NOT NULL AND due_date<date('now') THEN amount_minor ELSE 0 END),0) AS overdue_amount_minor FROM financial_transactions WHERE tenant_id=? AND type='income' AND status IN ('planned','pending','approved','overdue')"],
-    ["payables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor FROM financial_transactions WHERE tenant_id=? AND type='expense' AND status IN ('planned','pending','approved','overdue')"],
+    //
+    // `reversal_of_id IS NULL`: ters kayıt fişi hiçbir toplama girmez. Bir
+    // hareket ters kaydedildiğinde asli kayıt `reversed` olup zaten toplamdan
+    // düşüyor; fiş de eksi tutarıyla toplama girerse aynı düzeltme iki kez
+    // sayılır ve toplam sıfıra değil eksiye gider (300.000 onaylı gider ters
+    // kaydedilince maliyet -300.000 görünüyordu). İkisi de dışarıda kalınca
+    // sonuç doğru şekilde sıfır olur; fiş kayıt olarak yerinde durur, iz
+    // kaybolmaz. Aynı kural finans hareketlerini toplayan her sorguda geçerli:
+    // fiş bugün her zaman `approved` doğduğu için tahsilat toplamlarına zaten
+    // giremiyor, ama koruma orada da duruyor — kuralın her sorguda aynı olması,
+    // fişin durumu yarın değiştiğinde bir sorgunun unutulmasından iyidir.
+    ["receivables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor,COALESCE(SUM(CASE WHEN due_date IS NOT NULL AND due_date<date('now') THEN amount_minor ELSE 0 END),0) AS overdue_amount_minor FROM financial_transactions WHERE tenant_id=? AND type='income' AND status IN ('planned','pending','approved','overdue') AND reversal_of_id IS NULL"],
+    ["payables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor FROM financial_transactions WHERE tenant_id=? AND type='expense' AND status IN ('planned','pending','approved','overdue') AND reversal_of_id IS NULL"],
     ["employees", "SELECT COUNT(*) AS count FROM employees WHERE tenant_id=? AND status='active'"],
   ];
   const data = {};
@@ -1091,11 +1102,20 @@ async function projectCommandCenterData(env, principal, project) {
     (SELECT COUNT(*) FROM project_tasks WHERE tenant_id=? AND project_id=? AND status IN ('todo','in_progress','blocked')) AS open_tasks,
     (SELECT COUNT(*) FROM project_tasks WHERE tenant_id=? AND project_id=? AND status IN ('todo','in_progress','blocked') AND planned_end IS NOT NULL AND planned_end<date('now')) AS overdue_tasks,
     (SELECT COUNT(*) FROM files WHERE tenant_id=? AND entity_type='projects' AND entity_id=?) AS file_total,
-    (SELECT COALESCE(SUM(CASE WHEN type='income' AND status IN ('approved','collected','paid') THEN amount_minor ELSE 0 END),0) FROM financial_transactions WHERE tenant_id=? AND project_id=?) AS income_minor,
-    (SELECT COALESCE(SUM(CASE WHEN type='expense' AND status IN ('approved','paid') THEN amount_minor ELSE 0 END),0) FROM financial_transactions WHERE tenant_id=? AND project_id=?) AS expense_minor,
+    -- Tahsilat. Onaylı ama henüz tahsil edilmemiş gelir buraya girmez: o para
+    -- kasada değil, alacaktır ve dashboard'un receivables kalemi onu zaten
+    -- alacak sayıyor. İkisinde birden görünmesi aynı lirayı hem beklenen hem
+    -- girmiş göstererek nakit durumunu olduğundan iyi çizerdi. Kapsam, kârlılık
+    -- görünümünün (göç 0017) collected_minor sütunuyla artık birebir aynı;
+    -- alan adı income_minor kalıyor çünkü kullanıcıya hiçbir ekranda bu adla
+    -- görünmüyor, yanlış olan ad değil kapsamdı.
+    -- Ters kayıt fişi (reversal_of_id) hiçbir toplama girmez; gerekçesi
+    -- dashboard sorgularının başında.
+    (SELECT COALESCE(SUM(CASE WHEN type='income' AND status IN ('collected','paid') THEN amount_minor ELSE 0 END),0) FROM financial_transactions WHERE tenant_id=? AND project_id=? AND reversal_of_id IS NULL) AS income_minor,
+    (SELECT COALESCE(SUM(CASE WHEN type='expense' AND status IN ('approved','paid') THEN amount_minor ELSE 0 END),0) FROM financial_transactions WHERE tenant_id=? AND project_id=? AND reversal_of_id IS NULL) AS expense_minor,
     (SELECT COALESCE(SUM(grand_total_minor),0) FROM purchase_orders WHERE tenant_id=? AND project_id=? AND status NOT IN ('draft','cancelled')) AS committed_purchase_minor,
     (SELECT COALESCE(SUM(po.grand_total_minor),0) FROM purchase_orders po WHERE po.tenant_id=? AND po.project_id=? AND po.status NOT IN ('draft','cancelled')
-      AND EXISTS (SELECT 1 FROM financial_transactions ft WHERE ft.tenant_id=po.tenant_id AND ft.project_id=po.project_id AND ft.type='expense' AND ft.status IN ('approved','paid') AND ft.supplier_id=po.supplier_id AND (ft.reference=po.order_number OR ft.reference=po.id))) AS invoiced_purchase_minor,
+      AND EXISTS (SELECT 1 FROM financial_transactions ft WHERE ft.tenant_id=po.tenant_id AND ft.project_id=po.project_id AND ft.type='expense' AND ft.status IN ('approved','paid') AND ft.reversal_of_id IS NULL AND ft.supplier_id=po.supplier_id AND (ft.reference=po.order_number OR ft.reference=po.id))) AS invoiced_purchase_minor,
     (SELECT COUNT(*) FROM project_communications WHERE tenant_id=? AND project_id=?) AS communication_total,
     (SELECT COUNT(*) FROM project_communications WHERE tenant_id=? AND project_id=? AND status IN ('open','follow_up') AND next_follow_up_at IS NOT NULL) AS pending_follow_ups,
     (SELECT COUNT(*) FROM resource_assignments WHERE tenant_id=? AND project_id=? AND status IN ('planned','confirmed','active')) AS assignment_total,
@@ -1206,7 +1226,7 @@ async function getProjectCostBreakdown(request, env, principal, projectId) {
       COALESCE(wi.quantity,0) AS quantity, COALESCE(wi.unit_cost_minor,0) AS unit_cost_minor, COALESCE(wi.unit_price_minor,0) AS unit_price_minor,
       wi.status, wi.revision_no,
       (SELECT COALESCE(SUM(ft.amount_minor),0) FROM financial_transactions ft
-        WHERE ft.tenant_id=wi.tenant_id AND ft.work_item_id=wi.id AND ft.type='expense' AND ft.status IN ('approved','paid')) AS expense_minor,
+        WHERE ft.tenant_id=wi.tenant_id AND ft.work_item_id=wi.id AND ft.type='expense' AND ft.status IN ('approved','paid') AND ft.reversal_of_id IS NULL) AS expense_minor,
       (SELECT COALESCE(SUM(sm.total_cost_minor),0) FROM stock_movements sm
         WHERE sm.tenant_id=wi.tenant_id AND sm.work_item_id=wi.id AND sm.status='posted' AND sm.movement_type IN ('issue','project_issue','adjustment_out')) AS stock_cost_minor,
       (SELECT COALESCE(SUM(po.grand_total_minor),0) FROM purchase_orders po
@@ -1275,7 +1295,7 @@ async function getProjectCostBreakdown(request, env, principal, projectId) {
 
   // İş kalemine bağlanmamış proje giderleri kırılımda kaybolmamalıdır.
   const unassigned = await one(env.DB.prepare(`SELECT
-      (SELECT COALESCE(SUM(amount_minor),0) FROM financial_transactions WHERE tenant_id=? AND project_id=? AND work_item_id IS NULL AND type='expense' AND status IN ('approved','paid')) AS expense_minor,
+      (SELECT COALESCE(SUM(amount_minor),0) FROM financial_transactions WHERE tenant_id=? AND project_id=? AND work_item_id IS NULL AND type='expense' AND status IN ('approved','paid') AND reversal_of_id IS NULL) AS expense_minor,
       (SELECT COALESCE(SUM(grand_total_minor),0) FROM purchase_orders WHERE tenant_id=? AND project_id=? AND work_item_id IS NULL AND status NOT IN ('draft','cancelled')) AS committed_minor`)
     .bind(tenant, projectId, tenant, projectId));
 
@@ -1504,7 +1524,7 @@ async function updateResource(request, env, principal, slug, config, resourceId)
     return problem(403, "privileged_role_forbidden", "owner veya admin kodlu rol yalnızca firma sahibi tarafından değiştirilebilir.");
   }
   if (workflowManagedResources.has(slug) && normalized.values.status !== undefined && normalized.values.status !== existing.status) return problem(409, "workflow_endpoint_required", "Durum değişikliği yalnız ilgili iş akışı endpoint'i üzerinden yapılabilir.");
-  if (slug === "financial-transactions" && ["approved", "reversed"].includes(existing.status)) return problem(409, "approved_record_immutable", "Onaylı finans kaydı düzenlenemez; ters kayıt oluşturun.");
+  if (slug === "financial-transactions" && ["approved", "collected", "paid", "reversed"].includes(existing.status)) return problem(409, "approved_record_immutable", "Kesinleşmiş finans kaydı düzenlenemez; düzeltme ters kayıtla yapılır.");
   const immutableDomainStates = {
     "site-surveys": ["approved", "cancelled"],
     contracts: ["signed", "active", "completed", "terminated", "cancelled"],
@@ -2680,11 +2700,95 @@ async function decideLeave(request, env, principal, leaveId, decision) {
   return json({ data: serializeRow(await workflowRow(env, principal, "leave_requests", leaveId), "leaves", principal) });
 }
 
+// Tahsilat ve ödeme: onaylanmış bir alacağın kasaya girdiği, onaylanmış bir
+// borcun kasadan çıktığı an. Kayıt defterinde bunun karşılığı iki durum var
+// (`collected`, `paid`) ama oraya ulaşan hiçbir yol yoktu: POST ile o durumla
+// kayıt açmak da PATCH ile durumu oraya çekmek de iş akışı kapısına takılıyor,
+// yönlendirici ise yalnız `approve` ve `reverse` tanıyordu. Sonucu raporlarda
+// görünüyordu: tahsilat hep sıfır, vadesi geçmiş alacak hiç kapanmıyordu.
+const settlementTargets = { collect: "collected", pay: "paid" };
+
+// Paranın yönü. `income` ve `expense` yönünü adında taşır. `cost_forecast` hiç
+// taşımaz: o gerçekleşmiş bir hareket değil tahmindir, ne tahsil edilir ne
+// ödenir (kârlılık görünümü de onu aynı gerekçeyle saymıyor). `progress_payment`
+// ile `advance` ise iki yöne de akar: hakediş müşteriden alınır ama taşerona
+// ödenir, avans müşteriden alınır ama tedarikçiye verilir. Bu ikisinde yön
+// türden değil karşı taraftan okunur. Karşı taraf yazılmamışsa hakediş
+// sözleşme tarafındadır, yani tahsilattır; avans gerçekten belirsizdir ve tek
+// bir yöne sabitlemek, kapatmaya çalıştığımız yolun yarısını yine kapalı
+// bırakırdı.
+function settlementDirections(record) {
+  if (record.type === "income") return ["in"];
+  if (record.type === "expense") return ["out"];
+  if (record.type === "cost_forecast") return [];
+  const hasCustomer = Boolean(record.customer_id);
+  const hasSupplier = Boolean(record.supplier_id);
+  if (hasCustomer && !hasSupplier) return ["in"];
+  if (hasSupplier && !hasCustomer) return ["out"];
+  return record.type === "progress_payment" ? ["in"] : ["in", "out"];
+}
+
+function settlementDirectionProblem(record, action) {
+  if (record.type === "cost_forecast") return problem(409, "invalid_transition", "Maliyet tahmini gerçekleşmiş bir para hareketi değildir; tahsil edilemez, ödenemez.");
+  if (action === "collect") return problem(409, "invalid_transition", "Bu kayıt para çıkışıdır; tahsil edilmez, ödenir (.../pay).");
+  return problem(409, "invalid_transition", "Bu kayıt para girişidir; ödenmez, tahsil edilir (.../collect).");
+}
+
+async function settleFinancialTransaction(request, env, principal, record, action) {
+  const target = settlementTargets[action];
+  const direction = action === "collect" ? "in" : "out";
+  // Aynı kayıt iki kez tahsil edilemez ya da ödenemez: ikinci istek ne durumu
+  // ne denetim kaydını değiştirir, kaydı olduğu gibi geri verir. Diğer iş akışı
+  // uçlarının davranışı da bu.
+  if (record.status === target) return json({ data: serializeRow(record, "financial-transactions", principal), meta: { replayed: true } });
+  // Yalnız kesinleşmiş bir kayıt kapanabilir. `draft`, `planned` ve `pending`
+  // henüz onaylanmamıştır; oradan doğrudan tahsilata atlamak onay adımını
+  // atlar, `approved_at`/`approved_by` boş kalır ve denetim izi yalan söyler.
+  // `cancelled` hiç olmamış, `reversed` ters kayıtla geri alınmıştır. `overdue`
+  // ise onaylanmış ama vadesi geçmiş kayıttır: kapanmasının tek yolu budur,
+  // dışarıda bırakmak raporda sonsuza dek açık kalan bir alacak bırakırdı.
+  if (!["approved", "overdue"].includes(record.status)) return problem(409, "invalid_transition", `${record.status} durumundaki hareket ${action === "collect" ? "tahsil edilemez" : "ödenemez"}; önce onaylanmalıdır.`);
+  // Ters kayıt bir düzeltme fişidir, kasadan geçmez. Tahsil edilmiş saymak eksi
+  // tutarı tahsilat toplamına sokar ve hiç yaşanmamış bir tahsilatı rapora
+  // yazardı; `reverse` ucu da aynı nedenle yalnız asli kaydı kabul ediyor.
+  if (record.reversal_of_id) return problem(409, "invalid_transition", "Ters kayıt bir düzeltme fişidir; tahsilat veya ödeme kaydı tutulamaz.");
+  if (!settlementDirections(record).includes(direction)) return settlementDirectionProblem(record, action);
+  let body;
+  try { body = await optionalJson(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
+  const timestamp = now();
+  // `payment_method` ve `reference` kayıt defterinin kendi sütunları (nakit /
+  // havale / çek ve dekont numarası) ve ikisi de para gerçekten hareket ettiği
+  // anda öğrenilir; yazılacakları yer burasıdır. Verilmezse eskisi silinmez.
+  for (const key of ["payment_method", "reference"]) {
+    const value = body[key];
+    if (value !== undefined && value !== null && (typeof value !== "string" || value.length > TEXT_FIELD_LIMIT)) return problem(422, "validation_error", `${key} en çok ${TEXT_FIELD_LIMIT} karakterlik metin olmalıdır.`);
+  }
+  const paymentMethod = typeof body.payment_method === "string" && body.payment_method.trim() ? body.payment_method.trim() : null;
+  const reference = typeof body.reference === "string" && body.reference.trim() ? body.reference.trim() : null;
+  // Tahsilat tarihi verilebilir, çünkü para çoğu zaman kaydın girildiği günden
+  // önce hareket eder. `transaction_date` üzerine yazılmaz: o tahakkuk
+  // tarihidir ve bütün tarih bazlı raporlar ona dayanıyor. Tarihin kendi sütunu
+  // yok, bu yüzden `metadata_json` içine ve denetim kaydına yazılıyor.
+  const settledOn = body.settled_on === undefined || body.settled_on === null || body.settled_on === "" ? timestamp.slice(0, 10) : body.settled_on;
+  if (typeof settledOn !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(settledOn)) return problem(422, "validation_error", "settled_on YYYY-AA-GG biçiminde bir tarih olmalıdır.");
+  const statement = env.DB.prepare(`UPDATE financial_transactions SET status=?,payment_method=COALESCE(?,payment_method),reference=COALESCE(?,reference),metadata_json=json_set(COALESCE(metadata_json,'{}'),'$.${target}_on',?,'$.${target}_by',?),updated_at=? WHERE id=? AND tenant_id=? AND status IN ('approved','overdue')`)
+    .bind(target, paymentMethod, reference, settledOn, principal.user.id, timestamp, record.id, principal.tenantId);
+  try { await commitWorkflow(env, principal, request, [statement], action, "financial-transactions", record.id, { from: record.status, to: target, settled_on: settledOn, payment_method: paymentMethod, reference }); }
+  catch (error) { return workflowCommitProblem(env, error); }
+  return json({ data: serializeRow(await workflowRow(env, principal, "financial_transactions", record.id), "financial-transactions", principal) });
+}
+
 async function financialAction(request, env, principal, transactionId, action) {
+  // Her iş akışı ucunun kendi yetki kodu var; tahsilat ve ödeme de öyle.
+  // Kodlar göç 0018 ile açıldı ve bugün `financial-transactions.approve`
+  // hangi rollerde duruyorsa oraya dağıtıldı: parayı kasaya girmiş saymak,
+  // gideri onaylamakla aynı sorumluluk düzeyidir. Dağıtımsız bir kod ucu
+  // kimseye görünmez kılardı, o yüzden kod ile dağıtım aynı göçte.
   const capability = `financial-transactions.${action}`;
   if (!allowed(principal, capability)) return problem(403, "forbidden", "Bu finans işlemi için yetkiniz yok.");
   const record = await workflowRow(env, principal, "financial_transactions", transactionId);
   if (!record) return problem(404, "not_found", "Finans hareketi bulunamadı.");
+  if (settlementTargets[action]) return settleFinancialTransaction(request, env, principal, record, action);
   const timestamp = now();
   if (action === "approve") {
     if (record.status === "approved") return json({ data: serializeRow(record, "financial-transactions", principal), meta: { replayed: true } });
@@ -2698,16 +2802,21 @@ async function financialAction(request, env, principal, transactionId, action) {
     const reversal = record.reversed_transaction_id ? await workflowRow(env, principal, "financial_transactions", record.reversed_transaction_id) : await one(env.DB.prepare("SELECT * FROM financial_transactions WHERE reversal_of_id=? AND tenant_id=?").bind(transactionId, principal.tenantId));
     return json({ data: serializeRow(reversal || record, "financial-transactions", principal), meta: { replayed: true, reversed_transaction_id: record.reversed_transaction_id || reversal?.id } });
   }
-  if (record.status !== "approved" || record.reversal_of_id) return problem(409, "invalid_transition", "Yalnız onaylı asli finans hareketi ters kayıtla düzeltilebilir.");
+  // Ters kayıt yalnız asli kayda uygulanır ama kesinleşmiş her asli kayda:
+  // yanlış girilmiş bir tahsilat da düzeltilebilmeli. Kesinleşmiş kayıt PATCH
+  // ile değiştirilemediği ve silinemediği için düzeltmenin tek yolu budur;
+  // `collected`/`paid` durumunu dışarıda bırakmak, tahsil edildi denen bir
+  // hareketi sonsuza dek düzeltilemez hâlde bırakırdı.
+  if (!["approved", "collected", "paid"].includes(record.status) || record.reversal_of_id) return problem(409, "invalid_transition", "Yalnız kesinleşmiş asli finans hareketi ters kayıtla düzeltilebilir.");
   let body;
   try { body = await optionalJson(request); } catch (response) { return problem(response.status, "invalid_body", "Geçerli JSON gönderin."); }
   const reversalId = id("fin_");
   const reversalNumber = `${record.transaction_number}-REV`;
   try {
     await commitWorkflow(env, principal, request, [
-      env.DB.prepare("INSERT INTO financial_transactions (id,tenant_id,transaction_number,project_id,account_id,customer_id,supplier_id,type,category,transaction_date,amount_minor,currency,exchange_rate,official,payment_method,reference,description,status,approved_at,approved_by,reversal_of_id,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'approved',?,?,?,?,?,?)").bind(reversalId, principal.tenantId, reversalNumber, record.project_id || null, record.account_id || null, record.customer_id || null, record.supplier_id || null, record.type, record.category || null, timestamp.slice(0, 10), -Number(record.amount_minor), record.currency || "TRY", record.exchange_rate || 1, record.official ? 1 : 0, record.payment_method || null, record.reference || null, body.reason || `Ters kayıt: ${record.transaction_number}`, timestamp, principal.user.id, transactionId, JSON.stringify({ reversal_reason: body.reason || null }), timestamp, timestamp),
-      env.DB.prepare("UPDATE financial_transactions SET status='reversed',reversed_transaction_id=?,updated_at=? WHERE id=? AND tenant_id=? AND status='approved'").bind(reversalId, timestamp, transactionId, principal.tenantId),
-    ], "reverse", "financial-transactions", transactionId, { reversal_id: reversalId, reason: body.reason || null });
+      env.DB.prepare("INSERT INTO financial_transactions (id,tenant_id,transaction_number,project_id,work_item_id,account_id,customer_id,supplier_id,type,category,transaction_date,amount_minor,currency,exchange_rate,official,payment_method,reference,description,status,approved_at,approved_by,reversal_of_id,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'approved',?,?,?,?,?,?)").bind(reversalId, principal.tenantId, reversalNumber, record.project_id || null, record.work_item_id || null, record.account_id || null, record.customer_id || null, record.supplier_id || null, record.type, record.category || null, timestamp.slice(0, 10), -Number(record.amount_minor), record.currency || "TRY", record.exchange_rate || 1, record.official ? 1 : 0, record.payment_method || null, record.reference || null, body.reason || `Ters kayıt: ${record.transaction_number}`, timestamp, principal.user.id, transactionId, JSON.stringify({ reversal_reason: body.reason || null }), timestamp, timestamp),
+      env.DB.prepare("UPDATE financial_transactions SET status='reversed',reversed_transaction_id=?,updated_at=? WHERE id=? AND tenant_id=? AND status IN ('approved','collected','paid')").bind(reversalId, timestamp, transactionId, principal.tenantId),
+    ], "reverse", "financial-transactions", transactionId, { from: record.status, to: "reversed", reversal_id: reversalId, reason: body.reason || null });
   } catch (error) {
     const existing = await one(env.DB.prepare("SELECT * FROM financial_transactions WHERE reversal_of_id=? AND tenant_id=?").bind(transactionId, principal.tenantId));
     if (existing) return json({ data: serializeRow(existing, "financial-transactions", principal), meta: { replayed: true, reversed_transaction_id: existing.id } });
@@ -2815,7 +2924,14 @@ async function progressPaymentAction(request, env, principal, paymentId, action)
   }
   if (action === "paid") {
     const transaction = validId(body.payment_transaction_id) ? await workflowRow(env, principal, "financial_transactions", body.payment_transaction_id) : null;
-    if (!transaction || transaction.project_id !== record.project_id || transaction.status !== "approved") return problem(422, "cross_tenant_reference", "Hakediş projesine ait onaylı payment_transaction_id zorunludur.");
+    // `collected` ve `paid`, `approved`'dan geri değil ileri adımlardır: para
+    // gerçekten el değiştirmiştir. Yalnız `approved` kabul edilseydi, parayı
+    // finans ekranından tahsil eden kullanıcı hakedişi bir daha "Ödendi"
+    // yapamaz, zinciri kendi doğru hamlesiyle kilitlerdi. `overdue` bilerek
+    // dışarıda: vadesi geçmiş demek, tahsil edilmiş demek değildir. Düzeltme
+    // fişi de ödeme sayılmaz, asli kaydın kendisi gösterilmelidir.
+    const settled = ["approved", "collected", "paid"].includes(transaction?.status) && !transaction.reversal_of_id;
+    if (!transaction || transaction.project_id !== record.project_id || !settled) return problem(422, "cross_tenant_reference", "Hakediş projesine ait onaylı payment_transaction_id zorunludur.");
   }
   const timestamp = now();
   const statement = env.DB.prepare("UPDATE progress_payments SET status=?,approved_at=CASE WHEN ?='approved' THEN ? ELSE approved_at END,approved_by=CASE WHEN ?='approved' THEN ? ELSE approved_by END,rejection_reason=CASE WHEN ?='rejected' THEN ? WHEN ?='approved' THEN NULL ELSE rejection_reason END,invoice_id=CASE WHEN ?='invoiced' THEN ? ELSE invoice_id END,invoiced_at=CASE WHEN ?='invoiced' THEN ? ELSE invoiced_at END,payment_transaction_id=CASE WHEN ?='paid' THEN ? ELSE payment_transaction_id END,paid_at=CASE WHEN ?='paid' THEN ? ELSE paid_at END,updated_at=? WHERE id=? AND tenant_id=?")
@@ -2927,7 +3043,7 @@ async function deleteResource(request, env, principal, slug, config, resourceId)
   const scope = rowScopeFor(config, principal, "delete");
   const existing = await one(env.DB.prepare(`SELECT * FROM ${config.table} WHERE id=? AND tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(resourceId, principal.tenantId, ...scope.bindings));
   if (!existing) return problem(404, "not_found", "Kayıt bulunamadı.");
-  if (slug === "financial-transactions" && ["approved", "reversed"].includes(existing.status)) return problem(409, "approved_record_immutable", "Onaylı finans kaydı silinemez; ters kayıt oluşturun.");
+  if (slug === "financial-transactions" && ["approved", "collected", "paid", "reversed"].includes(existing.status)) return problem(409, "approved_record_immutable", "Kesinleşmiş finans kaydı silinemez; düzeltme ters kayıtla yapılır.");
   const protectedStates = { "site-surveys": ["approved"], contracts: ["signed","active","completed","terminated"], "design-revisions": ["approved","superseded"], "progress-payments": ["approved","invoiced","paid"], "stock-movements": ["posted"], "project-meetings": ["published","closed"], "quality-inspections": ["completed","closed"], handovers: ["accepted","closed"], "supplier-quotations": ["selected"], "production-operations": ["completed"], "production-issues": ["resolved"] };
   if (protectedStates[slug]?.includes(existing.status)) return problem(409, "workflow_record_immutable", "Kesinleşmiş iş akışı kaydı silinemez.");
   if (slug === "survey-measurements") {
@@ -4117,7 +4233,7 @@ async function dispatchAuthenticated(request, env, principal, url, segments) {
     if (resource === "purchase-requests" && action === "create-order") return createPurchaseOrderFromRequest(request, env, principal, resourceId);
     if (resource === "purchase-orders" && action === "receive") return receivePurchaseOrder(request, env, principal, resourceId);
     if (resource === "leaves" && ["approve", "reject"].includes(action)) return decideLeave(request, env, principal, resourceId, action);
-    if (resource === "financial-transactions" && ["approve", "reverse"].includes(action)) return financialAction(request, env, principal, resourceId, action);
+    if (resource === "financial-transactions" && ["approve", "collect", "pay", "reverse"].includes(action)) return financialAction(request, env, principal, resourceId, action);
     if (resource === "site-surveys" && action === "transition") return transitionSurvey(request, env, principal, resourceId);
     if (resource === "contracts" && action === "transition") return transitionContract(request, env, principal, resourceId);
     if (resource === "design-revisions" && ["submit", "approve", "reject", "supersede"].includes(action)) return designRevisionAction(request, env, principal, resourceId, action);

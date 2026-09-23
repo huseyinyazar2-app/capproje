@@ -72,6 +72,14 @@ FROM (
     -- `reversed` ters kayıtla geri alınmıştır, `cancelled` hiç olmamıştır:
     -- yalnız `approved` ve `paid` gerçek bir maliyettir.
     --
+    -- Ters kaydın fişi de (`reversal_of_id` dolu olan satır) dışarıda kalır.
+    -- Asli kayıt ters kaydedilince `reversed` olup toplamdan zaten düşüyor.
+    -- Fiş de eksi tutarıyla toplama girerse aynı düzeltme iki kez sayılır ve
+    -- maliyet sıfıra değil eksiye giderdi: 300.000 onaylı gider ters
+    -- kaydedildiğinde maliyet -300.000, marj da 600.000 fazla görünüyordu.
+    -- İkisi de dışarıda kalınca sonuç doğru şekilde sıfır olur ve fiş kayıt
+    -- olarak yerinde durur, iz kaybolmaz.
+    --
     -- Resmi (`official=1`) ve proje içi (`official=0`) hareketlerin ikisi de
     -- sayılır. Bu raporun sorusu "resmi defterde ne görünüyor" değil, "bu iş
     -- gerçekte kazandırdı mı"dır; firma bu ayrımı zaten bilerek tutuyor ve
@@ -80,17 +88,21 @@ FROM (
       SELECT SUM(t.amount_minor) FROM financial_transactions t
       WHERE t.tenant_id = p.tenant_id AND t.project_id = p.id
         AND t.type = 'expense' AND t.status IN ('approved', 'paid')
+        AND t.reversal_of_id IS NULL
     ), 0) AS expense_minor,
     -- Tahsilat. `progress_payment` (hakediş) ve `advance` (avans) türleri
     -- bilerek dışarıda: hakediş faturaya, fatura da bir finans hareketine
     -- dönüşür. İkisini birden saymak aynı parayı iki kez tahsil edilmiş
     -- gösterir. Tahsil edilmiş sayılan tek durum çifti `paid` ile
     -- `collected` olur, çünkü `pending` ya da `overdue` bir alacak henüz
-    -- kasaya girmemiştir.
+    -- kasaya girmemiştir. Ters kayıt fişi giderde olduğu gibi burada da
+    -- dışarıda: yanlış girilmiş bir tahsilat ters kaydedildiğinde tahsilat
+    -- toplamı eksiye değil sıfıra dönmelidir.
     COALESCE((
       SELECT SUM(t.amount_minor) FROM financial_transactions t
       WHERE t.tenant_id = p.tenant_id AND t.project_id = p.id
         AND t.type = 'income' AND t.status IN ('paid', 'collected')
+        AND t.reversal_of_id IS NULL
     ), 0) AS collected_minor,
     -- Malzeme maliyeti. Yalnız projeye çıkılan (`project_issue`) ve kesinleşmiş
     -- (`posted`) hareketler sayılır: `draft` bir çıkış henüz depodan çıkmamış,
