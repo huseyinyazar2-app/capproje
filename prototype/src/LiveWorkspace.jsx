@@ -1783,6 +1783,106 @@ function reportDefinitionProblem(definition) {
   return null;
 }
 
+// Hazır raporda kişisel sütun görünümü. Saklanan şey sonuç değil **farktır**:
+// kullanıcı yalnız "Ödeneni gizledim, ortalamayı ekledim" der. Sütunların tam
+// listesini saklasaydık raporu iyileştirdiğimizde o kişi eski sütunlarla donup
+// kalırdı; kopyalamanın çözmediği sorun buydu.
+const emptyReportView = { hiddenColumns: [], extraColumns: [], extraAggregates: [] };
+const REPORT_VIEW_LAST_COLUMN_NOTE = "En az bir sütun görünmeli. Önce başka bir sütunu gösterin, sonra bunu gizleyebilirsiniz.";
+
+// Kayıt defteri `view_json`'u metin de nesne de döndürebiliyor; reportDefinitionOf
+// ile aynı kural.
+function reportViewOf(row) {
+  const raw = row?.view_json;
+  if (!raw) return null;
+  if (typeof raw !== "string") return raw;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+// Sunucudan gelen görünüm ekranın taslağına çevrilir. Eksik dizi çökme değil,
+// eksik bilgi sayılır: görünüm elle de düzenlenebilen bir kayıttır.
+function reportViewDraft(view) {
+  return {
+    hiddenColumns: Array.isArray(view?.hiddenColumns) ? [...view.hiddenColumns] : [],
+    extraColumns: Array.isArray(view?.extraColumns) ? [...view.extraColumns] : [],
+    extraAggregates: Array.isArray(view?.extraAggregates) ? view.extraAggregates.filter((item) => item?.fn).map((item) => ({ fn: item.fn, field: item.field || "", as: item.as || reportViewAlias(item.fn, item.field) })) : [],
+  };
+}
+
+// Eklenen toplamın takma adı SQL takma adı olarak gidiyor; kullanıcı yazmaz.
+// Sözleşme `as` değerinin mevcut başlıklarla çakışmasını yasaklıyor: çakışırsa
+// sona sayı eklenir, yoksa sunucu 422 döner ve kullanıcı nedenini anlamaz.
+function reportViewAlias(fn, field, taken = []) {
+  const base = [reportAggregateAliases[fn] || fn, fn === "count" ? "" : field].filter(Boolean).join("_");
+  let alias = base;
+  for (let index = 2; taken.includes(alias); index += 1) alias = `${base}_${index}`;
+  return alias;
+}
+
+// Sunucuya gidecek görünüm. Boş dizi yazılmaz; hiçbir fark kalmadıysa `null`
+// döner ve istek "kayıtlı görünümü yok say" anlamına gelir — "Varsayılana dön"
+// ile ekranda görülen aynı şeydir. Kip ayrımı sözleşmeden: gruplu raporda ek
+// sütun, düz listede ek toplam 422 ile reddedilir, o yüzden buradan hiç çıkmaz.
+function reportViewRequest(draft, grouped) {
+  const view = {};
+  if (draft?.hiddenColumns?.length) view.hiddenColumns = [...draft.hiddenColumns];
+  if (!grouped && draft?.extraColumns?.length) view.extraColumns = [...draft.extraColumns];
+  if (grouped && draft?.extraAggregates?.length) {
+    const aggregates = draft.extraAggregates.filter((item) => item.fn === "count" || item.field).map((item) => (item.fn === "count" ? { fn: "count", as: item.as } : { fn: item.fn, field: item.field, as: item.as }));
+    if (aggregates.length) view.extraAggregates = aggregates;
+  }
+  return Object.keys(view).length ? view : null;
+}
+
+// Görünümün kayıtlı sürümden ayrılıp ayrılmadığı. Kurucudaki taslakta anahtar
+// sırası yanlış alarm verdiği için bayrak kullanıcının eylemine bağlanmıştı;
+// burada karşılaştırılan nesneyi reportViewRequest sabit sırayla kurduğu için
+// metin karşılaştırması güvenli.
+const reportViewKey = (draft, grouped) => JSON.stringify(reportViewRequest(draft, grouped));
+
+// Seçicide listelenecek sütunlar: raporun kendi sütunları + kişinin eklediği.
+// Gizlenen sütun da listede kalır (işareti kalkmış olarak); yoksa kullanıcı
+// gizlediği sütunu geri getiremezdi.
+function reportViewColumns(definition, draft) {
+  if (definition?.group) {
+    return [...(definition.group.by || []), ...(definition.group.aggregates || []).map((item) => item.as), ...(draft?.extraAggregates || []).map((item) => item.as)].filter(Boolean);
+  }
+  return [...(definition?.columns || []), ...(draft?.extraColumns || [])].filter(Boolean);
+}
+
+// Görünüm uygulanmış tanım. Yalnız başlık etiketleri için: eklenen toplam
+// tanımda görünmezse ekranda ve dosyada ham takma adıyla ("ortalama_...")
+// çıkardı. `hiddenColumns` burada iş görmez — çıktıyı sunucu süzer, sorgu aynen
+// kalır; aksi hâlde gruplu raporda satırlar birleşir ve rakamlar sessizce değişir.
+function reportViewDefinition(definition, view) {
+  if (!definition) return definition;
+  if (definition.group) return { ...definition, group: { ...definition.group, aggregates: [...(definition.group.aggregates || []), ...(view?.extraAggregates || [])] } };
+  return { ...definition, columns: [...(definition.columns || []), ...(view?.extraColumns || [])] };
+}
+
+// Sütunun işaretini kaldırmak onu gizler; kişinin kendi eklediği sütun ise
+// gizlenmez, listeden çıkarılır (gizli bir ek sütun sorguyu boşuna büyütür).
+// Son görünür sütun gizlenemez: sütunsuz görünümü sunucu 422 ile reddeder ve
+// kullanıcı nedenini göremez, o yüzden sebep burada Türkçe söylenir.
+function reportViewToggleColumn(draft, key, columns) {
+  if (draft.hiddenColumns.includes(key)) return { view: { ...draft, hiddenColumns: draft.hiddenColumns.filter((item) => item !== key) }, problem: null };
+  if (columns.filter((column) => !draft.hiddenColumns.includes(column)).length <= 1) return { view: draft, problem: REPORT_VIEW_LAST_COLUMN_NOTE };
+  if (draft.extraColumns.includes(key)) return { view: { ...draft, extraColumns: draft.extraColumns.filter((item) => item !== key) }, problem: null };
+  if (draft.extraAggregates.some((item) => item.as === key)) return { view: { ...draft, extraAggregates: draft.extraAggregates.filter((item) => item.as !== key) }, problem: null };
+  return { view: { ...draft, hiddenColumns: [...draft.hiddenColumns, key] }, problem: null };
+}
+
+// Gizliyken yeniden eklenen sütun gizli kalmamalı; kullanıcı onu geri istemiştir.
+function reportViewAddColumn(draft, key) {
+  if (!key || draft.extraColumns.includes(key)) return draft;
+  return { ...draft, hiddenColumns: draft.hiddenColumns.filter((item) => item !== key), extraColumns: [...draft.extraColumns, key] };
+}
+function reportViewAddAggregate(draft, fn, field, taken = []) {
+  if (!fn || (fn !== "count" && !field)) return draft;
+  const as = reportViewAlias(fn, field, taken);
+  return { ...draft, extraAggregates: [...draft.extraAggregates, fn === "count" ? { fn: "count", field: "", as } : { fn, field, as }] };
+}
+
 // Sunucu hataları kullanıcıya kod olarak değil, ne yapması gerektiğini söyleyen
 // bir cümleyle gösterilir.
 function reportErrorMessage(error) {
@@ -1901,12 +2001,65 @@ function ReportCard({ report, mine, ready, canRemove, canExport, busy, exporting
   </article>;
 }
 
+// Açık hazır raporun sütun seçicisi. Hazır raporun kendisi kodda kalır; burada
+// yalnız kişinin farkı düzenlenir. Kendi kaydettiğiniz raporlarda bu seçici
+// yoktur: orada sütunlar zaten kurucudan seçiliyor, ikinci bir yol iki ayrı
+// doğru üretirdi. Dar ekranda kapanabilsin diye açılır/kapanır; kutular tek
+// sütuna iner.
+function ReportViewPicker({ items, grouped, addable, numericColumns, dirty, saved, ignored, state, onToggle, onAddColumn, onAddAggregate, onSave, onReset }) {
+  const [open, setOpen] = useState(true);
+  const [column, setColumn] = useState("");
+  const [aggregate, setAggregate] = useState({ fn: "sum", field: "" });
+  const visible = items.filter((item) => !item.hidden).length;
+  return <section className={`live-report-view ${open ? "open" : ""}`}>
+    <button type="button" className="live-report-view-toggle" aria-expanded={open} aria-controls="live-report-view-body" onClick={() => setOpen((value) => !value)}>
+      <b>Sütunlar</b>
+      <small>{visible}/{items.length} sütun görünüyor{saved ? (ignored ? " · görünümünüz uygulanmadı" : " · kendi görünümünüz") : ""}{dirty && !ignored ? " · kaydedilmemiş değişiklik" : ""}</small>
+      <CaretDown />
+    </button>
+    <div id="live-report-view-body" hidden={!open}>
+      {/* Sunucu görünümü yetki yüzünden uygulamadıysa ekranda raporun gerçekten
+          dönen sütunları durur: işaretli ama gelmeyen bir sütun göstermek,
+          kullanıcıya olmayan bir veriyi vaat etmek olurdu. Tercih silinmez;
+          yetki geri verilirse kendiliğinden yeniden işler. */}
+      {ignored && <p className="live-report-hint danger">Kaydettiğiniz görünümde artık görme yetkiniz olmayan bir sütun var; rapor varsayılan hâliyle açıldı. Tercihiniz duruyor, yetki geri verilirse kendiliğinden yeniden işler. Kalıcı olarak vazgeçmek isterseniz “Varsayılana dön” deyin.</p>}
+      <div className="live-multi-select" role="group" aria-label="Gösterilecek sütunlar">{items.map((item) => <label key={item.key}><input type="checkbox" checked={!item.hidden} disabled={ignored} onChange={() => onToggle(item.key)} /><span><b title={item.key}>{item.label}</b>{item.extra && <small>Sizin eklediğiniz</small>}</span></label>)}</div>
+      {/* Ekleme kipi raporun tanımından okunur: düz listede sütun, gruplu raporda
+          toplam. Sözleşme ikisini ayırıyor ve yanlış kip 422 döndürüyor. */}
+      {!ignored && (grouped
+        ? <div className="live-report-row">
+          <label><span>Toplama</span><select value={aggregate.fn} onChange={(event) => setAggregate({ fn: event.target.value, field: event.target.value === "count" ? "" : aggregate.field })}>{Object.entries(reportAggregateLabels).map(([fn, label]) => <option key={fn} value={fn}>{label}</option>)}</select></label>
+          <label><span>Alan</span><select value={aggregate.field} disabled={aggregate.fn === "count"} onChange={(event) => setAggregate({ ...aggregate, field: event.target.value })}><option value="">{aggregate.fn === "count" ? "Gerekmez" : "Seçin"}</option>{numericColumns.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
+          <button type="button" className="live-workflow-button" disabled={aggregate.fn !== "count" && !aggregate.field} onClick={() => { onAddAggregate(aggregate.fn, aggregate.field); setAggregate({ fn: aggregate.fn, field: "" }); }}><Plus /> Toplam ekle</button>
+        </div>
+        : addable.length > 0 && <div className="live-report-row">
+          <label><span>Rapora sütun ekle</span><select value={column} onChange={(event) => setColumn(event.target.value)}><option value="">Seçin</option>{addable.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
+          <span />
+          <button type="button" className="live-workflow-button" disabled={!column} onClick={() => { onAddColumn(column); setColumn(""); }}><Plus /> Sütun ekle</button>
+        </div>)}
+      {!ignored && !grouped && !addable.length && <p className="live-report-hint">Bu kaynağın görmeye yetkili olduğunuz bütün sütunları zaten listede.</p>}
+      {!ignored && grouped && !numericColumns.length && <p className="live-report-hint">Sayısal sütunu olmayan bir kaynakta yalnız adet toplanabilir.</p>}
+      {state.problem && <p className="live-report-hint danger">{state.problem}</p>}
+      {state.error && <div className="live-form-alert"><WarningCircle />{reportErrorMessage(state.error)}</div>}
+      {state.notice && <div className="live-field-note"><Check />{state.notice}</div>}
+      <footer>
+        {dirty && !ignored && <span className="live-report-hint">Değişiklik yalnız bu ekranda duruyor; kaydetmezseniz rapor bir dahakine eski görünümüyle açılır.</span>}
+        <button type="button" className="live-button secondary" disabled={state.saving || (!saved && !dirty)} title="Kayıtlı görünümü silip raporu ilk hâline döndür" onClick={onReset}><ArrowClockwise /> Varsayılana dön</button>
+        <button type="button" className="live-button primary" disabled={state.saving || !dirty || ignored} onClick={onSave}><FloppyDisk /> {state.saving ? "Kaydediliyor…" : "Bu görünümü kaydet"}</button>
+      </footer>
+    </div>
+  </section>;
+}
+
 // Hazır rapor kartı: ad ve açıklama, kartın tamamı tek düğme. Düzenleme ve
 // silme düğmesi bilerek yok; katalog kodda yaşar, sahibi yoktur.
 function BuiltinReportCard({ report, active, onOpen }) {
   return <button type="button" className={`live-report-card live-report-builtin ${active ? "active" : ""}`} aria-pressed={active} onClick={() => onOpen(report)}>
     <b>{report.name}</b>
     {report.description && <p>{report.description}</p>}
+    {/* Görünümü uyarlanmış rapor listede de belli olsun: kullanıcı ekranda
+        gördüğü sütunların neden komşusununkinden farklı olduğunu bilmeli. */}
+    {report.view && <em>Sütunları kendinize göre ayarladınız</em>}
   </button>;
 }
 
@@ -1918,6 +2071,15 @@ function ReportsView({ session, online }) {
   // değişince önizleme kullanıcının üzerinde çalıştığı taslağa döner; hazır
   // raporun sonucu, az önce değiştirdiği tanımın sonucuymuş gibi durmamalı.
   const [activeBuiltin, setActiveBuiltin] = useState(null);
+  // Kişisel sütun görünümleri. Kayıt defterinden okunuyor çünkü güncellerken
+  // kaydın kimliği gerekiyor; açılıştaki görünümün kendisi zaten
+  // /reports/builtin yanıtında geliyor.
+  const [views, setViews] = useState({ loading: true, rows: [], error: null });
+  const [viewDraft, setViewDraft] = useState(emptyReportView);
+  // Kayıtlı görünümün karşılaştırma anahtarı: taslak bundan ayrıldıysa
+  // kaydedilmemiş değişiklik var demektir.
+  const [viewBaseline, setViewBaseline] = useState("null");
+  const [viewState, setViewState] = useState({ saving: false, error: null, problem: null, notice: null });
   const builderRef = useRef(null);
   const previewRef = useRef(null);
   const [draft, setDraft] = useState(emptyReportDraft);
@@ -1958,7 +2120,11 @@ function ReportsView({ session, online }) {
     setBuiltins((current) => ({ ...current, loading: true, error: null }));
     api.reportBuiltins().then(({ data }) => setBuiltins({ loading: false, rows: data, error: null })).catch((error) => setBuiltins({ loading: false, rows: [], error }));
   };
-  useEffect(() => { loadBuiltins(); loadCatalog(); loadSaved(); setActiveBuiltin(null); }, [session?.tenant?.id]);
+  const loadViews = () => {
+    setViews((current) => ({ ...current, loading: true, error: null }));
+    api.reportViews().then(({ data }) => setViews({ loading: false, rows: data, error: null })).catch((error) => setViews({ loading: false, rows: [], error }));
+  };
+  useEffect(() => { loadBuiltins(); loadCatalog(); loadSaved(); loadViews(); setActiveBuiltin(null); }, [session?.tenant?.id]);
 
   const activeResource = catalog.resources.find((item) => item.resource === draft.resource) || null;
   const resourceColumns = activeResource?.columns || [];
@@ -1979,11 +2145,22 @@ function ReportsView({ session, online }) {
   const draftKey = JSON.stringify(draftDefinition);
   const builtinOpen = activeBuiltin && activeBuiltin.draftKey === draftKey ? activeBuiltin.report : null;
   useEffect(() => { if (activeBuiltin && !builtinOpen) setActiveBuiltin(null); }, [draftKey]);
+  const builtinGrouped = Boolean(builtinOpen?.definition?.group);
+  // Ekranda açık görünüm: önizleme de dosya da bunu taşır. Hiçbir fark
+  // kalmadıysa `null` gider ve sunucu kayıtlı görünümü yok sayar.
+  const builtinView = builtinOpen ? reportViewRequest(viewDraft, builtinGrouped) : undefined;
+  const viewRow = builtinOpen ? views.rows.find((row) => row.builtin_id === builtinOpen.id) || null : null;
+  const viewDirty = Boolean(builtinOpen) && JSON.stringify(builtinView) !== viewBaseline;
   // Önizlemenin çalıştırdığı tanım: hazır rapor açıksa onunki, değilse taslak.
-  // Başlık, sütun etiketi ve süzgeç özeti de bundan okunur.
-  const requestDefinition = builtinOpen ? builtinOpen.definition || {} : draftDefinition;
+  // Başlık, sütun etiketi ve süzgeç özeti de bundan okunur; hazır raporda
+  // kişinin eklediği sütun ve toplam da tanıma katılır ki başlıklar ham takma
+  // adla ("ortalama_grand_total_minor") görünmesin.
+  const requestDefinition = builtinOpen ? reportViewDefinition(builtinOpen.definition || {}, builtinView) : draftDefinition;
   const previewResource = requestDefinition.resource || draft.resource;
-  const definitionKey = `${builtinOpen?.id || ""}|${JSON.stringify(requestDefinition)}`;
+  // Gizlenen sütun tanımı değiştirmez (sorgu aynen kalır, çıktıyı sunucu süzer);
+  // görünüm bu yüzden anahtara ayrıca girer, yoksa sütun gizlendiğinde önizleme
+  // hiç tazelenmezdi.
+  const definitionKey = `${builtinOpen?.id || ""}|${JSON.stringify(requestDefinition)}|${JSON.stringify(builtinView)}`;
 
   // Canlı önizleme: tanım her değiştiğinde değil, kullanıcı durduğunda çalışır.
   useEffect(() => {
@@ -2005,7 +2182,7 @@ function ReportsView({ session, online }) {
     // Hazır rapor kimlikle çalıştırılır; sunucu tanımı kendi kataloğundan okur.
     // Tıklamayla açıldığı için beklemeye gerek yok, yazarken gecikme gerekir.
     const timer = setTimeout(() => {
-      (builtinOpen ? api.runBuiltinReport(builtinOpen.id, { preview: true }) : api.runReport(requestDefinition, { preview: true }))
+      (builtinOpen ? api.runBuiltinReport(builtinOpen.id, { preview: true, view: builtinView }) : api.runReport(requestDefinition, { preview: true }))
         .then((result) => {
           if (previewTicket.current !== ticket) return;
           setPreview({ loading: false, data: result.data, meta: result.meta, error: null, notice: null });
@@ -2150,9 +2327,65 @@ function ReportsView({ session, online }) {
   function openBuiltin(report) {
     setActiveBuiltin({ report, draftKey });
     setExportNotice(null);
+    // Kişisel görünüm rapor açılır açılmaz uygulanır; kullanıcı ayarını her
+    // cihazda hazır bulmalı, bir düğmeye basarak geri çağırmamalı. Kayıt
+    // defterindeki satır listeden tazeyse ondan, değilse /reports/builtin
+    // yanıtındaki görünümden okunur.
+    const stored = reportViewOf(views.rows.find((row) => row.builtin_id === report.id)) || report.view || null;
+    const nextDraft = reportViewDraft(stored);
+    setViewDraft(nextDraft);
+    setViewBaseline(reportViewKey(nextDraft, Boolean(report.definition?.group)));
+    setViewState({ saving: false, error: null, problem: null, notice: null });
     previewRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
   }
   const closeBuiltin = () => setActiveBuiltin(null);
+
+  function toggleViewColumn(key) {
+    const next = reportViewToggleColumn(viewDraft, key, builtinViewColumns);
+    setViewDraft(next.view);
+    setViewState((current) => ({ ...current, problem: next.problem, notice: null }));
+  }
+  function addViewColumn(key) {
+    setViewDraft((current) => reportViewAddColumn(current, key));
+    setViewState((current) => ({ ...current, problem: null, notice: null }));
+  }
+  function addViewAggregate(fn, field) {
+    setViewDraft((current) => reportViewAddAggregate(current, fn, field, reportViewColumns(builtinOpen?.definition, current)));
+    setViewState((current) => ({ ...current, problem: null, notice: null }));
+  }
+  // Görünümü kaydetmek rapor yazmak değil, kişinin kendi ekran tercihidir:
+  // salt okunur rol de yapabilir, yetki kaydedilmiş rapordan bağımsızdır.
+  async function saveBuiltinView() {
+    if (!builtinOpen || viewState.saving) return;
+    // Hiç fark kalmadıysa saklanacak bir şey yok; kayıt silinir ve rapor kendi
+    // varsayılanına döner. Boş bir görünüm kaydı kalsaydı kullanıcı "kendi
+    // görünümüm var" sanır, ama rapor iyileştirmeleri yine aynen gelirdi.
+    if (!builtinView) { resetBuiltinView(); return; }
+    setViewState({ saving: true, error: null, problem: null, notice: null });
+    try {
+      await api.saveReportView({ builtinId: builtinOpen.id, view: builtinView }, { id: viewRow?.id || null });
+      setViewBaseline(JSON.stringify(builtinView));
+      setViewState({ saving: false, error: null, problem: null, notice: "Görünüm kaydedildi; bu raporu bundan sonra her cihazda böyle açacaksınız." });
+      loadViews();
+      loadBuiltins();
+    } catch (error) {
+      setViewState({ saving: false, error, problem: null, notice: null });
+    }
+  }
+  async function resetBuiltinView() {
+    if (!builtinOpen || viewState.saving) return;
+    setViewState({ saving: true, error: null, problem: null, notice: null });
+    try {
+      if (viewRow?.id) await api.deleteReportView(viewRow.id);
+      setViewDraft(reportViewDraft(null));
+      setViewBaseline("null");
+      setViewState({ saving: false, error: null, problem: null, notice: "Rapor ilk hâline döndü." });
+      loadViews();
+      loadBuiltins();
+    } catch (error) {
+      setViewState({ saving: false, error, problem: null, notice: null });
+    }
+  }
   // Hazır rapor değiştirilemez; uyarlamak isteyen kopyalar. Kopya sıradan,
   // henüz kaydedilmemiş yeni bir rapordur: kimliği yok, sahibi kaydeden olur,
   // görünürlüğü özel başlar ve kaydedilmemiş sayılır.
@@ -2230,7 +2463,11 @@ function ReportsView({ session, online }) {
     setExportingId(builtin ? `builtin:${builtin.id}` : stored.id);
     setExportNotice(null);
     try {
-      const result = builtin ? await api.exportBuiltinReport(builtin.id) : await api.exportReport(stored.id);
+      // Dosya ekranda açık görünümle alınır: ekranda gizlenmiş bir sütunu
+      // dosyada bulan kullanıcı ikisinden hangisine güveneceğini bilemez.
+      // Kaydedilmiş raporda görünüm yok; orada sütun zaten kurucudan seçiliyor.
+      const exportView = builtin ? reportViewRequest(viewDraft, Boolean(builtin.definition?.group)) : undefined;
+      const result = builtin ? await api.exportBuiltinReport(builtin.id, { view: exportView }) : await api.exportReport(stored.id);
       const columns = collapseReportColumns(result.data.columns || []);
       const rows = result.data.rows || [];
       if (!columns.length || !rows.length) {
@@ -2239,7 +2476,10 @@ function ReportsView({ session, online }) {
       }
       const definition = builtin ? builtin.definition : reportDefinitionOf(stored);
       const resource = stored.resource || definition?.resource || draft.resource;
-      const csv = buildReportCsv(columns, rows, (column) => reportHeaderLabel(resource, definition, column));
+      // Başlıklar görünüm uygulanmış tanımdan okunur; eklenen toplam aksi hâlde
+      // dosyada ham takma adıyla çıkardı.
+      const headerDefinition = builtin ? reportViewDefinition(definition, exportView) : definition;
+      const csv = buildReportCsv(columns, rows, (column) => reportHeaderLabel(resource, headerDefinition, column));
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
       const link = document.createElement("a");
       link.href = url;
@@ -2349,6 +2589,29 @@ function ReportsView({ session, online }) {
   const previewRows = preview.data?.rows || [];
   // Ekrandaki başlık da indirilen dosyadaki başlık da aynı fonksiyondan gelir.
   const previewColumnLabel = (column) => reportHeaderLabel(previewResource, requestDefinition, column);
+  // Seçicideki sütunlar raporun tanımından üretilir, önizlemenin döndürdüğü
+  // sütunlardan değil: gizlenen sütun yanıttan düşer ve listede kalmasaydı geri
+  // getirilemezdi.
+  const builtinViewColumns = builtinOpen ? reportViewColumns(builtinOpen.definition, viewDraft) : [];
+  // Sunucu görünümü uygulamadığını `meta.viewIgnored` ile bildiriyor (bugün
+  // yalnız yetkisi kalmamış sütun, yarın başka bir neden kodu olabilir); değere
+  // değil varlığına bakılır. Böyle bir yanıtta seçici raporun gerçekten dönen
+  // sütunlarını gösterir: işaretli ama gelmeyen bir sütun, olmayan bir veriyi
+  // vaat etmek olurdu.
+  const builtinViewIgnored = Boolean(builtinOpen) && Boolean(preview.meta?.viewIgnored);
+  const builtinViewItems = builtinViewIgnored
+    ? previewColumns.map((column) => ({ key: column.key, label: previewColumnLabel(column), hidden: false, extra: false }))
+    : builtinViewColumns.map((key) => ({
+      key,
+      label: previewColumnLabel({ key }),
+      hidden: viewDraft.hiddenColumns.includes(key),
+      extra: viewDraft.extraColumns.includes(key) || viewDraft.extraAggregates.some((item) => item.as === key),
+    }));
+  // Eklenebilecek sütunlar alan kataloğundan gelir; kullanıcının görmeye
+  // yetkili olmadığı sütunlar oraya zaten hiç girmiyor.
+  const builtinResourceColumns = builtinOpen ? catalog.resources.find((item) => item.resource === previewResource)?.columns || [] : [];
+  const builtinAddableColumns = builtinResourceColumns.filter((item) => !builtinViewColumns.includes(item.key)).map((item) => ({ key: item.key, label: reportColumnLabel(previewResource, item.key) }));
+  const builtinNumericColumns = builtinResourceColumns.filter((item) => reportNumericTypes.has(item.type)).map((item) => ({ key: item.key, label: reportColumnLabel(previewResource, item.key) }));
   // Önizlemenin hangi süzgeçlerle çalıştığı okunur cümlelerle: özellikle göreli
   // tarihte "Bu yıl" yazmazsa kullanıcı sonucun hangi dönemi kapsadığını bilmez.
   const previewFilters = (Array.isArray(requestDefinition.filters) ? requestDefinition.filters : []).filter((item) => item?.field);
@@ -2468,6 +2731,10 @@ function ReportsView({ session, online }) {
         </div>
       </header>
       {!builtinOpen && <>{canExport && (!reportMeta.id || dirty) && <p className="live-report-hint">{reportMeta.id ? "Önce kaydedin: dosya kayıtlı tanımdan üretilir. Kaydedilmemiş değişiklikle indirilen dosya ekrandakinden farklı olur." : "Kaydedilmemiş taslak indirilemez; dosya kayıtlı tanımdan üretilir. Raporu kaydedip indirin."}</p>}</>}
+      {/* Seçici rapor kimliğiyle anahtarlanır: başka bir rapora geçince yarım
+          kalmış "şu sütunu ekle" seçimi taşınmamalı, o sütun yeni raporun
+          kaynağında bulunmayabilir. */}
+      {builtinOpen && <ReportViewPicker key={builtinOpen.id} items={builtinViewItems} grouped={builtinGrouped} addable={builtinAddableColumns} numericColumns={builtinNumericColumns} dirty={viewDirty} saved={Boolean(viewRow)} ignored={builtinViewIgnored} state={viewState} onToggle={toggleViewColumn} onAddColumn={addViewColumn} onAddAggregate={addViewAggregate} onSave={saveBuiltinView} onReset={resetBuiltinView} />}
       {previewFilters.length > 0 && <div className="live-report-summary" aria-label="Uygulanan süzgeçler"><span>Süzgeçler</span>{previewFilters.map((item, index) => <em key={`${item.field}-${index}`}>{reportFilterSummary(previewResource, item, typeIn(previewResource, item.field))}</em>)}{previewHasRelative && <small>{REPORT_RELATIVE_NOTE}</small>}</div>}
       {exportNoticeBox}
       {preview.notice ? <div className="live-view-empty"><ChartPieSlice /><b>Önizleme için biraz daha bilgi gerekiyor</b><small>{preview.notice}</small></div>
@@ -3708,6 +3975,20 @@ function LiveStyles() {
     .live-report-segment button+button{border-left:1px solid #ced3cf}
     .live-report-segment button.active{background:#edf4f0;color:var(--live-green)}
     .live-report-date small b{color:var(--live-ink)}
+    /* Sütun seçici yalnız açık hazır raporda çıkar; dar ekranda başlığından
+       kapatılabilsin diye açılır/kapanır. */
+    .live-report-view{margin:14px 24px 0;border:1px solid var(--live-line);border-radius:11px;background:#fafaf8;min-width:0}
+    .live-report-view-toggle{display:flex;align-items:center;gap:9px;width:100%;min-width:0;border:0;background:transparent;font:inherit;color:inherit;text-align:left;padding:11px 13px;cursor:pointer}
+    .live-report-view-toggle b{font-size:12px;flex:none}
+    .live-report-view-toggle small{flex:1;min-width:0;font-size:9px;color:var(--live-muted);overflow-wrap:anywhere}
+    .live-report-view-toggle svg{flex:none;transition:transform .16s ease}
+    .live-report-view.open .live-report-view-toggle svg{transform:rotate(180deg)}
+    .live-report-view-toggle:focus-visible{outline:2px solid var(--live-green-2);outline-offset:-2px;border-radius:11px}
+    .live-report-view>div{display:flex;flex-direction:column;gap:10px;padding:0 13px 13px;min-width:0}
+    .live-report-view .live-report-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}
+    .live-report-view footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}
+    .live-report-view footer .live-report-hint{flex:1;min-width:150px}
+    .live-report-hint.danger{color:var(--live-danger)}
     .live-report-summary{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:10px 24px 0;min-width:0}
     .live-report-summary>span{font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--live-muted)}
     .live-report-summary>em{font-style:normal;font-size:10px;border:1px solid var(--live-line);background:#fafaf8;border-radius:14px;padding:4px 9px;overflow-wrap:anywhere;min-width:0}
@@ -3723,6 +4004,10 @@ function LiveStyles() {
       .live-report-summary{padding:10px 16px 0}
       .live-report-row>.live-icon-button{grid-row:1;grid-column:2}
       .live-report-save{grid-template-columns:1fr}
+      .live-report-view{margin:14px 16px 0}
+      .live-report-view .live-report-row{grid-template-columns:minmax(0,1fr)}
+      .live-report-view .live-report-row>.live-workflow-button{justify-self:stretch;padding:9px 8px}
+      .live-report-view footer .live-button{width:100%}
       .live-report-block>footer .live-button{width:100%}
       .live-report-panel .live-toolbar,.live-report-preview-panel .live-toolbar{flex-direction:column}
     }

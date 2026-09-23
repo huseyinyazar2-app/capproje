@@ -63,6 +63,7 @@ export const API_CONFIG = Object.freeze({
     reportFields: "/reports/fields",
     reportRun: "/reports/run",
     reportBuiltins: "/reports/builtin",
+    reportViews: "/report-views",
   }),
 });
 
@@ -806,8 +807,14 @@ export const api = {
   // Sözleşme `definition`, `savedReportId`, `builtinReportId` alanlarından tam
   // olarak birini ister; ayrı fonksiyon, iki kaynağın aynı gövdeye yanlışlıkla
   // birlikte konmasını imkânsız kılar.
-  async runBuiltinReport(builtinReportId, { preview = false } = {}) {
-    const result = await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { builtinReportId, preview } });
+  // `view` üç ayrı isteği anlatır: hiç verilmezse sunucu kullanıcının kayıtlı
+  // görünümünü uygular, nesne verilirse (henüz kaydedilmemiş) o görünüm uygulanır,
+  // `null` verilirse kayıtlı görünüm yok sayılır. "Değer var mı" diye bakan bir
+  // kısaltma son ikisini birbirine karıştırır ve "varsayılana dön" çalışmaz.
+  async runBuiltinReport(builtinReportId, { preview = false, view } = {}) {
+    const result = view === undefined
+      ? await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { builtinReportId, preview } })
+      : await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { builtinReportId, preview, view } });
     const payload = result.data || {};
     return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
   },
@@ -836,6 +843,31 @@ export const api = {
       headers: { "Idempotency-Key": idempotencyKey("savedReports", "delete") },
     })).data;
   },
+  // Kişisel sütun görünümü kayıt defterinden gelir: listeleme, kaydetme ve silme
+  // sıradan kaynak uçlarıdır. Görünüm bir rapor değil ekran tercihidir; satır
+  // kapsamı sunucuda kişinin kendisiyle sınırlı, ayrı bir yetki kodu yok.
+  async reportViews() {
+    const result = await request(API_CONFIG.endpoints.reportViews);
+    const rows = Array.isArray(result.data) ? result.data : result.data?.items || [];
+    return { data: rows, meta: result.meta || null };
+  },
+  // Bir kişinin bir rapor için tek görünümü olur (tekil indeks); kayıt varsa
+  // güncellenir, yoksa açılır. `view_json` sunucuda JSON sütunu: nesne olarak
+  // konur, ikinci kez metne çevrilmez.
+  async saveReportView(values, { id = null } = {}) {
+    const body = { builtin_id: values.builtinId, view_json: values.view };
+    const path = API_CONFIG.endpoints.reportViews;
+    const result = id
+      ? await request(`${path}/${encodeURIComponent(id)}`, { method: "PATCH", body })
+      : await request(path, { method: "POST", body, headers: { "Idempotency-Key": idempotencyKey("reportViews", "create") } });
+    return result.data;
+  },
+  async deleteReportView(id) {
+    return (await request(`${API_CONFIG.endpoints.reportViews}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "Idempotency-Key": idempotencyKey("reportViews", "delete") },
+    })).data;
+  },
   // Rapor dökümü sunucudan hazır CSV olarak değil, ekranın gösterdiği satırların
   // kendisi olarak istenir: başlık, bağlı kayıt adı, Türkçe durum, para ve tarih
   // biçimi arayüzde zaten çözülmüş durumda. Sunucuya ikinci bir sunum katmanı
@@ -851,9 +883,13 @@ export const api = {
     return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
   },
   // Hazır raporun dökümü: kayıtlı raporla aynı yetki, aynı denetim kaydı, aynı
-  // satır tavanı; yalnız tanım katalogdan okunur.
-  async exportBuiltinReport(builtinReportId) {
-    const result = await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { builtinReportId, export: true }, timeoutMs: 60000 });
+  // satır tavanı; yalnız tanım katalogdan okunur. Görünüm burada da gider:
+  // ekranda gizlediği sütunu dosyada bulan kullanıcı ikisinden hangisine
+  // güveneceğini bilemez.
+  async exportBuiltinReport(builtinReportId, { view } = {}) {
+    const result = view === undefined
+      ? await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { builtinReportId, export: true }, timeoutMs: 60000 })
+      : await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { builtinReportId, export: true, view }, timeoutMs: 60000 });
     const payload = result.data || {};
     return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
   },

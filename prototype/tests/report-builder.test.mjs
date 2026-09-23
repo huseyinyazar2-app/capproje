@@ -630,7 +630,7 @@ function loadBuilderHelpers() {
   const parts = [
     ...reportHelperSources(),
     section(liveSource, "const REPORT_PREVIEW_DELAY_MS", "// Sunucu hataları kullanıcıya"),
-    "return { reportExportBusy, reportRelativeRanges, reportRelativeRangeLabels, reportRelativePointOps, reportRelativeToken, reportRelativeDefault, reportRelativeValue, reportRelativeOffset, reportRelativeLabel, reportDraftFilter, reportFilterSummary, reportRequestDefinition, reportFilterReady, reportDefinitionProblem, reportOperatorsByType, reportOperatorLabel, groupBuiltinReports, REPORT_BUILTIN_CATEGORIES, REPORT_RELATIVE_NOTE };",
+    "return { reportExportBusy, reportRelativeRanges, reportRelativeRangeLabels, reportRelativePointOps, reportRelativeToken, reportRelativeDefault, reportRelativeValue, reportRelativeOffset, reportRelativeLabel, reportDraftFilter, reportFilterSummary, reportRequestDefinition, reportFilterReady, reportDefinitionProblem, reportOperatorsByType, reportOperatorLabel, groupBuiltinReports, REPORT_BUILTIN_CATEGORIES, REPORT_RELATIVE_NOTE, emptyReportView, REPORT_VIEW_LAST_COLUMN_NOTE, reportViewOf, reportViewDraft, reportViewAlias, reportViewRequest, reportViewKey, reportViewColumns, reportViewDefinition, reportViewToggleColumn, reportViewAddColumn, reportViewAddAggregate };",
   ];
   return new Function(parts.join("\n"))();
 }
@@ -685,7 +685,8 @@ test("hazır raporlar /reports/builtin'den yüklenir ve sabit kategori sırasıy
 test("hazır rapor builtinReportId ile önizlenir ve aynı CSV üreticisiyle indirilir", () => {
   // Sözleşme: definition, savedReportId, builtinReportId alanlarından tam olarak biri.
   const run = section(reportApi, "async runBuiltinReport(", "async savedReports()");
-  assert.match(run, /async runBuiltinReport\(builtinReportId, \{ preview = false \} = \{\}\)/);
+  // 3. aşamada imzaya isteğe bağlı `view` eklendi; kaynak alanı hâlâ tek.
+  assert.match(run, /async runBuiltinReport\(builtinReportId, \{ preview = false, view \} = \{\}\)/);
   assert.match(run, /body: \{ builtinReportId, preview \}/);
   const exported = section(apiSource, "async exportBuiltinReport(", "async workflow(");
   assert.match(exported, /body: \{ builtinReportId, export: true \}, timeoutMs: 60000/);
@@ -695,7 +696,7 @@ test("hazır rapor builtinReportId ile önizlenir ve aynı CSV üreticisiyle ind
   assert.match(builtinCard, /onClick=\{\(\) => onOpen\(report\)\}/);
   assert.match(reportScreen, /onOpen=\{openBuiltin\}/);
   const effect = section(reportScreen, "const ticket = previewTicket.current + 1", "}, [definitionKey, online]);");
-  assert.match(effect, /builtinOpen \? api\.runBuiltinReport\(builtinOpen\.id, \{ preview: true \}\) : api\.runReport\(requestDefinition, \{ preview: true \}\)/);
+  assert.match(effect, /builtinOpen \? api\.runBuiltinReport\(builtinOpen\.id, \{ preview: true, view: builtinView \}\) : api\.runReport\(requestDefinition, \{ preview: true \}\)/);
   assert.match(reportScreen, /const definitionKey = `\$\{builtinOpen\?\.id \|\| ""\}\|/, "hazır rapor açılıp kapanınca önizleme yeniden çalışmalı");
   assert.match(reportScreen, /<small>HAZIR RAPOR[^\n]*<h2>\{builtinOpen\.name\}<\/h2>/);
   // Kurucudaki taslak değişince önizleme taslağa döner.
@@ -706,7 +707,7 @@ test("hazır rapor builtinReportId ile önizlenir ve aynı CSV üreticisiyle ind
   // İndirme: aynı fonksiyon, aynı üretici, aynı kırpılma uyarısı.
   assert.match(builtinActions, /downloadCsv\(\{ builtinReportId: builtinOpen\.id \}\)/);
   const download = section(reportScreen, "async function downloadCsv(report)", "// Alan kataloğu gelmeden");
-  assert.match(download, /builtin \? await api\.exportBuiltinReport\(builtin\.id\) : await api\.exportReport\(stored\.id\)/);
+  assert.match(download, /builtin \? await api\.exportBuiltinReport\(builtin\.id, \{ view: exportView \}\) : await api\.exportReport\(stored\.id\)/);
   assert.match(download, /const definition = builtin \? builtin\.definition : reportDefinitionOf\(stored\);/);
   assert.match(download, /const csv = buildReportCsv\(columns, rows,/);
   assert.match(download, /result\.meta\?\.truncated/);
@@ -968,4 +969,265 @@ test("az sütunlu rapor telefonda ekrana sığar, geniş liste kutusunda kayar",
   assert.match(source, /previewColumns\.length <= 4 \? "compact" : ""/);
   assert.match(source, /\.live-report-preview\.compact \.live-table\{min-width:0\}/);
   assert.doesNotMatch(source, /\.live-report-preview \.live-table\{min-width:0\}/, "sınır bütün raporlarda kaldırılmamalı");
+});
+
+// ——— 3. aşama: hazır raporda kişisel sütun görünümü ———
+// Saklanan şey sonuç değil farktır: kullanıcı "Ödeneni gizledim" der, sütunların
+// tam listesini değil. Denetim, seçicinin ürettiği görünüm nesnesini metin
+// eşleştirmesiyle değil, üreten yardımcıları çalıştırarak doğrular.
+const viewPicker = section(liveSource, "function ReportViewPicker(", "// Hazır rapor kartı:");
+const viewApi = section(apiSource, "async reportViews()", "// Rapor dökümü sunucudan hazır CSV");
+const flatRunApi = section(apiSource, "async runReport(definition", "// Hazır raporlar kodda tanımlı");
+const savedExportApi = section(apiSource, "async exportReport(savedReportId)", "// Hazır raporun dökümü");
+
+test("sütun seçici sözleşmedeki görünüm biçimini üretir", () => {
+  // Boş görünüm saklanmaz: hiçbir fark yoksa istek `null` taşır ve sunucu
+  // kayıtlı görünümü yok sayar ("Varsayılana dön" ile aynı istek).
+  assert.equal(builder.reportViewRequest(builder.reportViewDraft(null), false), null);
+  assert.deepEqual(builder.reportViewDraft(null), builder.emptyReportView);
+
+  // Düz liste: gizleme + ek sütun.
+  const flat = builder.reportViewAddColumn(builder.reportViewToggleColumn(builder.reportViewDraft(null), "paid_total_minor", ["code", "paid_total_minor"]).view, "project_id");
+  assert.deepEqual(builder.reportViewRequest(flat, false), { hiddenColumns: ["paid_total_minor"], extraColumns: ["project_id"] });
+
+  // Gruplu: gizleme + ek toplam. Takma ad işlev ve alandan türetilir.
+  const grouped = builder.reportViewAddAggregate(builder.reportViewDraft({ hiddenColumns: ["adet"] }), "avg", "grand_total_minor", ["status", "adet", "toplam"]);
+  assert.deepEqual(builder.reportViewRequest(grouped, true), {
+    hiddenColumns: ["adet"],
+    extraAggregates: [{ fn: "avg", field: "grand_total_minor", as: "ortalama_grand_total_minor" }],
+  });
+
+  // Sözleşme `as` çakışmasını yasaklıyor; çakışan ad sessizce 422'ye gitmez.
+  assert.equal(builder.reportViewAlias("sum", "grand_total_minor", []), "toplam_grand_total_minor");
+  assert.equal(builder.reportViewAlias("sum", "grand_total_minor", ["toplam_grand_total_minor"]), "toplam_grand_total_minor_2");
+  assert.equal(builder.reportViewAlias("count", "", ["adet", "adet_2"]), "adet_3");
+
+  // Sunucudan gelen görünüm metin de nesne de olabilir; bozuk metin çökertmez.
+  assert.deepEqual(builder.reportViewOf({ view_json: '{"hiddenColumns":["status"]}' }), { hiddenColumns: ["status"] });
+  assert.deepEqual(builder.reportViewOf({ view_json: { hiddenColumns: ["status"] } }), { hiddenColumns: ["status"] });
+  assert.equal(builder.reportViewOf({ view_json: "{bozuk" }), null);
+  assert.equal(builder.reportViewOf(null), null);
+
+  // Tanınmayan anahtar sunucuda 422; istemci hiç üretmemeli.
+  assert.deepEqual(Object.keys(builder.reportViewRequest(builder.reportViewDraft({ hiddenColumns: ["a"], columns: ["b"] }), false)), ["hiddenColumns"]);
+});
+
+test("düz listede sütun, gruplu raporda toplam eklenir; her biri yalnız kendi kipinde", () => {
+  // Kip raporun kendi tanımından okunur.
+  assert.match(reportScreen, /const builtinGrouped = Boolean\(builtinOpen\?\.definition\?\.group\);/);
+
+  // Sözleşme: gruplu raporda ek sütun 422, düz listede ek toplam 422. Yanlış
+  // kipteki fark istekten hiç çıkmaz.
+  const mixed = builder.reportViewDraft({ hiddenColumns: ["code"], extraColumns: ["project_id"], extraAggregates: [{ fn: "sum", field: "grand_total_minor", as: "toplam_grand_total_minor" }] });
+  assert.deepEqual(builder.reportViewRequest(mixed, false), { hiddenColumns: ["code"], extraColumns: ["project_id"] });
+  assert.deepEqual(builder.reportViewRequest(mixed, true), { hiddenColumns: ["code"], extraAggregates: [{ fn: "sum", field: "grand_total_minor", as: "toplam_grand_total_minor" }] });
+
+  // Alansız toplam (sayım dışında) sunucuya gitmez.
+  assert.deepEqual(builder.reportViewAddAggregate(builder.reportViewDraft(null), "sum", ""), builder.reportViewDraft(null));
+  assert.deepEqual(builder.reportViewAddAggregate(builder.reportViewDraft(null), "count", "").extraAggregates, [{ fn: "count", field: "", as: "adet" }]);
+
+  // Seçicide iki kip iki ayrı daldır; kullanıcıya yalnız kendi kipi gösterilir.
+  const groupedBranch = section(viewPicker, "(grouped", ": addable.length > 0 &&");
+  const flatBranch = section(viewPicker, ": addable.length > 0 &&", "!grouped && !addable.length");
+  assert.match(groupedBranch, /Toplam ekle/);
+  assert.doesNotMatch(groupedBranch, /Sütun ekle|addable/, "gruplu raporda sütun ekleme sunulmaz");
+  assert.match(flatBranch, /Sütun ekle/);
+  assert.doesNotMatch(flatBranch, /Toplam ekle|numericColumns/, "düz listede toplam ekleme sunulmaz");
+  // Toplama işlevleri kurucuyla aynı sözlükten; beşi de var.
+  assert.match(groupedBranch, /Object\.entries\(reportAggregateLabels\)/);
+  for (const fn of ["count", "sum", "avg", "min", "max"]) assert.match(reportScreen, new RegExp(`\\b${fn}: "`), `${fn} toplaması listelenmeli`);
+  // Sayım alan istemez; diğerleri alansız eklenemez.
+  assert.match(groupedBranch, /disabled=\{aggregate\.fn === "count"\}/);
+  assert.match(groupedBranch, /disabled=\{aggregate\.fn !== "count" && !aggregate\.field\}/);
+
+  // Eklenebilecek sütunlar alan kataloğundan gelir, listede olanlar düşülür.
+  assert.match(reportScreen, /const builtinAddableColumns = builtinResourceColumns\.filter\(\(item\) => !builtinViewColumns\.includes\(item\.key\)\)/);
+  assert.match(reportScreen, /const builtinResourceColumns = builtinOpen \? catalog\.resources\.find\(\(item\) => item\.resource === previewResource\)\?\.columns \|\| \[\] : \[\]/);
+  assert.match(reportScreen, /const builtinNumericColumns = builtinResourceColumns\.filter\(\(item\) => reportNumericTypes\.has\(item\.type\)\)/);
+});
+
+test("önizleme isteği builtinReportId ile görünümü taşır; kayıtlı ve kurucu raporda görünüm gönderilmez", () => {
+  // Hazır rapor yolu: kimlik + görünüm.
+  const effect = section(reportScreen, "const ticket = previewTicket.current + 1", "}, [definitionKey, online]);");
+  assert.match(effect, /api\.runBuiltinReport\(builtinOpen\.id, \{ preview: true, view: builtinView \}\)/);
+  assert.match(reportScreen, /const builtinView = builtinOpen \? reportViewRequest\(viewDraft, builtinGrouped\) : undefined;/);
+  // Gizlenen sütun tanımı değiştirmediği için önizleme anahtarı görünümü de
+  // içermeli; yoksa sütun gizlendiğinde ekran hiç tazelenmez.
+  assert.match(reportScreen, /const definitionKey = `\$\{builtinOpen\?\.id \|\| ""\}\|\$\{JSON\.stringify\(requestDefinition\)\}\|\$\{JSON\.stringify\(builtinView\)\}`/);
+  // Mevcut gecikme ve yarış koruması aynen kullanılır; ikinci bir yol açılmaz.
+  assert.match(effect, /setTimeout\(\(\) => \{/);
+  assert.match(effect, /if \(previewTicket\.current !== ticket\) return;/);
+  assert.equal((reportScreen.match(/api\.runBuiltinReport\(/g) || []).length, 1, "hazır rapor tek yerden çalıştırılmalı");
+
+  // Sözleşme: `savedReportId` ve gövdeden gelen tanım yollarında görünüm 422.
+  assert.doesNotMatch(flatRunApi, /\bview\b/, "kurucu yolunda görünüm gönderilmez");
+  assert.doesNotMatch(savedExportApi, /\bview\b/, "kayıtlı rapor dökümünde görünüm gönderilmez");
+  assert.match(reportScreen, /api\.runReport\(requestDefinition, \{ preview: true \}\)/);
+
+  // İstemci "gönderilmedi" ile "null gönderildi" arasındaki farkı korur:
+  // biri kayıtlı görünümü uygular, öbürü onu yok sayar.
+  const run = section(reportApi, "async runBuiltinReport(", "async savedReports()");
+  assert.match(run, /view === undefined/);
+  assert.match(run, /body: \{ builtinReportId, preview, view \}/);
+});
+
+test("CSV dökümü de ekrandaki görünümü taşır", () => {
+  const download = section(reportScreen, "async function downloadCsv(report)", "// Alan kataloğu gelmeden");
+  assert.match(download, /const exportView = builtin \? reportViewRequest\(viewDraft, Boolean\(builtin\.definition\?\.group\)\) : undefined;/);
+  assert.match(download, /api\.exportBuiltinReport\(builtin\.id, \{ view: exportView \}\)/);
+  // Başlık da görünüm uygulanmış tanımdan okunur; eklenen toplam dosyada ham
+  // takma adıyla çıkmamalı.
+  assert.match(download, /const headerDefinition = builtin \? reportViewDefinition\(definition, exportView\) : definition;/);
+  assert.match(download, /const csv = buildReportCsv\(columns, rows, \(column\) => reportHeaderLabel\(resource, headerDefinition, column\)\)/);
+  // Kırpılma uyarısı ve CSV üreticisi aynen; ikinci bir yol açılmadı.
+  assert.match(download, /result\.meta\?\.truncated/);
+  assert.equal((reportScreen.match(/const csv = buildReportCsv\(/g) || []).length, 1);
+
+  // Eklenen toplam tanıma katılınca başlık Türkçeleşir.
+  const definition = { resource: "offers", group: { by: ["status"], aggregates: [{ fn: "count", as: "adet" }] } };
+  const merged = builder.reportViewDefinition(definition, { extraAggregates: [{ fn: "avg", field: "grand_total_minor", as: "ortalama_grand_total_minor" }] });
+  assert.equal(helpers.reportHeaderLabel("offers", merged, { key: "ortalama_grand_total_minor", type: "money" }), "Ortalama · Tutar");
+  // Ek sütun tanıma katılır ama gizleme tanıma dokunmaz: gruplama aynen kalır,
+  // yoksa satırlar birleşir ve rakamlar sessizce değişir.
+  assert.deepEqual(builder.reportViewDefinition(definition, { extraAggregates: [] }).group.by, ["status"]);
+  assert.deepEqual(builder.reportViewDefinition({ resource: "offers", columns: ["code"] }, { extraColumns: ["status"] }).columns, ["code", "status"]);
+  assert.deepEqual(builder.reportViewDefinition({ resource: "offers", columns: ["code", "status"] }, { hiddenColumns: ["status"] }).columns, ["code", "status"]);
+});
+
+test("son sütun gizlenemez, sebebi Türkçe söylenir", () => {
+  const columns = ["code", "status"];
+  const first = builder.reportViewToggleColumn(builder.reportViewDraft(null), "status", columns);
+  assert.deepEqual(first.view.hiddenColumns, ["status"]);
+  assert.equal(first.problem, null);
+
+  // Kalan tek sütun gizlenmez; görünüm değişmez ve sebep yazılır.
+  const last = builder.reportViewToggleColumn(first.view, "code", columns);
+  assert.deepEqual(last.view, first.view, "reddedilen gizleme görünümü değiştirmemeli");
+  assert.equal(last.problem, builder.REPORT_VIEW_LAST_COLUMN_NOTE);
+  assert.match(last.problem, /En az bir sütun görünmeli/);
+
+  // Gizli sütunu geri açmak her zaman serbest.
+  assert.deepEqual(builder.reportViewToggleColumn(first.view, "status", columns).view.hiddenColumns, []);
+
+  // Kişinin kendi eklediği sütun gizlenmez, listeden çıkarılır.
+  const added = builder.reportViewAddColumn(builder.reportViewDraft(null), "project_id");
+  const removed = builder.reportViewToggleColumn(added, "project_id", ["code", "project_id"]);
+  assert.deepEqual(removed.view.extraColumns, []);
+  assert.deepEqual(removed.view.hiddenColumns, []);
+  // Ek toplam da aynı kapıdan kalkar.
+  const withAggregate = builder.reportViewAddAggregate(builder.reportViewDraft(null), "sum", "grand_total_minor", ["status"]);
+  assert.deepEqual(builder.reportViewToggleColumn(withAggregate, "toplam_grand_total_minor", ["status", "toplam_grand_total_minor"]).view.extraAggregates, []);
+
+  // Sebep ekranda kullanıcıya gösterilir; sessizce yutulmaz.
+  assert.match(reportScreen, /setViewState\(\(current\) => \(\{ \.\.\.current, problem: next\.problem, notice: null \}\)\)/);
+  assert.match(viewPicker, /\{state\.problem && <p className="live-report-hint danger">\{state\.problem\}<\/p>\}/);
+
+  // Gizlenen sütun seçicide kalır; yoksa geri getirilemezdi.
+  assert.deepEqual(builder.reportViewColumns({ resource: "offers", columns: ["code", "status"] }, builder.reportViewDraft({ hiddenColumns: ["status"] })), ["code", "status"]);
+  assert.deepEqual(builder.reportViewColumns({ group: { by: ["status"], aggregates: [{ fn: "count", as: "adet" }] } }, builder.reportViewDraft({ extraAggregates: [{ fn: "avg", field: "grand_total_minor", as: "ort" }] })), ["status", "adet", "ort"]);
+});
+
+test("/reports/builtin yanıtındaki görünüm açılışta uygulanır, Varsayılana dön temizler", () => {
+  assert.match(reportScreen, /api\.reportViews\(\)\.then\(\(\{ data \}\) => setViews\(\{ loading: false, rows: data, error: null \}\)\)/);
+  assert.match(reportScreen, /useEffect\(\(\) => \{ loadBuiltins\(\); loadCatalog\(\); loadSaved\(\); loadViews\(\);/);
+  assert.match(viewApi, /async reportViews\(\)/);
+  assert.match(viewApi, /async saveReportView\(values, \{ id = null \} = \{\}\)/);
+  assert.match(viewApi, /async deleteReportView\(id\)/);
+  assert.match(viewApi, /builtin_id: values\.builtinId, view_json: values\.view/);
+  assert.doesNotMatch(viewApi, /JSON\.stringify/, "view_json sunucuda JSON sütunu; ikinci kez metne çevrilmez");
+  assert.match(apiSource, /reportViews: "\/report-views"/);
+
+  // Açılış: kayıt defterindeki satır ya da /reports/builtin yanıtındaki görünüm
+  // kendiliğinden uygulanır ve kaydedilmemiş sayılmaz.
+  const open = section(reportScreen, "function openBuiltin(report) {", "\n  }\n") + "\n  }";
+  const calls = {};
+  const set = (name) => (value) => { calls[name] = value; };
+  const make = new Function("setActiveBuiltin", "setExportNotice", "views", "reportViewOf", "reportViewDraft", "setViewDraft", "reportViewKey", "setViewBaseline", "setViewState", "previewRef", "draftKey", `${open}\nreturn openBuiltin;`);
+  const openBuiltin = make(set("active"), set("exportNotice"), { rows: [] }, builder.reportViewOf, builder.reportViewDraft, set("draft"), builder.reportViewKey, set("baseline"), set("state"), { current: null }, "taslak");
+  openBuiltin({ id: "offer-conversion", definition: { resource: "offers", columns: ["code", "paid_total_minor"] }, view: { hiddenColumns: ["paid_total_minor"] } });
+  assert.deepEqual(calls.draft.hiddenColumns, ["paid_total_minor"], "sunucudaki görünüm açılışta uygulanmalı");
+  assert.equal(calls.baseline, JSON.stringify({ hiddenColumns: ["paid_total_minor"] }), "açılışta kaydedilmemiş değişiklik olmamalı");
+  assert.equal(calls.active.report.id, "offer-conversion");
+
+  // Görünümü olmayan rapor varsayılanıyla açılır.
+  openBuiltin({ id: "offer-conversion", definition: { resource: "offers", columns: ["code"] }, view: null });
+  assert.deepEqual(calls.draft, builder.emptyReportView);
+  assert.equal(calls.baseline, "null");
+
+  // Kaydetme: kayıt varsa güncellenir (tekil indeks), yoksa açılır.
+  const save = section(reportScreen, "async function saveBuiltinView()", "async function resetBuiltinView()");
+  assert.match(save, /api\.saveReportView\(\{ builtinId: builtinOpen\.id, view: builtinView \}, \{ id: viewRow\?\.id \|\| null \}\)/);
+  assert.match(save, /if \(!builtinView\) \{ resetBuiltinView\(\); return; \}/, "fark kalmadıysa kayıt silinir");
+  assert.match(save, /setViewBaseline\(JSON\.stringify\(builtinView\)\)/);
+
+  // Varsayılana dön: kayıt silinir, taslak ve karşılaştırma anahtarı sıfırlanır.
+  const reset = section(reportScreen, "async function resetBuiltinView()", "async function saveReport()");
+  assert.match(reset, /await api\.deleteReportView\(viewRow\.id\)/);
+  assert.match(reset, /setViewDraft\(reportViewDraft\(null\)\)/);
+  assert.match(reset, /setViewBaseline\("null"\)/);
+  assert.match(reset, /Rapor ilk hâline döndü/);
+
+  // Kaydedilmemiş değişiklik kullanıcıya belli edilir.
+  assert.match(reportScreen, /const viewDirty = Boolean\(builtinOpen\) && JSON\.stringify\(builtinView\) !== viewBaseline;/);
+  assert.match(viewPicker, /\{dirty && !ignored \? " · kaydedilmemiş değişiklik" : ""\}/);
+  assert.match(viewPicker, /kaydetmezseniz rapor bir dahakine eski görünümüyle açılır/);
+  assert.match(viewPicker, /Bu görünümü kaydet/);
+  assert.match(viewPicker, /Varsayılana dön/);
+  // Uyarlanmış görünüm listede de belli olur.
+  assert.match(builtinCard, /\{report\.view && <em>/);
+});
+
+test("sütun seçici yalnız hazır raporda çıkar ve 390 pikselde taşmaz", () => {
+  // Kendi kaydettiğiniz raporlarda seçici yok: sütunlar zaten kurucudan seçiliyor.
+  assert.match(reportScreen, /\{builtinOpen && <ReportViewPicker key=\{builtinOpen\.id\} items=\{builtinViewItems\}/);
+  assert.equal((reportScreen.match(/<ReportViewPicker/g) || []).length, 1);
+  assert.doesNotMatch(section(reportScreen, '<small>RAPOR KURUCUSU</small>', "live-report-preview-panel"), /ReportViewPicker/);
+  // Hazır rapor bölümündeki kartlar ve önizleme eylemleri değişmedi.
+  assert.doesNotMatch(builtinActions, /ReportViewPicker/);
+
+  // Etiketler mevcut Türkçe katmandan gelir; ham sütun adı yalnız ipucunda.
+  assert.match(reportScreen, /label: previewColumnLabel\(\{ key \}\)/);
+  assert.match(viewPicker, /<b title=\{item\.key\}>\{item\.label\}<\/b>/);
+
+  // Dar ekranda kutular tek sütuna iner (live-multi-select mobil kuralı) ve
+  // seçici başlığından kapatılabilir.
+  assert.match(viewPicker, /aria-expanded=\{open\}/);
+  assert.match(viewPicker, /<div className="live-multi-select" role="group" aria-label="Gösterilecek sütunlar">/);
+  assert.match(liveStyles, /@media\(max-width:720px\)\{\.live-multi-select\{grid-template-columns:1fr\}/);
+  assert.match(liveStyles, /\.live-report-view\{[^}]*min-width:0/);
+  assert.match(liveStyles, /\.live-report-view-toggle\{[^}]*min-width:0/);
+  assert.match(liveStyles, /\.live-report-view-toggle small\{[^}]*overflow-wrap:anywhere/);
+  const mobileStart = liveStyles.indexOf(".live-report-groups,.live-report-builder{padding:14px");
+  const mobile = liveStyles.slice(mobileStart, liveStyles.indexOf("}\n    @media", mobileStart));
+  assert.match(mobile, /\.live-report-view \.live-report-row\{grid-template-columns:minmax\(0,1fr\)\}/);
+  assert.match(mobile, /\.live-report-view\{margin:14px 16px 0\}/);
+});
+
+// Ek: kayıtlı görünüm yetkiye takılırsa. Kullanıcı bir sütun ekleyip görünümünü
+// kaydettikten sonra o sütunun yetkisi geri alınabilir; sunucu raporu varsayılan
+// hâliyle çalıştırır, tercihi silmez ve durumu `meta.viewIgnored` ile bildirir.
+test("uygulanmayan görünüm Türkçe anlatılır, tercih silinmez", () => {
+  // Alanın varlığına bakılır, değerine değil: ileride başka bir neden kodu gelebilir.
+  assert.match(reportScreen, /const builtinViewIgnored = Boolean\(builtinOpen\) && Boolean\(preview\.meta\?\.viewIgnored\);/);
+  assert.doesNotMatch(reportScreen, /viewIgnored === "|viewIgnored !== "|sensitive_field_forbidden/, "neden koduna göre dallanılmamalı");
+  assert.doesNotMatch(viewPicker, /sensitive_field_forbidden/);
+
+  // Seçici raporun gerçekten dönen sütunlarını gösterir; işaretli ama gelmeyen
+  // sütun kullanıcıya olmayan bir veriyi vaat ederdi.
+  assert.match(reportScreen, /const builtinViewItems = builtinViewIgnored\n\s*\? previewColumns\.map\(\(column\) => \(\{ key: column\.key, label: previewColumnLabel\(column\), hidden: false, extra: false \}\)\)/);
+  assert.match(reportScreen, /ignored=\{builtinViewIgnored\}/);
+
+  // Not Türkçe ve ne olduğunu anlatıyor; ham kod ekrana basılmıyor.
+  assert.match(viewPicker, /\{ignored && <p className="live-report-hint danger">/);
+  assert.match(viewPicker, /görme yetkiniz olmayan bir sütun var; rapor varsayılan hâliyle açıldı/);
+  assert.match(viewPicker, /yetki geri verilirse kendiliğinden yeniden işler/);
+
+  // Tercih kendiliğinden silinmez: bu durumda "Varsayılana dön" çağrılmaz,
+  // yalnız kullanıcı isterse basar. Kaydetme ve düzenleme ise kilitlenir.
+  assert.doesNotMatch(reportScreen, /viewIgnored[\s\S]{0,200}?resetBuiltinView\(\)/, "görünüm kendiliğinden silinmemeli");
+  assert.doesNotMatch(reportScreen, /viewIgnored[\s\S]{0,200}?deleteReportView/);
+  assert.match(viewPicker, /disabled=\{ignored\}/);
+  assert.match(viewPicker, /\{!ignored && \(grouped/);
+  assert.match(viewPicker, /disabled=\{state\.saving \|\| !dirty \|\| ignored\}/);
+  assert.match(viewPicker, /disabled=\{state\.saving \|\| \(!saved && !dirty\)\}/, "vazgeçme yolu açık kalmalı");
 });
