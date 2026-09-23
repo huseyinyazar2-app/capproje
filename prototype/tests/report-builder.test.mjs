@@ -25,8 +25,9 @@ const reportScreen = section(liveSource, "const REPORT_PREVIEW_DELAY_MS", "funct
 // Etiket ve sütun yardımcıları JSX dosyasında yaşıyor, node doğrudan içeri
 // alamıyor. Kaynaktan kesip derlemek, davranışı metin eşleştirmesiyle değil
 // gerçekten çalıştırarak denetlemeyi sağlıyor.
-function loadReportHelpers() {
-  const parts = [
+// Etiket, biçim ve durum sözlükleri: iki yükleyicinin ortak temeli.
+function reportHelperSources() {
+  return [
     // Denetim kaydı kaynak adlarının menü başlığına çevrilmesi `modules`
     // dizisine, o da React bileşenlerine bağlı. Rapor sütunlarında
     // "resourceName" tipi yok; boş sözlük yeterli.
@@ -43,6 +44,11 @@ function loadReportHelpers() {
     section(liveSource, "const enumLabels = {", "// Denetim kaydı modülü"),
     section(liveSource, "const auditActionLabels = {", "// Sunucudaki üst yetki"),
     section(liveSource, "const reportColumnNameFor", "// Sunucu `definition_json`"),
+  ];
+}
+function loadReportHelpers() {
+  const parts = [
+    ...reportHelperSources(),
     section(liveSource, "const reportAggregateLabels = {", "const reportOperatorsFor"),
     section(liveSource, "// Bir rapor hücresinin kullanıcıya görünen metni", "function ReportCard("),
     "return { reportColumnLabel, reportColumnLabels, sharedColumnLabels, humanizeColumnName, collapseReportColumns, reportPresentedValue, reportCellText, reportHeaderLabel, reportCsvField, reportCsvCell, reportCsvSafeText, reportCsvCurrency, buildReportCsv, localizedEnum, formatValue };",
@@ -150,7 +156,7 @@ test("önizleme yenilenirken eski sonuç yerinde kalır ve sönükleşir", () =>
   // Eski veri korunarak yalnız loading işaretlenir; tablo sökülüp yeniden
   // kurulmadığı için ekran zıplamaz.
   assert.match(reportScreen, /setPreview\(\(current\) => \(\{ \.\.\.current, loading: true, error: null, notice: null \}\)\);/);
-  assert.match(reportScreen, /className=\{`live-report-preview \$\{preview\.loading \? "refreshing" : ""\}`\}/);
+  assert.match(reportScreen, /className=\{`live-report-preview [^`]*\$\{preview\.loading \? "refreshing" : ""\}`\}/);
   assert.match(liveStyles, /\.live-report-preview\.refreshing\{opacity:/);
   assert.match(reportScreen, /live-report-refreshing/);
 });
@@ -167,8 +173,10 @@ test("biçimlendirme var olan yardımcılarla yapılır, yeni biçimlendirici ya
     assert.doesNotMatch(source, /minimumFractionDigits|day: "2-digit"/);
   }
 
-  // Kuruş/lira dönüşümü listelerdeki kuralın aynısı olmalı.
-  assert.match(reportLabels, /String\(column\)\.endsWith\("_minor"\)\) return value \/ 100/);
+  // Kuruş/lira dönüşümü sütunun adına değil sunucunun bildirdiği tipe
+  // bağlıdır; gruplu toplamın adı takma addır ve `_minor` ile bitmez.
+  assert.match(reportLabels, /if \(type !== "money" \|\| value == null/);
+  assert.doesNotMatch(reportLabels, /String\(column\)\.endsWith\("_minor"\)/);
   assert.match(apiSource, /if \(key\.endsWith\("_minor"\) && typeof raw === "number"\) mapped = raw \/ 100/);
 });
 
@@ -611,4 +619,353 @@ test("her rapor sütunu Türkçe etikete çözülür, İngilizce yedek kalmaz", 
     }
   }
   assert.deepEqual(missing, [], `Türkçe etiketi olmayan sütunlar:\n${missing.join("\n")}`);
+});
+
+// ——— 2. aşama: hazır raporlar ve göreli tarih ———
+// Kurucunun saf yardımcıları (süzgeç hazırlığı, tanım üretimi, göreli tarih,
+// kategori gruplaması) da kaynaktan kesilip çalıştırılır: sözleşmedeki
+// belirteç biçimi metin eşleştirmesiyle değil, üretilen tanımın kendisiyle
+// denetlenir.
+function loadBuilderHelpers() {
+  const parts = [
+    ...reportHelperSources(),
+    section(liveSource, "const REPORT_PREVIEW_DELAY_MS", "// Sunucu hataları kullanıcıya"),
+    "return { reportExportBusy, reportRelativeRanges, reportRelativeRangeLabels, reportRelativePointOps, reportRelativeToken, reportRelativeDefault, reportRelativeValue, reportRelativeOffset, reportRelativeLabel, reportDraftFilter, reportFilterSummary, reportRequestDefinition, reportFilterReady, reportDefinitionProblem, reportOperatorsByType, reportOperatorLabel, groupBuiltinReports, REPORT_BUILTIN_CATEGORIES, REPORT_RELATIVE_NOTE };",
+  ];
+  return new Function(parts.join("\n"))();
+}
+const builder = loadBuilderHelpers();
+
+// Sözleşmenin (2. aşama, A bölümü) listesi; sıra da aynı.
+const contractRangeNames = ["today", "yesterday", "this_week", "last_week", "this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year", "last_7_days", "last_30_days", "last_90_days", "next_7_days", "next_30_days"];
+const contractCategories = ["Satış", "Proje", "Finans", "Satın Alma", "Üretim", "Montaj", "İnsan Kaynakları"];
+const builtinApi = section(apiSource, "async reportBuiltins()", "async savedReports()");
+const builtinCard = section(liveSource, "function BuiltinReportCard(", "function ReportsView(");
+const builtinActions = section(reportScreen, "const builtinActions = builtinOpen ? <>", "</> : null;");
+const builtinPanel = section(reportScreen, "{!builtinHidden && <section className=\"live-panel\">", "</section>}");
+
+test("hazır raporlar /reports/builtin'den yüklenir ve sabit kategori sırasıyla gruplanır", () => {
+  assert.match(apiSource, /reportBuiltins: "\/reports\/builtin"/);
+  assert.match(builtinApi, /async reportBuiltins\(\) \{\n\s*const result = await request\(API_CONFIG\.endpoints\.reportBuiltins\);/);
+  assert.doesNotMatch(builtinApi, /mapOutgoing|mapIncoming/, "hazır rapor tanımı snake_case kalmalı");
+  assert.match(reportScreen, /api\.reportBuiltins\(\)\.then\(\(\{ data \}\) => setBuiltins\(\{ loading: false, rows: data, error: null \}\)\)/);
+  assert.match(reportScreen, /useEffect\(\(\) => \{ loadBuiltins\(\); loadCatalog\(\); loadSaved\(\);/);
+
+  // Kategori sırası sözleşmedeki yedi addır, sunucunun sırasına bağlı değildir.
+  assert.deepEqual([...builder.REPORT_BUILTIN_CATEGORIES], contractCategories);
+  const rows = [
+    { id: "hr-1", category: "İnsan Kaynakları", name: "İzin" },
+    { id: "fin-1", category: "Finans", name: "Tahsilat" },
+    { id: "sales-1", category: "Satış", name: "Teklif dönüşümü" },
+    { id: "odd-1", category: "Kalite", name: "Bilinmeyen kategori" },
+    { id: "sales-2", category: "Satış", name: "Kaybedilen teklifler" },
+    { id: "prod-1", category: "Üretim", name: "Fire" },
+  ];
+  const groups = builder.groupBuiltinReports(rows);
+  assert.deepEqual(groups.map((group) => group.category), ["Satış", "Finans", "Üretim", "İnsan Kaynakları", "Kalite"]);
+  // Kategori içinde sunucunun sırası korunur; bilinmeyen kategori atılmaz.
+  assert.deepEqual(groups[0].rows.map((row) => row.id), ["sales-1", "sales-2"]);
+  assert.equal(groups.flatMap((group) => group.rows).length, rows.length);
+  // Boş kategori başlığı çizilmez.
+  assert.deepEqual(builder.groupBuiltinReports([]), []);
+
+  // Ekranın en üstünde, kaydedilmiş raporlardan önce.
+  assert.ok(reportScreen.indexOf("<h2>Hazır raporlar</h2>") > 0);
+  assert.ok(reportScreen.indexOf("<h2>Hazır raporlar</h2>") < reportScreen.indexOf("<h2>Kaydedilmiş raporlar</h2>"), "hazır raporlar kaydedilmiş raporlardan önce gelmeli");
+  // Kart ad ve açıklama taşır; kategoriler aynı ızgarayı kullanır.
+  assert.match(builtinPanel, /builtinGroups\.map\(\(group\) => <section key=\{group\.category\}><h3>\{group\.category\}<\/h3>/);
+  assert.match(builtinCard, /<b>\{report\.name\}<\/b>/);
+  assert.match(builtinCard, /\{report\.description && <p>\{report\.description\}<\/p>\}/);
+
+  // Yetkisi hiçbirine yetmiyorsa bölüm hiç çıkmaz; yükleme ve hata ayrı karşılanır.
+  assert.match(reportScreen, /const builtinHidden = !builtins\.loading && \(!builtinGroups\.length \|\| builtins\.error\?\.status === 403/);
+  assert.match(builtinPanel, /builtins\.loading \? <LoadingState \/> : builtins\.error \? <ErrorState error=\{builtins\.error\} retry=\{loadBuiltins\} \/>/);
+});
+
+test("hazır rapor builtinReportId ile önizlenir ve aynı CSV üreticisiyle indirilir", () => {
+  // Sözleşme: definition, savedReportId, builtinReportId alanlarından tam olarak biri.
+  const run = section(reportApi, "async runBuiltinReport(", "async savedReports()");
+  assert.match(run, /async runBuiltinReport\(builtinReportId, \{ preview = false \} = \{\}\)/);
+  assert.match(run, /body: \{ builtinReportId, preview \}/);
+  const exported = section(apiSource, "async exportBuiltinReport(", "async workflow(");
+  assert.match(exported, /body: \{ builtinReportId, export: true \}, timeoutMs: 60000/);
+  for (const source of [run, exported]) assert.doesNotMatch(source, /definition[,}\s]|savedReportId/, "hazır rapor isteği başka bir kaynak taşımamalı");
+
+  // Kart önizlemeyi açar; önizleme kimlikle çalışır, başlık açık raporu yazar.
+  assert.match(builtinCard, /onClick=\{\(\) => onOpen\(report\)\}/);
+  assert.match(reportScreen, /onOpen=\{openBuiltin\}/);
+  const effect = section(reportScreen, "const ticket = previewTicket.current + 1", "}, [definitionKey, online]);");
+  assert.match(effect, /builtinOpen \? api\.runBuiltinReport\(builtinOpen\.id, \{ preview: true \}\) : api\.runReport\(requestDefinition, \{ preview: true \}\)/);
+  assert.match(reportScreen, /const definitionKey = `\$\{builtinOpen\?\.id \|\| ""\}\|/, "hazır rapor açılıp kapanınca önizleme yeniden çalışmalı");
+  assert.match(reportScreen, /<small>HAZIR RAPOR[^\n]*<h2>\{builtinOpen\.name\}<\/h2>/);
+  // Kurucudaki taslak değişince önizleme taslağa döner.
+  assert.match(reportScreen, /const builtinOpen = activeBuiltin && activeBuiltin\.draftKey === draftKey \? activeBuiltin\.report : null;/);
+  // Kaydedilen tanım her zaman taslaktır, önizlenen hazır rapor değil.
+  assert.match(section(reportScreen, "async function saveReport()", "async function removeReport()"), /definition: draftDefinition,/);
+
+  // İndirme: aynı fonksiyon, aynı üretici, aynı kırpılma uyarısı.
+  assert.match(builtinActions, /downloadCsv\(\{ builtinReportId: builtinOpen\.id \}\)/);
+  const download = section(reportScreen, "async function downloadCsv(report)", "// Alan kataloğu gelmeden");
+  assert.match(download, /builtin \? await api\.exportBuiltinReport\(builtin\.id\) : await api\.exportReport\(stored\.id\)/);
+  assert.match(download, /const definition = builtin \? builtin\.definition : reportDefinitionOf\(stored\);/);
+  assert.match(download, /const csv = buildReportCsv\(columns, rows,/);
+  assert.match(download, /result\.meta\?\.truncated/);
+  assert.match(download, /setExportingId\(builtin \? `builtin:\$\{builtin\.id\}` : stored\.id\)/);
+  // İndirme yetkisi kayıtlı rapordakiyle aynı bayraktan okunur.
+  assert.match(builtinActions, /\{canExport && <button/);
+});
+
+test("Kopyala ve düzenle tanımı kurucuya kaydedilmemiş yeni rapor olarak yükler", () => {
+  const copy = section(reportScreen, "function copyBuiltin(report) {", "\n  }\n") + "\n  }";
+  // Fonksiyon bileşenin içinde yaşıyor; durum ayarlayıcıları taklit edilerek
+  // gerçekten çalıştırılır.
+  const calls = {};
+  const set = (name) => (value) => { calls[name] = value; };
+  const run = new Function("setNotice", "setDraft", "draftFromDefinition", "setDirty", "setReportMeta", "emptyReportMeta", "setActiveBuiltin", "setSaveError", "builderRef", `${copy}\nreturn copyBuiltin;`);
+  const emptyReportMeta = { id: null, name: "", description: "", visibility: "private", ownerUserId: null };
+  const copyBuiltin = run(set("notice"), set("draft"), (definition) => ({ fromDefinition: definition }), set("dirty"), set("meta"), emptyReportMeta, set("active"), set("saveError"), { current: null });
+  const definition = { resource: "offers", columns: [], filters: [{ field: "offer_date", op: "between", value: { relative: "this_year" } }], group: { by: ["status"], aggregates: [{ fn: "count", as: "adet" }] } };
+  copyBuiltin({ id: "offer-conversion", category: "Satış", name: "Teklif dönüşümü", description: "Bu yıl verilen teklifler.", definition });
+
+  assert.deepEqual(calls.draft, { fromDefinition: definition }, "tanım kurucuya yüklenmeli");
+  assert.equal(calls.dirty, true, "kopya kaydedilmemiş sayılmalı");
+  assert.equal(calls.meta.id, null, "kopya yeni rapordur, hazır raporun kimliğini taşımaz");
+  assert.equal(calls.meta.ownerUserId, null);
+  assert.equal(calls.meta.visibility, "private");
+  assert.equal(calls.meta.name, "Teklif dönüşümü (kopya)");
+  assert.equal(calls.meta.description, "Bu yıl verilen teklifler.");
+  assert.equal(calls.active, null, "önizleme kurucudaki kopyaya dönmeli");
+  assert.match(calls.notice, /kendi raporunuz olarak kaydedebilirsiniz/);
+
+  // Önizleme başlığındaki düğme bu fonksiyonu çağırır; kayıt yolu kimliksiz
+  // kaydı POST ile yeni rapor olarak oluşturur.
+  assert.match(builtinActions, /onClick=\{\(\) => copyBuiltin\(builtinOpen\)\}><PencilSimple \/> Kopyala ve düzenle<\/button>/);
+  assert.match(reportApi, /const result = id\n\s*\? await request\(`\$\{path\}\/\$\{encodeURIComponent\(id\)\}`, \{ method: "PATCH", body \}\)\n\s*: await request\(path, \{ method: "POST"/);
+});
+
+test("hazır raporda düzenleme ve silme düğmesi yoktur", () => {
+  for (const [name, source] of [["kart", builtinCard], ["önizleme eylemleri", builtinActions], ["hazır rapor bölümü", builtinPanel]]) {
+    assert.doesNotMatch(source, /<Trash|onRemove|setRemoveTarget|deleteReport|saveReport|openSaved/, `${name} silme ya da düzenleme yolu açmamalı`);
+    assert.doesNotMatch(source, />\s*(Sil|Düzenle|Aç|Kaydet)\s*</, `${name} düzenleme/silme düğmesi taşımamalı`);
+  }
+  // Tek düzenleme yolu kopyadır.
+  assert.equal((builtinActions.match(/<button/g) || []).length, 3, "yalnız CSV indir, Kopyala ve düzenle, Kapat");
+  assert.match(builtinActions, /CSV indir/);
+  assert.match(builtinActions, /aria-label="Hazır raporu kapat"/);
+  // Kart tek düğmedir, içinde başka eylem yok.
+  assert.equal((builtinCard.match(/<button/g) || []).length, 1);
+  // Hazır rapor açıkken kayıtlı rapora ait indirme düğmesi ve "kaydedin" notu gizlenir.
+  assert.match(reportScreen, /\{!builtinOpen && canExport && <button/);
+  assert.match(reportScreen, /\{!builtinOpen && <>\{canExport && \(!reportMeta\.id \|\| dirty\) && <p className="live-report-hint">/);
+});
+
+test("göreli tarih seçimi sözleşmedeki belirteç biçimini üretir", () => {
+  const draft = {
+    resource: "offers",
+    columns: ["code"],
+    filters: [
+      { field: "offer_date", op: "between", type: "date", value: { relative: "this_year" } },
+      { field: "valid_until", op: "lt", type: "date", value: { relative: "today", offsetDays: -30 }, offsetDirection: "before" },
+      { field: "valid_until", op: "gte", type: "date", value: { relative: "today", offsetDays: 7 }, offsetDirection: "after" },
+      { field: "created_at", op: "eq", type: "datetime", value: { relative: "today", offsetDays: 0 } },
+      // Sabit tarih ve para süzgeci eskisi gibi kalır.
+      { field: "offer_date", op: "between", type: "date", value: ["2026-01-01", "2026-03-31"] },
+      { field: "subtotal_minor", op: "gte", type: "money", value: "1500" },
+    ],
+    sort: [],
+    group: null,
+    limit: 500,
+  };
+  const definition = builder.reportRequestDefinition(draft);
+  // JSON üzerinden karşılaştırılır: kurucuya ait yardımcı alanlar (yön,
+  // tip) sunucuya sızmamalı, anahtarlar tam olarak sözleşmedekiler olmalı.
+  assert.deepEqual(JSON.parse(JSON.stringify(definition.filters)), [
+    { field: "offer_date", op: "between", value: { relative: "this_year" } },
+    { field: "valid_until", op: "lt", value: { relative: "today", offsetDays: -30 } },
+    { field: "valid_until", op: "gte", value: { relative: "today", offsetDays: 7 } },
+    { field: "created_at", op: "eq", value: { relative: "today", offsetDays: 0 } },
+    { field: "offer_date", op: "between", value: ["2026-01-01", "2026-03-31"] },
+    { field: "subtotal_minor", op: "gte", value: 150000 },
+  ]);
+
+  // Varsayılanlar: aralıkta "Bu ay", noktada "Bugün".
+  assert.deepEqual(builder.reportRelativeDefault("between"), { relative: "this_month" });
+  for (const op of ["eq", "ne", "gt", "gte", "lt", "lte"]) assert.deepEqual(builder.reportRelativeDefault(op), { relative: "today", offsetDays: 0 });
+  assert.deepEqual([...builder.reportRelativePointOps].sort(), ["eq", "gt", "gte", "lt", "lte", "ne"]);
+  // Gün farkı tam sayı ve -3650..3650 aralığında.
+  assert.equal(builder.reportRelativeOffset(7.9), 7);
+  assert.equal(builder.reportRelativeOffset(99999), 3650);
+  assert.equal(builder.reportRelativeOffset(-99999), -3650);
+  assert.equal(builder.reportRelativeOffset("abc"), 0);
+  // Belirteç satırı yarım sayılmaz; sabit tarihte boş uç hâlâ yarımdır.
+  assert.equal(builder.reportFilterReady({ field: "offer_date", op: "between", value: { relative: "last_month" } }), true);
+  assert.equal(builder.reportFilterReady({ field: "offer_date", op: "between", value: ["2026-01-01", ""] }), false);
+
+  // Tarih sütununda nokta işleçlerinin hepsi seçilebilir: hazır raporlar
+  // "şundan önce" gibi işleçler kullanıyor.
+  for (const type of ["date", "datetime"]) {
+    for (const op of ["between", "eq", "ne", "gt", "gte", "lt", "lte"]) assert.ok(builder.reportOperatorsByType[type].includes(op), `${type} ${op} işlecini sunmalı`);
+  }
+  assert.equal(builder.reportOperatorLabel("lt", "date"), "şundan önce");
+  assert.equal(builder.reportOperatorLabel("lt", "money"), "küçüktür");
+
+  // Arayüz: "önce" seçilince gün farkı eksi işaretle gider.
+  assert.match(reportScreen, /offsetDays: direction === "before" \? -magnitude : magnitude/);
+  // Kip değiştirme ve işleç değiştirme belirteç türünü işlece göre seçer.
+  assert.match(reportScreen, /value: relative \? reportRelativeDefault\(item\.op\)/);
+  assert.match(reportScreen, /value: relative \? reportRelativeDefault\(op\)/);
+});
+
+test("15 göreli aralığın hepsi Türkçe, adlar sözleşmeyle birebir", () => {
+  assert.deepEqual(builder.reportRelativeRanges.map(([name]) => name), contractRangeNames);
+  assert.deepEqual(builder.reportRelativeRangeLabels, {
+    today: "Bugün", yesterday: "Dün", this_week: "Bu hafta", last_week: "Geçen hafta",
+    this_month: "Bu ay", last_month: "Geçen ay", this_quarter: "Bu çeyrek", last_quarter: "Geçen çeyrek",
+    this_year: "Bu yıl", last_year: "Geçen yıl", last_7_days: "Son 7 gün", last_30_days: "Son 30 gün",
+    last_90_days: "Son 90 gün", next_7_days: "Önümüzdeki 7 gün", next_30_days: "Önümüzdeki 30 gün",
+  });
+  for (const name of contractRangeNames) assert.equal(builder.reportRelativeLabel({ relative: name }), builder.reportRelativeRangeLabels[name]);
+  assert.equal(new Set(Object.values(builder.reportRelativeRangeLabels)).size, 15, "iki aralık aynı adı taşımamalı");
+
+  // Nokta belirteci okunur cümleye çevrilir.
+  assert.equal(builder.reportRelativeLabel({ relative: "today", offsetDays: 0 }), "Bugün");
+  assert.equal(builder.reportRelativeLabel({ relative: "today", offsetDays: 7 }), "Bugünden 7 gün sonra");
+  assert.equal(builder.reportRelativeLabel({ relative: "today", offsetDays: -30 }), "Bugünden 30 gün önce");
+
+  // Süzgeç özeti belirteci Türkçe yazar; ham ad ya da `[object Object]` görünmez.
+  assert.equal(builder.reportFilterSummary("offers", { field: "offer_date", op: "between", value: { relative: "this_year" } }, "date"), "Teklif tarihi: Bu yıl");
+  assert.equal(builder.reportFilterSummary("offers", { field: "offer_date", op: "lt", value: { relative: "today", offsetDays: -30 } }, "date"), "Teklif tarihi şundan önce: Bugünden 30 gün önce");
+  assert.equal(builder.reportFilterSummary("offers", { field: "offer_date", op: "between", value: ["2026-01-01", "2026-03-31"] }, "date"), "Teklif tarihi: 01.01.2026 – 31.03.2026");
+  for (const name of contractRangeNames) {
+    const text = builder.reportFilterSummary("offers", { field: "offer_date", op: "between", value: { relative: name } }, "date");
+    assert.doesNotMatch(text, /object|relative|_/, `özet ham kalmış: ${text}`);
+  }
+  // Önizlemede özet ve "her çalıştırıldığında yeniden hesaplanır" notu gösterilir.
+  assert.equal(builder.REPORT_RELATIVE_NOTE, "Göreli tarih raporu her çalıştırıldığında yeniden hesaplanır.");
+  assert.match(reportScreen, /reportFilterSummary\(previewResource, item, typeIn\(previewResource, item\.field\)\)/);
+  assert.match(reportScreen, /\{previewHasRelative && <small>\{REPORT_RELATIVE_NOTE\}<\/small>\}/);
+  assert.match(reportScreen, /\{token && <small className="live-report-hint">[^\n]*\{REPORT_RELATIVE_NOTE\}/);
+});
+
+test("belirteçli tanım yüklenince kurucu göreli kipte açılır", () => {
+  // Kayıttan ya da hazır rapordan gelen süzgeç satırı taslağa çevrilir.
+  const range = builder.reportDraftFilter({ field: "offer_date", op: "between", value: { relative: "this_year" } }, "date");
+  assert.deepEqual(range.value, { relative: "this_year" });
+  assert.ok(builder.reportRelativeToken(range.value), "taslak göreli kipte olmalı");
+  const before = builder.reportDraftFilter({ field: "valid_until", op: "lt", value: { relative: "today", offsetDays: -30 } }, "date");
+  assert.equal(before.offsetDirection, "before");
+  assert.deepEqual(before.value, { relative: "today", offsetDays: -30 });
+  assert.equal(builder.reportDraftFilter({ field: "valid_until", op: "lte", value: { relative: "today", offsetDays: 7 } }, "date").offsetDirection, "after");
+  // Katalog tipi yanlış bildirse de belirteç kuruşa bölünüp NaN olmaz.
+  assert.deepEqual(builder.reportDraftFilter({ field: "subtotal_minor", op: "between", value: { relative: "this_month" } }, "money").value, { relative: "this_month" });
+  // Sabit değerler eskisi gibi: tarih olduğu gibi, tutar liraya.
+  assert.deepEqual(builder.reportDraftFilter({ field: "offer_date", op: "between", value: ["2026-01-01", "2026-03-31"] }, "date").value, ["2026-01-01", "2026-03-31"]);
+  assert.equal(builder.reportDraftFilter({ field: "subtotal_minor", op: "gte", value: 150000 }, "money").value, 1500);
+  // Gidiş dönüş: yüklenen tanım değişmeden geri kaydedilir.
+  const loaded = [
+    { field: "offer_date", op: "between", value: { relative: "last_quarter" } },
+    { field: "valid_until", op: "lt", value: { relative: "today", offsetDays: -30 } },
+  ];
+  const draft = { resource: "offers", columns: ["code"], filters: loaded.map((item) => builder.reportDraftFilter(item, "date")), sort: [], group: null, limit: 500 };
+  assert.deepEqual(JSON.parse(JSON.stringify(builder.reportRequestDefinition(draft).filters)), loaded);
+
+  // Kurucu bu yardımcıdan geçer; kip değerin kendisinden okunur.
+  assert.match(reportScreen, /filters: \(Array\.isArray\(definition\.filters\) \? definition\.filters : \[\]\)\.map\(\(item\) => reportDraftFilter\(item, typeIn\(definition\.resource, item\.field\)\)\)/);
+  assert.match(reportScreen, /if \(reportDateTypes\.has\(type\) \|\| reportRelativeToken\(item\.value\)\) return dateFilterFields\(/);
+  const dateFields = section(reportScreen, "function dateFilterFields(item, index, type) {", "return <div className=\"live-report-date\">");
+  // Sabit tarih kutuları yalnız belirteç yokken çizilir.
+  assert.ok(dateFields.indexOf("if (!token) {") >= 0 && dateFields.indexOf("if (!token) {") < dateFields.indexOf("valueInput("), "sabit tarih kutusu belirteç dalında olmamalı");
+  assert.match(dateFields, /<select value=\{token\.relative\}/);
+  // Son savunma: nesne hiçbir metin kutusuna yazılmaz.
+  assert.match(reportScreen, /const shown = value != null && typeof value === "object" \? "" : value \?\? "";/);
+  assert.match(reportScreen, /aria-checked=\{Boolean\(token\)\}[^\n]*>Göreli<\/button>/);
+  assert.match(reportScreen, />Sabit tarih<\/button>/);
+});
+
+test("hazır raporlar ve tarih süzgeci 390 pikselde taşmaz", () => {
+  // Kategoriler kayıtlı raporlarla aynı ızgarayı kullanır; mobilde tek sütun.
+  assert.match(builtinPanel, /<div className="live-report-groups">/);
+  const mobileStart = liveStyles.indexOf(".live-report-groups,.live-report-builder{padding:14px");
+  const mobile = liveStyles.slice(mobileStart, liveStyles.indexOf("}\n    @media", mobileStart));
+  assert.match(mobile, /\.live-report-groups>section>div\{grid-template-columns:1fr\}/);
+  // Tarih süzgeci dar ekranda alt alta iner, kaldırma düğmesi sağda kalır.
+  assert.match(mobile, /\.live-report-row>\.live-report-date\{grid-column:1\}|,\.live-report-row>\.live-report-date\{grid-column:1\}/);
+  assert.match(mobile, /\.live-report-date-pair\{grid-template-columns:1fr\}/);
+  // Izgara hücreleri içeriğe göre şişmez; uzun ad ve özet satırı kırılır.
+  assert.match(liveStyles, /\.live-report-date\{[^}]*min-width:0/);
+  assert.match(liveStyles, /\.live-report-date-pair\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+  assert.match(liveStyles, /\.live-report-segment\{[^}]*max-width:100%/);
+  assert.match(liveStyles, /\.live-report-summary>em\{[^}]*overflow-wrap:anywhere/);
+  assert.match(liveStyles, /\.live-report-builtin\{[^}]*width:100%/);
+  assert.match(liveStyles, /\.live-report-card b\{[^}]*overflow-wrap:anywhere/);
+});
+
+// Sunucu gruplu raporda da tutar toplamını kuruş olarak ve `money` tipiyle
+// gönderiyor; yalnız sütunun adı takma addır ("toplam"). Adla karar veren
+// bölme bu sütunu atlıyor ve tutarlar 100 kat büyük görünüyordu.
+test("gruplu raporda tutar toplamı kuruştan liraya çevrilir, karar tipe bağlıdır", () => {
+  const groupedRow = { status: "accepted", adet: 3, toplam: 960000000, ortalama_grand_total_minor: "320000000", currency: "TRY" };
+  const toplam = { key: "toplam", type: "money" };
+  // Ekranda da dosyada da lira.
+  assert.equal(helpers.reportCellText(toplam, groupedRow), "9.600.000 TL");
+  assert.equal(helpers.reportCsvCell(toplam, groupedRow), "9600000,00");
+  // Toplam metin olarak dönse de bölünür.
+  assert.equal(helpers.reportCsvCell({ key: "ortalama_grand_total_minor", type: "money" }, groupedRow), "3200000,00");
+  // Sayım sayıdır, bölünmez.
+  assert.equal(helpers.reportCellText({ key: "adet", type: "number" }, groupedRow), "3");
+  assert.equal(helpers.reportCsvCell({ key: "adet", type: "number" }, groupedRow), "3");
+
+  // Düz liste eskisi gibi doğru.
+  const flat = { grand_total_minor: 960000000, currency: "TRY" };
+  assert.equal(helpers.reportCellText({ key: "grand_total_minor", type: "money" }, flat), "9.600.000 TL");
+  assert.equal(helpers.reportCsvCell({ key: "grand_total_minor", type: "money" }, flat), "9600000,00");
+
+  // Tip esas: adı `_minor` ile bitse de tipi para olmayan sütun bölünmez
+  // (sunucu bugün böyle göndermiyor; gönderirse adla tahmin yürütülmez).
+  assert.equal(helpers.reportCsvCell({ key: "odd_minor", type: "number" }, { odd_minor: 1500 }), "1500");
+  // Boş tutar boş kalır, sıfıra dönmez.
+  assert.equal(helpers.reportCsvCell(toplam, { toplam: null }), "");
+  assert.equal(helpers.reportCellText(toplam, { toplam: null }), "—");
+
+  // Dosyanın tamamı: başlık birimli, hücre lira, sayım bölünmemiş.
+  const definition = { group: { by: ["status"], aggregates: [{ fn: "count", as: "adet" }, { fn: "sum", field: "grand_total_minor", as: "toplam" }] } };
+  const csv = helpers.buildReportCsv([{ key: "status", type: "status" }, { key: "adet", type: "number" }, toplam], [groupedRow], (column) => helpers.reportHeaderLabel("offers", definition, column));
+  const lines = csv.replace(/^\ufeff/, "").split("\r\n");
+  assert.match(lines[0], /"Adet","Toplam · [^"]+ \(TL\)"$/);
+  assert.equal(lines[1].split(",").slice(1).join(","), '"3","9600000,00"');
+
+  // Süzgeçte de aynı kural: lira yazılır, kuruş gider; kuruş gelir, lira gösterilir.
+  assert.deepEqual(builder.reportRequestDefinition({ resource: "offers", columns: ["code"], filters: [{ field: "grand_total_minor", op: "gte", type: "money", value: "1500" }], sort: [], group: null, limit: 500 }).filters[0].value, 150000);
+  assert.equal(builder.reportDraftFilter({ field: "grand_total_minor", op: "gte", value: 150000 }, "money").value, 1500);
+  assert.equal(builder.reportDraftFilter({ field: "odd_minor", op: "gte", value: 1500 }, "number").value, 1500);
+});
+
+test("kaydedilmemiş raporda indirme düğmesi Hazırlanıyor yazmaz", () => {
+  // Boştayken kimliksiz rapor: null === null bekleme sanılmamalı.
+  assert.equal(builder.reportExportBusy(null, null), false);
+  assert.equal(builder.reportExportBusy(null, undefined), false);
+  assert.equal(builder.reportExportBusy(undefined, undefined), false);
+  assert.equal(builder.reportExportBusy(null, "rep_1"), false);
+  // Başka bir raporun indirmesi sürerken de bu rapor beklemede değildir.
+  assert.equal(builder.reportExportBusy("rep_2", "rep_1"), false);
+  assert.equal(builder.reportExportBusy("builtin:offer-conversion", null), false);
+  // Yalnız gerçekten bu rapor indirilirken.
+  assert.equal(builder.reportExportBusy("rep_1", "rep_1"), true);
+  assert.equal(builder.reportExportBusy("builtin:offer-conversion", "builtin:offer-conversion"), true);
+
+  // Önizleme başlığındaki iki indirme düğmesi de bu yardımcıdan okur; yalın
+  // karşılaştırma geri gelmesin.
+  assert.match(reportScreen, /\{reportExportBusy\(exportingId, reportMeta\.id\) \? <><span className="live-spinner small" \/> Hazırlanıyor…<\/>/);
+  assert.match(builtinActions, /\{reportExportBusy\(exportingId, builtinExportKey\) \? <><span className="live-spinner small" \/> Hazırlanıyor…<\/>/);
+  assert.doesNotMatch(reportScreen, /exportingId === reportMeta\.id|exportingId === builtinExportKey/);
+});
+
+test("az sütunlu rapor telefonda ekrana sığar, geniş liste kutusunda kayar", async () => {
+  const source = await readFile(new URL("../src/LiveWorkspace.jsx", import.meta.url), "utf8");
+  // Tabloların 820 px alt sınırı gruplu raporun tutar sütununu telefonda ekran
+  // dışına itiyordu. Sınır yalnız az sütunlu raporda kalkar; geniş liste yine
+  // kendi kutusunda kayar, sayfa taşmaz.
+  assert.match(source, /previewColumns\.length <= 4 \? "compact" : ""/);
+  assert.match(source, /\.live-report-preview\.compact \.live-table\{min-width:0\}/);
+  assert.doesNotMatch(source, /\.live-report-preview \.live-table\{min-width:0\}/, "sınır bütün raporlarda kaldırılmamalı");
 });

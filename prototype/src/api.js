@@ -62,6 +62,7 @@ export const API_CONFIG = Object.freeze({
     savedReports: "/saved-reports",
     reportFields: "/reports/fields",
     reportRun: "/reports/run",
+    reportBuiltins: "/reports/builtin",
   }),
 });
 
@@ -793,6 +794,23 @@ export const api = {
     const payload = result.data || {};
     return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
   },
+  // Hazır raporlar kodda tanımlı katalogdan gelir; sunucu yalnız kullanıcının
+  // çalıştırabildiklerini listeler. Tanım yanıtta dursa da çalıştırırken geri
+  // gönderilmez, kimlikle istenir: sunucu kendi katalog sürümünü çalıştırır ve
+  // denetim kaydına `builtin:<id>` yazar. Tanımı gövdede yollamak, istemcide
+  // değiştirilmiş bir tanımı hazır rapor adıyla çalıştırtmanın kapısını açardı.
+  async reportBuiltins() {
+    const result = await request(API_CONFIG.endpoints.reportBuiltins);
+    return { data: Array.isArray(result.data) ? result.data : [], meta: result.meta || null };
+  },
+  // Sözleşme `definition`, `savedReportId`, `builtinReportId` alanlarından tam
+  // olarak birini ister; ayrı fonksiyon, iki kaynağın aynı gövdeye yanlışlıkla
+  // birlikte konmasını imkânsız kılar.
+  async runBuiltinReport(builtinReportId, { preview = false } = {}) {
+    const result = await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { builtinReportId, preview } });
+    const payload = result.data || {};
+    return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
+  },
   async savedReports() {
     const result = await request(API_CONFIG.endpoints.savedReports);
     const rows = Array.isArray(result.data) ? result.data : result.data?.items || [];
@@ -829,6 +847,13 @@ export const api = {
     // Tam döküm önizlemeden çok daha fazla satır tarar; 15 saniyelik genel
     // zaman aşımı burada kullanıcının hazırladığı dosyayı boşuna iptal eder.
     const result = await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { savedReportId, export: true }, timeoutMs: 60000 });
+    const payload = result.data || {};
+    return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
+  },
+  // Hazır raporun dökümü: kayıtlı raporla aynı yetki, aynı denetim kaydı, aynı
+  // satır tavanı; yalnız tanım katalogdan okunur.
+  async exportBuiltinReport(builtinReportId) {
+    const result = await request(API_CONFIG.endpoints.reportRun, { method: "POST", body: { builtinReportId, export: true }, timeoutMs: 60000 });
     const payload = result.data || {};
     return { data: { columns: payload.columns || [], rows: payload.rows || [] }, meta: result.meta || null };
   },

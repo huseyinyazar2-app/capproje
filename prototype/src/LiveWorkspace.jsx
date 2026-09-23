@@ -864,11 +864,17 @@ function reportColumnLabel(slug, column) {
   return reportColumnLabels[slug]?.[column] || sharedColumnLabels[column] || humanizeColumnName(column);
 }
 
-// Para sütunları kuruş olarak gelir; listelerde mapIncoming aynı bölmeyi yapıyor,
-// formatValue ise lira bekliyor.
+// Para sütunları kuruş olarak gelir, formatValue ise lira bekliyor. Karar
+// sütunun adına değil sunucunun bildirdiği tipe bağlıdır: gruplu raporda
+// toplamın adı kullanıcının takma adıdır ("toplam"), `_minor` ile bitmez; adla
+// karar verildiğinde tutar toplamları 100 kat büyük görünüyordu. Sunucu `money`
+// tipini yalnız kuruş sütunlarına ve onların sum/avg/min/max toplamlarına
+// veriyor; `count` sayıdır ve bölünmez. SQLite toplamı metin olarak da
+// dönebildiği için sayıya çevrilebilen metin de bölünür.
 function reportCellValue(column, value, type) {
-  if (type === "money" && typeof value === "number" && String(column).endsWith("_minor")) return value / 100;
-  return value;
+  if (type !== "money" || value == null || value === "" || typeof value === "boolean") return value;
+  const minor = Number(value);
+  return Number.isFinite(minor) ? minor / 100 : value;
 }
 
 // Sunucu bağlı kaydın adını `X_name` olarak kimliğin yanına ekliyor
@@ -1597,8 +1603,11 @@ const reportOperatorLabels = {
 const reportOperatorsByType = {
   text: ["contains", "starts", "eq", "ne", "in", "empty", "not_empty"],
   status: ["eq", "ne", "in", "empty", "not_empty"],
-  date: ["between", "eq", "gte", "lte", "empty", "not_empty"],
-  datetime: ["between", "eq", "gte", "lte", "empty", "not_empty"],
+  // Tarihte "şundan önce/sonra" da gerekiyor: "vadesi bugünden önce" gibi göreli
+  // süzgeçler ve hazır raporlar bu işleçleri kullanıyor. Listede olmayan işleçle
+  // yüklenen bir tanım seçim kutusunda yanlış işleç gösterirdi.
+  date: ["between", "eq", "ne", "gt", "gte", "lt", "lte", "empty", "not_empty"],
+  datetime: ["between", "eq", "ne", "gt", "gte", "lt", "lte", "empty", "not_empty"],
   money: ["gte", "lte", "between", "eq", "gt", "lt", "empty", "not_empty"],
   number: ["gte", "lte", "between", "eq", "gt", "lt", "empty", "not_empty"],
   percent: ["gte", "lte", "between", "eq", "gt", "lt", "empty", "not_empty"],
@@ -1611,19 +1620,125 @@ const reportOperatorsFor = (type) => reportOperatorsByType[type] || reportOperat
 const emptyReportDraft = { resource: "", columns: [], filters: [], sort: [], group: null, limit: 500 };
 const emptyReportMeta = { id: null, name: "", description: "", visibility: "private", ownerUserId: null };
 
+// Göreli tarih. Kaydedilmiş raporda "1–30 Eylül" yazarsa rapor ekimde işe
+// yaramaz; tanım sabit tarih yerine bir belirteç taşır ve sunucu onu her
+// çalıştırmada İstanbul saatine göre çözer. İstemci tarihi hiç hesaplamaz:
+// tarayıcının saati ve saat dilimi sunucununkiyle aynı olmak zorunda değil.
+// Adlar sözleşmedekilerle birebir; sıra, seçim listesinde görünecek sıradır.
+const reportRelativeRanges = [
+  ["today", "Bugün"], ["yesterday", "Dün"], ["this_week", "Bu hafta"], ["last_week", "Geçen hafta"],
+  ["this_month", "Bu ay"], ["last_month", "Geçen ay"], ["this_quarter", "Bu çeyrek"], ["last_quarter", "Geçen çeyrek"],
+  ["this_year", "Bu yıl"], ["last_year", "Geçen yıl"], ["last_7_days", "Son 7 gün"], ["last_30_days", "Son 30 gün"],
+  ["last_90_days", "Son 90 gün"], ["next_7_days", "Önümüzdeki 7 gün"], ["next_30_days", "Önümüzdeki 30 gün"],
+];
+const reportRelativeRangeLabels = Object.fromEntries(reportRelativeRanges);
+// Aralık belirteci yalnız `between` ile, nokta belirteci ("bugün ± N gün")
+// yalnız karşılaştırma işleçleriyle geçerli; sunucu diğer eşleşmeyi 422 ile reddeder.
+const reportRelativePointOps = new Set(["eq", "ne", "gt", "gte", "lt", "lte"]);
+const REPORT_RELATIVE_MAX_OFFSET = 3650;
+const reportDateTypes = new Set(["date", "datetime"]);
+const REPORT_RELATIVE_NOTE = "Göreli tarih raporu her çalıştırıldığında yeniden hesaplanır.";
+// Tarihte "küçüktür/büyüktür" kimseye bir şey anlatmaz; aynı işleç tarih
+// sütununda zamanla konuşur. Kurucudaki seçim kutusu da özet de buradan okur.
+const reportDateOperatorLabels = { eq: "şu gün", ne: "şu gün dışında", gt: "şundan sonra", gte: "şu gün veya sonra", lt: "şundan önce", lte: "şu gün veya önce" };
+const reportOperatorLabel = (op, type) => (reportDateTypes.has(type) && reportDateOperatorLabels[op]) || reportOperatorLabels[op] || op;
+
+function reportRelativeToken(value) {
+  return value && typeof value === "object" && !Array.isArray(value) && typeof value.relative === "string" ? value : null;
+}
+function reportRelativeOffset(value) {
+  const days = Math.trunc(Number(value) || 0);
+  return Math.max(-REPORT_RELATIVE_MAX_OFFSET, Math.min(REPORT_RELATIVE_MAX_OFFSET, days));
+}
+// İşlece uygun varsayılan belirteç: aralıkta "Bu ay", noktada "Bugün".
+function reportRelativeDefault(op) {
+  return op === "between" ? { relative: "this_month" } : { relative: "today", offsetDays: 0 };
+}
+// Sunucuya giden biçim. Ad olduğu gibi geçer: kayıttan gelen bilinmeyen bir adı
+// burada sessizce "Bu ay"a çevirmek raporun anlamını değiştirirdi; sunucu
+// reddeder ve kullanıcı nedenini görür.
+function reportRelativeValue(op, token) {
+  return op === "between" ? { relative: token.relative } : { relative: token.relative, offsetDays: reportRelativeOffset(token.offsetDays) };
+}
+function reportRelativeLabel(token) {
+  if (reportRelativeRangeLabels[token.relative] && token.offsetDays == null) return reportRelativeRangeLabels[token.relative];
+  if (token.relative !== "today") return token.relative;
+  const days = reportRelativeOffset(token.offsetDays);
+  return days === 0 ? "Bugün" : days > 0 ? `Bugünden ${days} gün sonra` : `Bugünden ${-days} gün önce`;
+}
+
+// Kayıttan ya da hazır rapordan gelen süzgeç satırını kurucunun taslağına
+// çevirir. Belirteç nesnesi olduğu gibi korunur ki kurucu göreli kipte açılsın;
+// sabit tarih kutusuna düşseydi `[object Object]` yazardı. Yön ayrıca tutulur:
+// gün sayısı 0'a indiğinde "önce/sonra" seçimi kaybolmasın.
+function reportDraftFilter(item, type) {
+  const token = reportRelativeToken(item.value);
+  if (token && !reportValuelessOps.has(item.op)) {
+    return { field: item.field, op: item.op, type, value: { ...token }, offsetDirection: Number(token.offsetDays) < 0 ? "before" : "after" };
+  }
+  const fromServer = (part) => (reportMoneyColumn(item.field, type) ? Number(part) / 100 : part);
+  const value = reportValuelessOps.has(item.op) ? "" : Array.isArray(item.value) ? item.value.map(fromServer) : fromServer(item.value);
+  return { field: item.field, op: item.op, type, value };
+}
+
+// Süzgecin okunur özeti: "Teklif tarihi: Bu yıl", "Durum: Teklif, Onay".
+// Tanım (sunucu birimi) üzerinde çalışır; böylece kurucudaki taslak da hazır
+// raporun tanımı da aynı cümleyle anlatılır.
+function reportFilterSummary(resource, item, type) {
+  const label = reportColumnLabel(resource, item.field);
+  const opLabel = reportOperatorLabel(item.op, type);
+  if (reportValuelessOps.has(item.op)) return `${label}: ${opLabel}`;
+  const token = reportRelativeToken(item.value);
+  if (token) return item.op === "between" || item.op === "eq" ? `${label}: ${reportRelativeLabel(token)}` : `${label} ${opLabel}: ${reportRelativeLabel(token)}`;
+  const show = (part) => {
+    if (reportMoneyColumn(item.field, type)) return formatValue(Number(part) / 100, "money");
+    if (reportDateTypes.has(type) || reportNumericTypes.has(type)) return formatValue(reportNumericTypes.has(type) ? Number(part) : part, type);
+    return localizedEnum(String(part)) || String(part);
+  };
+  const parts = Array.isArray(item.value) ? item.value : [item.value];
+  if (item.op === "between") return `${label}: ${parts.map(show).join(" – ")}`;
+  if (item.op === "in" || item.op === "eq") return `${label}: ${parts.map(show).join(", ")}`;
+  return `${label} ${opLabel}: ${parts.map(show).join(", ")}`;
+}
+
+// "Hazırlanıyor…" yalnız gerçekten süren bir indirmede. Kaydedilmemiş raporun
+// kimliği yok; yalın `===` karşılaştırması boşta iken null === null ile doğru
+// çıkıyor ve hiç başlamamış bir indirme bekleniyormuş gibi görünüyordu.
+function reportExportBusy(exportingId, key) {
+  return exportingId != null && key != null && exportingId === key;
+}
+
+// Hazır raporların kategori sırası sabittir: müşterinin ekranı her girişte aynı
+// sırayla karşılaması, sunucunun döndürdüğü sıraya bağlı kalmamalı. Listede
+// olmayan bir kategori atılmaz, sona eklenir; rapor sessizce kaybolmasın.
+const REPORT_BUILTIN_CATEGORIES = ["Satış", "Proje", "Finans", "Satın Alma", "Üretim", "Montaj", "İnsan Kaynakları"];
+function groupBuiltinReports(rows) {
+  const groups = new Map(REPORT_BUILTIN_CATEGORIES.map((category) => [category, []]));
+  for (const row of rows) {
+    const category = row.category || "Diğer";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(row);
+  }
+  return [...groups].filter(([, items]) => items.length).map(([category, items]) => ({ category, rows: items }));
+}
+
 // Kuruş/lira dönüşümü listelerdeki mapIncoming ile aynı kuralı izler: sütun adı
 // `_minor` ile bitiyorsa değer kuruştur. Kullanıcı süzgece lira yazar.
-const reportMoneyColumn = (column, type) => type === "money" && String(column).endsWith("_minor");
+// Süzgeçte de aynı kural: tip esas, ad değil (bkz. reportCellValue).
+const reportMoneyColumn = (column, type) => type === "money";
 
 function reportFilterReady(item) {
   if (!item.field || !item.op) return false;
   if (reportValuelessOps.has(item.op)) return true;
+  if (reportRelativeToken(item.value)) return true;
   if (item.op === "between") return Array.isArray(item.value) && item.value.length === 2 && item.value.every((part) => part !== "" && part != null);
   if (item.op === "in") return Array.isArray(item.value) && item.value.length > 0;
   return item.value !== "" && item.value != null;
 }
 
 function reportFilterValue(item) {
+  const token = reportRelativeToken(item.value);
+  if (token) return reportRelativeValue(item.op, token);
   const toServer = (part) => (reportMoneyColumn(item.field, item.type) ? Math.round(Number(part) * 100) : reportNumericTypes.has(item.type) ? Number(part) : part);
   if (item.op === "between") return item.value.map(toServer);
   if (item.op === "in") return item.value.map(toServer);
@@ -1655,14 +1770,16 @@ function reportRequestDefinition(draft) {
 
 // Eksik tanımla sunucuya gitmenin anlamı yok; kullanıcıya neyin eksik olduğu
 // söylenir. Hata değil, yönlendirmedir.
+// Hazır raporun tanımı da buradan geçer ve sunucudan geldiği için dizileri
+// eksik olabilir; eksik dizi çökme değil, eksik bilgi sayılır.
 function reportDefinitionProblem(definition) {
   if (!definition.resource) return "Önce raporun okuyacağı kaynağı seçin.";
   if (definition.group) {
-    if (!definition.group.by.length) return "Gruplamak için en az bir alan seçin.";
-    if (!definition.group.aggregates.length) return "Gruplanmış raporda en az bir toplam sütunu gerekir.";
+    if (!definition.group.by?.length) return "Gruplamak için en az bir alan seçin.";
+    if (!definition.group.aggregates?.length) return "Gruplanmış raporda en az bir toplam sütunu gerekir.";
     return null;
   }
-  if (!definition.columns.length) return "Önizleme için en az bir sütun seçin.";
+  if (!definition.columns?.length) return "Önizleme için en az bir sütun seçin.";
   return null;
 }
 
@@ -1784,9 +1901,25 @@ function ReportCard({ report, mine, ready, canRemove, canExport, busy, exporting
   </article>;
 }
 
+// Hazır rapor kartı: ad ve açıklama, kartın tamamı tek düğme. Düzenleme ve
+// silme düğmesi bilerek yok; katalog kodda yaşar, sahibi yoktur.
+function BuiltinReportCard({ report, active, onOpen }) {
+  return <button type="button" className={`live-report-card live-report-builtin ${active ? "active" : ""}`} aria-pressed={active} onClick={() => onOpen(report)}>
+    <b>{report.name}</b>
+    {report.description && <p>{report.description}</p>}
+  </button>;
+}
+
 function ReportsView({ session, online }) {
   const [catalog, setCatalog] = useState({ loading: true, resources: [], error: null });
   const [saved, setSaved] = useState({ loading: true, rows: [], error: null });
+  const [builtins, setBuiltins] = useState({ loading: true, rows: [], error: null });
+  // Önizlemede açık hazır rapor ve açıldığı andaki taslak. Kurucuda bir şey
+  // değişince önizleme kullanıcının üzerinde çalıştığı taslağa döner; hazır
+  // raporun sonucu, az önce değiştirdiği tanımın sonucuymuş gibi durmamalı.
+  const [activeBuiltin, setActiveBuiltin] = useState(null);
+  const builderRef = useRef(null);
+  const previewRef = useRef(null);
   const [draft, setDraft] = useState(emptyReportDraft);
   const [reportMeta, setReportMeta] = useState(emptyReportMeta);
   const [preview, setPreview] = useState({ loading: false, data: null, meta: null, error: null, notice: "Önce raporun okuyacağı kaynağı seçin." });
@@ -1821,7 +1954,11 @@ function ReportsView({ session, online }) {
     setSaved((current) => ({ ...current, loading: true, error: null }));
     api.savedReports().then(({ data }) => setSaved({ loading: false, rows: data, error: null })).catch((error) => setSaved({ loading: false, rows: [], error }));
   };
-  useEffect(() => { loadCatalog(); loadSaved(); }, [session?.tenant?.id]);
+  const loadBuiltins = () => {
+    setBuiltins((current) => ({ ...current, loading: true, error: null }));
+    api.reportBuiltins().then(({ data }) => setBuiltins({ loading: false, rows: data, error: null })).catch((error) => setBuiltins({ loading: false, rows: [], error }));
+  };
+  useEffect(() => { loadBuiltins(); loadCatalog(); loadSaved(); setActiveBuiltin(null); }, [session?.tenant?.id]);
 
   const activeResource = catalog.resources.find((item) => item.resource === draft.resource) || null;
   const resourceColumns = activeResource?.columns || [];
@@ -1835,9 +1972,18 @@ function ReportsView({ session, online }) {
   const choicesFor = (key) => (resourceColumns.find((item) => item.key === key)?.values || []).map((value) => ({ value, label: localizedEnum(value) }));
   const operatorsForColumn = (key, type) => reportOperatorsFor(choicesFor(key).length ? "status" : type);
   const columnLabel = (key) => reportColumnLabel(draft.resource, key);
+  const typeIn = (resource, key) => catalog.resources.find((item) => item.resource === resource)?.columns.find((item) => item.key === key)?.type || "text";
 
-  const requestDefinition = useMemo(() => reportRequestDefinition(draft), [draft]);
-  const definitionKey = JSON.stringify(requestDefinition);
+  // Kurucudaki taslağın tanımı: kaydedilen de indirilen de budur.
+  const draftDefinition = useMemo(() => reportRequestDefinition(draft), [draft]);
+  const draftKey = JSON.stringify(draftDefinition);
+  const builtinOpen = activeBuiltin && activeBuiltin.draftKey === draftKey ? activeBuiltin.report : null;
+  useEffect(() => { if (activeBuiltin && !builtinOpen) setActiveBuiltin(null); }, [draftKey]);
+  // Önizlemenin çalıştırdığı tanım: hazır rapor açıksa onunki, değilse taslak.
+  // Başlık, sütun etiketi ve süzgeç özeti de bundan okunur.
+  const requestDefinition = builtinOpen ? builtinOpen.definition || {} : draftDefinition;
+  const previewResource = requestDefinition.resource || draft.resource;
+  const definitionKey = `${builtinOpen?.id || ""}|${JSON.stringify(requestDefinition)}`;
 
   // Canlı önizleme: tanım her değiştiğinde değil, kullanıcı durduğunda çalışır.
   useEffect(() => {
@@ -1856,8 +2002,10 @@ function ReportsView({ session, online }) {
     // Eski sonuç ekranda kalır ve sönükleşir; tablo kaybolup geri gelmediği için
     // ekran zıplamaz.
     setPreview((current) => ({ ...current, loading: true, error: null, notice: null }));
+    // Hazır rapor kimlikle çalıştırılır; sunucu tanımı kendi kataloğundan okur.
+    // Tıklamayla açıldığı için beklemeye gerek yok, yazarken gecikme gerekir.
     const timer = setTimeout(() => {
-      api.runReport(requestDefinition, { preview: true })
+      (builtinOpen ? api.runBuiltinReport(builtinOpen.id, { preview: true }) : api.runReport(requestDefinition, { preview: true }))
         .then((result) => {
           if (previewTicket.current !== ticket) return;
           setPreview({ loading: false, data: result.data, meta: result.meta, error: null, notice: null });
@@ -1866,7 +2014,7 @@ function ReportsView({ session, online }) {
           if (previewTicket.current !== ticket) return;
           setPreview({ loading: false, data: null, meta: null, error, notice: null });
         });
-    }, REPORT_PREVIEW_DELAY_MS);
+    }, builtinOpen ? 0 : REPORT_PREVIEW_DELAY_MS);
     return () => clearTimeout(timer);
   }, [definitionKey, online]);
 
@@ -1903,7 +2051,21 @@ function ReportsView({ session, online }) {
     updateFilter(index, { field: key, type, op, value: op === "between" ? ["", ""] : op === "in" ? [] : "" });
   }
   function changeFilterOp(index, op) {
-    updateFilter(index, { op, value: op === "between" ? ["", ""] : op === "in" ? [] : "" });
+    // Göreli kipteyken işleç değişse de kip korunur; belirteç yeni işlece uygun
+    // türe (aralık ya da nokta) çevrilir.
+    const relative = reportRelativeToken(draft.filters[index]?.value) && !reportValuelessOps.has(op);
+    updateFilter(index, { op, value: relative ? reportRelativeDefault(op) : op === "between" ? ["", ""] : op === "in" ? [] : "" });
+  }
+  // Sabit tarih ile göreli tarih arasında geçiş. Değer sıfırlanır: sabit bir
+  // tarihi en yakın aralığa "tahmin ederek" çevirmek raporun anlamını değiştirir.
+  function changeFilterMode(index, relative) {
+    const item = draft.filters[index];
+    if (!item || Boolean(reportRelativeToken(item.value)) === relative) return;
+    updateFilter(index, { value: relative ? reportRelativeDefault(item.op) : item.op === "between" ? ["", ""] : "", offsetDirection: "after" });
+  }
+  function changeRelativeOffset(index, days, direction) {
+    const magnitude = Math.min(REPORT_RELATIVE_MAX_OFFSET, Math.max(0, Math.trunc(Math.abs(Number(days)) || 0)));
+    updateFilter(index, { value: { relative: "today", offsetDays: direction === "before" ? -magnitude : magnitude }, offsetDirection: direction });
   }
   const removeFilter = (index) => patchDraft({ filters: draft.filters.filter((_, position) => position !== index) });
   function addSort() {
@@ -1944,6 +2106,7 @@ function ReportsView({ session, online }) {
 
   function startNew() {
     setDraft(emptyReportDraft);
+    setActiveBuiltin(null);
     setReportMeta(emptyReportMeta);
     setSaveError(null);
     setNotice(null);
@@ -1952,18 +2115,10 @@ function ReportsView({ session, online }) {
   // Kaydedilmiş rapor arayüze geri yüklenirken süzgeç değerleri kullanıcının
   // gördüğü birime (lira) çevrilir; tanımda kuruş olarak duruyorlar.
   function draftFromDefinition(definition) {
-    const typeOf = (key) => catalog.resources.find((item) => item.resource === definition.resource)?.columns.find((item) => item.key === key)?.type || "text";
-    const fromServer = (field, type, part) => (reportMoneyColumn(field, type) ? Number(part) / 100 : part);
     return {
       resource: definition.resource || "",
       columns: Array.isArray(definition.columns) ? definition.columns : [],
-      filters: (Array.isArray(definition.filters) ? definition.filters : []).map((item) => {
-        const type = typeOf(item.field);
-        const value = reportValuelessOps.has(item.op)
-          ? ""
-          : Array.isArray(item.value) ? item.value.map((part) => fromServer(item.field, type, part)) : fromServer(item.field, type, item.value);
-        return { field: item.field, op: item.op, type, value };
-      }),
+      filters: (Array.isArray(definition.filters) ? definition.filters : []).map((item) => reportDraftFilter(item, typeIn(definition.resource, item.field))),
       sort: Array.isArray(definition.sort) ? definition.sort : [],
       group: definition.group ? { by: definition.group.by || [], aggregates: (definition.group.aggregates || []).map((item) => ({ fn: item.fn, field: item.field || "", as: item.as || reportAggregateAlias(item.fn, item.field) })) } : null,
       limit: definition.limit || 500,
@@ -1990,8 +2145,33 @@ function ReportsView({ session, online }) {
     setNotice(asCopy ? "Kopya açıldı. Değiştirip kendi raporunuz olarak kaydedebilirsiniz." : null);
   }
 
+  // Hazır rapor önizlemede açılır; kurucudaki taslağa dokunulmaz. Kullanıcı
+  // yarım kalmış kendi raporunu bir hazır rapora göz atmak için kaybetmemeli.
+  function openBuiltin(report) {
+    setActiveBuiltin({ report, draftKey });
+    setExportNotice(null);
+    previewRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }
+  const closeBuiltin = () => setActiveBuiltin(null);
+  // Hazır rapor değiştirilemez; uyarlamak isteyen kopyalar. Kopya sıradan,
+  // henüz kaydedilmemiş yeni bir rapordur: kimliği yok, sahibi kaydeden olur,
+  // görünürlüğü özel başlar ve kaydedilmemiş sayılır.
+  function copyBuiltin(report) {
+    if (!report?.definition) {
+      setNotice("Bu hazır raporun tanımı okunamadı; sayfayı yenileyip tekrar deneyin.");
+      return;
+    }
+    setDraft(draftFromDefinition(report.definition));
+    setDirty(true);
+    setReportMeta({ ...emptyReportMeta, name: `${report.name} (kopya)`, description: report.description || "" });
+    setActiveBuiltin(null);
+    setSaveError(null);
+    setNotice("Hazır rapor kurucuya kopyalandı. Değiştirip kendi raporunuz olarak kaydedebilirsiniz.");
+    builderRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }
+
   async function saveReport() {
-    const problem = reportDefinitionProblem(requestDefinition);
+    const problem = reportDefinitionProblem(draftDefinition);
     if (problem) { setSaveError(new ApiError(problem, { code: "INVALID_DEFINITION" })); return; }
     if (!reportMeta.name.trim()) { setSaveError(new ApiError("Rapora bir ad verin.", { code: "INVALID_DEFINITION" })); return; }
     setSaving(true);
@@ -2001,7 +2181,7 @@ function ReportsView({ session, online }) {
         name: reportMeta.name.trim(),
         description: reportMeta.description.trim(),
         resource: draft.resource,
-        definition: requestDefinition,
+        definition: draftDefinition,
         visibility: reportMeta.visibility,
       }, { id: reportMeta.id });
       setReportMeta((current) => ({ ...current, id: stored?.id || current.id, ownerUserId: stored?.owner_user_id || current.ownerUserId }));
@@ -2037,22 +2217,27 @@ function ReportsView({ session, online }) {
   // aratır, denetim kaydını yazdırır ve satır sınırını tam sınıra çıkarır.
   async function downloadCsv(report) {
     if (!online || exportingId) return;
+    // Hazır rapor kayıt defterinde değil katalogda durur; tanımı ve adı oradan
+    // okunur, istek `builtinReportId` taşır.
+    const builtin = report?.builtinReportId ? builtins.rows.find((row) => row.id === report.builtinReportId) || null : null;
     // Kayıtlı sürüm listede duruyorsa tanımı oradan okunur: sunucu da aynı
     // kaydı çalıştıracak, başlıklar dosyada onunla uyumlu olmalı.
-    const stored = saved.rows.find((row) => row.id === report?.id) || report;
+    const stored = builtin || saved.rows.find((row) => row.id === report?.id) || report;
     // Kaydedilmemiş taslakta sunucunun okuyacağı bir tanım yok.
     if (!stored?.id) { setExportNotice({ tone: "warning", message: "Bu raporu indirmeden önce kaydedin; dosya kayıtlı tanımdan üretiliyor." }); return; }
-    setExportingId(stored.id);
+    // Hazır rapor kimliği kayıtlı raporunkiyle çakışmasın diye denetim kaydındaki
+    // biçimle önekleniyor.
+    setExportingId(builtin ? `builtin:${builtin.id}` : stored.id);
     setExportNotice(null);
     try {
-      const result = await api.exportReport(stored.id);
+      const result = builtin ? await api.exportBuiltinReport(builtin.id) : await api.exportReport(stored.id);
       const columns = collapseReportColumns(result.data.columns || []);
       const rows = result.data.rows || [];
       if (!columns.length || !rows.length) {
         setExportNotice({ tone: "warning", message: "Bu rapor şu an hiç satır döndürmüyor; indirilecek bir şey yok." });
         return;
       }
-      const definition = reportDefinitionOf(stored);
+      const definition = builtin ? builtin.definition : reportDefinitionOf(stored);
       const resource = stored.resource || definition?.resource || draft.resource;
       const csv = buildReportCsv(columns, rows, (column) => reportHeaderLabel(resource, definition, column));
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -2090,11 +2275,48 @@ function ReportsView({ session, online }) {
 
   function valueInput(type, value, onChange, placeholder) {
     const inputType = type === "date" || type === "datetime" ? "date" : reportNumericTypes.has(type) ? "number" : "text";
-    return <input type={inputType} value={value ?? ""} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />;
+    // Nesne (göreli belirteç) bir metin kutusuna hiçbir zaman yazılmamalı;
+    // yazılırsa kullanıcı `[object Object]` görür ve kaydedince tanım bozulur.
+    const shown = value != null && typeof value === "object" ? "" : value ?? "";
+    return <input type={inputType} value={shown} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />;
+  }
+  // Tarih süzgeci: sabit tarih ya da göreli belirteç. Kip değerin kendisinden
+  // okunur (belirteç var mı), ayrı bir bayrak tutulmaz; kayıttan yüklenen tanım
+  // bu sayede kendiliğinden doğru kipte açılır.
+  function dateFilterFields(item, index, type) {
+    const token = reportRelativeToken(item.value);
+    const pointOp = reportRelativePointOps.has(item.op);
+    const canRelative = item.op === "between" || pointOp;
+    let inputs;
+    if (!token) {
+      const pair = Array.isArray(item.value) ? item.value : ["", ""];
+      inputs = item.op === "between"
+        ? <div className="live-report-date-pair"><label><span>Başlangıç</span>{valueInput(type, pair[0], (next) => updateFilter(index, { value: [next, pair[1]] }))}</label><label><span>Bitiş</span>{valueInput(type, pair[1], (next) => updateFilter(index, { value: [pair[0], next] }))}</label></div>
+        : <label><span>Tarih</span>{valueInput(type, item.value, (next) => updateFilter(index, { value: next }))}</label>;
+    } else if (item.op === "between") {
+      inputs = <label><span>Aralık</span><select value={token.relative} onChange={(event) => updateFilter(index, { value: { relative: event.target.value } })}>{!reportRelativeRangeLabels[token.relative] && <option value={token.relative}>{token.relative}</option>}{reportRelativeRanges.map(([name, label]) => <option key={name} value={name}>{label}</option>)}</select></label>;
+    } else {
+      const direction = item.offsetDirection || (Number(token.offsetDays) < 0 ? "before" : "after");
+      inputs = <div className="live-report-date-pair">
+        <label><span>Bugünden gün farkı</span><input type="number" min="0" max={REPORT_RELATIVE_MAX_OFFSET} step="1" value={Math.abs(reportRelativeOffset(token.offsetDays))} onChange={(event) => changeRelativeOffset(index, event.target.value, direction)} /></label>
+        <label><span>Yön</span><select value={direction} onChange={(event) => changeRelativeOffset(index, token.offsetDays, event.target.value)}><option value="after">sonra</option><option value="before">önce</option></select></label>
+      </div>;
+    }
+    return <div className="live-report-date">
+      {canRelative && <div className="live-report-segment" role="radiogroup" aria-label="Tarih türü">
+        <button type="button" role="radio" aria-checked={!token} className={!token ? "active" : ""} onClick={() => changeFilterMode(index, false)}>Sabit tarih</button>
+        <button type="button" role="radio" aria-checked={Boolean(token)} className={token ? "active" : ""} onClick={() => changeFilterMode(index, true)}>Göreli</button>
+      </div>}
+      {inputs}
+      {token && <small className="live-report-hint"><b>{reportRelativeLabel(reportRelativeValue(item.op, token))}</b> · {REPORT_RELATIVE_NOTE}</small>}
+    </div>;
   }
   function filterValueFields(item, index) {
     if (reportValuelessOps.has(item.op)) return <label><span>Değer</span><input value="" disabled placeholder="Bu işleç değer almaz" /></label>;
     const type = item.type || columnType(item.field);
+    // Belirteç taşıyan satır, katalog sütunun tipini bildirmese bile tarih
+    // girişiyle çizilir; başka bir kutuya düşerse belirteç okunmaz hâle gelir.
+    if (reportDateTypes.has(type) || reportRelativeToken(item.value)) return dateFilterFields(item, index, reportDateTypes.has(type) ? type : "date");
     const unit = reportMoneyColumn(item.field, type) ? " (TL)" : "";
     if (item.op === "between") {
       const pair = Array.isArray(item.value) ? item.value : ["", ""];
@@ -2126,19 +2348,44 @@ function ReportsView({ session, online }) {
   const previewColumns = collapseReportColumns(preview.data?.columns || []);
   const previewRows = preview.data?.rows || [];
   // Ekrandaki başlık da indirilen dosyadaki başlık da aynı fonksiyondan gelir.
-  const previewColumnLabel = (column) => reportHeaderLabel(draft.resource, requestDefinition, column);
+  const previewColumnLabel = (column) => reportHeaderLabel(previewResource, requestDefinition, column);
+  // Önizlemenin hangi süzgeçlerle çalıştığı okunur cümlelerle: özellikle göreli
+  // tarihte "Bu yıl" yazmazsa kullanıcı sonucun hangi dönemi kapsadığını bilmez.
+  const previewFilters = (Array.isArray(requestDefinition.filters) ? requestDefinition.filters : []).filter((item) => item?.field);
+  const previewHasRelative = previewFilters.some((item) => reportRelativeToken(item.value));
+  const builtinGroups = groupBuiltinReports(builtins.rows);
+  const builtinExportKey = builtinOpen ? `builtin:${builtinOpen.id}` : null;
+
+  // Hazır raporlar müşterinin ilk gördüğü yerdir. Yetkisinin yettiği hiçbir hazır
+  // rapor yoksa (ya da ekran bu uca erişemiyorsa) boş bir başlık göstermek
+  // yerine bölüm hiç çizilmez; kaydedilmiş raporlar ve kurucu yine çalışır.
+  const builtinHidden = !builtins.loading && (!builtinGroups.length || builtins.error?.status === 403 || builtins.error?.code === "forbidden");
+  // Hazır rapora ait eylemler yalnız görüntüleme, indirme ve kopyalamadır:
+  // katalog kodda yaşar, düzenleme ve silme anlamsızdır ve düğmesi yoktur.
+  const builtinActions = builtinOpen ? <>
+    {canExport && <button type="button" className="live-button secondary" disabled={Boolean(exportingId)} title="Tam sonucu CSV olarak indir" onClick={() => downloadCsv({ builtinReportId: builtinOpen.id })}>{reportExportBusy(exportingId, builtinExportKey) ? <><span className="live-spinner small" /> Hazırlanıyor…</> : <><DownloadSimple /> CSV indir</>}</button>}
+    <button type="button" className="live-button secondary" disabled={catalog.loading || Boolean(catalog.error)} title="Tanımı kurucuya kopyala; değiştirip kendi raporunuz olarak kaydedin" onClick={() => copyBuiltin(builtinOpen)}><PencilSimple /> Kopyala ve düzenle</button>
+    <button type="button" className="live-icon-button" title="Hazır raporu kapat, kendi taslağıma dön" aria-label="Hazır raporu kapat" onClick={closeBuiltin}><X /></button>
+  </> : null;
 
   return <>
+    {!builtinHidden && <section className="live-panel">
+      <header className="live-toolbar">
+        <div><small>RAPOR MERKEZİ</small><h2>Hazır raporlar</h2><p>Sık sorulan soruların raporları hazır. Birine dokunun, sonuç aşağıdaki önizlemede açılsın; CSV indirebilir ya da kopyalayıp kendinize uyarlayabilirsiniz.</p></div>
+      </header>
+      {builtins.loading ? <LoadingState /> : builtins.error ? <ErrorState error={builtins.error} retry={loadBuiltins} /> : <div className="live-report-groups">{builtinGroups.map((group) => <section key={group.category}><h3>{group.category}</h3><div>{group.rows.map((row) => <BuiltinReportCard key={row.id} report={row} active={builtinOpen?.id === row.id} onOpen={openBuiltin} />)}</div></section>)}</div>}
+    </section>}
+
     <section className="live-panel">
       <header className="live-toolbar">
-        <div><small>RAPOR MERKEZİ</small><h2>Kaydedilmiş raporlar</h2><p>Kendi raporlarınız ve ekiple paylaşılanlar. Açıp sürdürebilir, kopyalayıp kendinize uyarlayabilir, CSV olarak indirebilirsiniz.</p></div>
+        <div><small>KENDİ RAPORLARINIZ</small><h2>Kaydedilmiş raporlar</h2><p>Kendi raporlarınız ve ekiple paylaşılanlar. Açıp sürdürebilir, kopyalayıp kendinize uyarlayabilir, CSV olarak indirebilirsiniz.</p></div>
         <div className="live-toolbar-actions"><button type="button" className="live-button secondary" onClick={loadSaved} disabled={!online}><ArrowClockwise /> Yenile</button><button type="button" className="live-button primary" onClick={startNew}><Plus /> Yeni rapor</button></div>
       </header>
       {exportNoticeBox}
       {saved.loading ? <LoadingState /> : saved.error?.status === 403 || saved.error?.code === "forbidden" ? <PermissionDeniedState /> : saved.error ? <ErrorState error={saved.error} retry={loadSaved} /> : !savedGroups.length ? <div className="live-view-empty"><ChartPieSlice /><b>Henüz kayıtlı rapor yok</b><small>Aşağıdaki kurucuda kaynağı, sütunları ve süzgeçleri seçip raporu kaydedin.</small></div> : <div className="live-report-groups">{savedGroups.map((group) => <section key={group.key}><h3>{group.title}</h3><div>{group.rows.map((row) => <ReportCard key={row.id} report={row} mine={group.key === "mine"} ready={!catalog.loading && !catalog.error} canRemove={canRemove} canExport={canExport} busy={exportingId === row.id} exporting={Boolean(exportingId)} onOpen={openSaved} onDuplicate={(report) => openSaved(report, { asCopy: true })} onExport={downloadCsv} onRemove={(report) => { setRemoveError(null); setRemoveTarget(report); }} />)}</div></section>)}</div>}
     </section>
 
-    <section className="live-panel live-report-panel">
+    <section className="live-panel live-report-panel" ref={builderRef}>
       <header className="live-toolbar">
         <div><small>RAPOR KURUCUSU</small><h2>{reportMeta.id ? reportMeta.name || "Rapor" : "Yeni rapor"}</h2><p>Kaynağı seçin, göstermek istediğiniz sütunları işaretleyin; alttaki önizleme her değişiklikten sonra kendiliğinden tazelenir.</p></div>
       </header>
@@ -2158,7 +2405,7 @@ function ReportsView({ session, online }) {
             <header><b>3 · Süzgeçler</b><small>Alan, işleç ve değer. Tarihte takvim, durumda liste, sayıda sayı girişi açılır.</small><button type="button" className="live-workflow-button" onClick={addFilter}><Plus /> Süzgeç ekle</button></header>
             {draft.filters.length ? draft.filters.map((item, index) => <div className="live-report-row" key={`filter-${index}`}>
               <label><span>Alan</span><select value={item.field} onChange={(event) => changeFilterField(index, event.target.value)}>{resourceColumns.map((column) => <option key={column.key} value={column.key}>{columnLabel(column.key)}</option>)}</select></label>
-              <label><span>İşleç</span><select value={item.op} onChange={(event) => changeFilterOp(index, event.target.value)}>{operatorsForColumn(item.field, item.type || columnType(item.field)).map((op) => <option key={op} value={op}>{reportOperatorLabels[op]}</option>)}</select></label>
+              <label><span>İşleç</span><select value={item.op} onChange={(event) => changeFilterOp(index, event.target.value)}>{operatorsForColumn(item.field, item.type || columnType(item.field)).map((op) => <option key={op} value={op}>{reportOperatorLabel(op, item.type || columnType(item.field))}</option>)}</select></label>
               {filterValueFields(item, index)}
               <button type="button" className="live-icon-button danger" title="Süzgeci kaldır" onClick={() => removeFilter(index)}><X /></button>
             </div>) : <p className="live-report-hint">Süzgeç eklemezseniz kaynaktaki tüm kayıtlar raporlanır.</p>}
@@ -2209,21 +2456,29 @@ function ReportsView({ session, online }) {
       </div>}
     </section>
 
-    <section className="live-panel live-report-preview-panel">
+    <section className="live-panel live-report-preview-panel" ref={previewRef}>
       <header className="live-toolbar">
-        <div><small>CANLI ÖNİZLEME</small><h2>Rapor önizlemesi</h2><p>İlk 20 satır gösterilir; tam sonuç kaydedip CSV indirdiğinizde alınır.</p></div>
+        {builtinOpen
+          ? <div><small>HAZIR RAPOR{builtinOpen.category ? ` · ${builtinOpen.category.toLocaleUpperCase("tr-TR")}` : ""}</small><h2>{builtinOpen.name}</h2><p>{builtinOpen.description ? `${builtinOpen.description} ` : ""}İlk 20 satır gösterilir; tam sonuç CSV ile alınır.</p></div>
+          : <div><small>CANLI ÖNİZLEME</small><h2>Rapor önizlemesi</h2><p>İlk 20 satır gösterilir; tam sonuç kaydedip CSV indirdiğinizde alınır.</p></div>}
         <div className="live-toolbar-actions">
           {preview.loading && <span className="live-report-refreshing"><span className="live-spinner small" /> Tazeleniyor…</span>}
-          {canExport && <button type="button" className="live-button secondary" disabled={!reportMeta.id || dirty || Boolean(exportingId)} title={!reportMeta.id ? "Kaydedip indirin" : dirty ? "Önce kaydedin: dosya kayıtlı tanımdan üretilir" : "Tam sonucu CSV olarak indir"} onClick={() => downloadCsv({ id: reportMeta.id, name: reportMeta.name, resource: draft.resource, definition_json: requestDefinition })}>{exportingId === reportMeta.id ? <><span className="live-spinner small" /> Hazırlanıyor…</> : <><DownloadSimple /> CSV indir</>}</button>}
+          {builtinActions}
+          {!builtinOpen && canExport && <button type="button" className="live-button secondary" disabled={!reportMeta.id || dirty || Boolean(exportingId)} title={!reportMeta.id ? "Kaydedip indirin" : dirty ? "Önce kaydedin: dosya kayıtlı tanımdan üretilir" : "Tam sonucu CSV olarak indir"} onClick={() => downloadCsv({ id: reportMeta.id, name: reportMeta.name, resource: draft.resource, definition_json: draftDefinition })}>{reportExportBusy(exportingId, reportMeta.id) ? <><span className="live-spinner small" /> Hazırlanıyor…</> : <><DownloadSimple /> CSV indir</>}</button>}
         </div>
       </header>
-      {canExport && (!reportMeta.id || dirty) && <p className="live-report-hint">{reportMeta.id ? "Önce kaydedin: dosya kayıtlı tanımdan üretilir. Kaydedilmemiş değişiklikle indirilen dosya ekrandakinden farklı olur." : "Kaydedilmemiş taslak indirilemez; dosya kayıtlı tanımdan üretilir. Raporu kaydedip indirin."}</p>}
+      {!builtinOpen && <>{canExport && (!reportMeta.id || dirty) && <p className="live-report-hint">{reportMeta.id ? "Önce kaydedin: dosya kayıtlı tanımdan üretilir. Kaydedilmemiş değişiklikle indirilen dosya ekrandakinden farklı olur." : "Kaydedilmemiş taslak indirilemez; dosya kayıtlı tanımdan üretilir. Raporu kaydedip indirin."}</p>}</>}
+      {previewFilters.length > 0 && <div className="live-report-summary" aria-label="Uygulanan süzgeçler"><span>Süzgeçler</span>{previewFilters.map((item, index) => <em key={`${item.field}-${index}`}>{reportFilterSummary(previewResource, item, typeIn(previewResource, item.field))}</em>)}{previewHasRelative && <small>{REPORT_RELATIVE_NOTE}</small>}</div>}
       {exportNoticeBox}
       {preview.notice ? <div className="live-view-empty"><ChartPieSlice /><b>Önizleme için biraz daha bilgi gerekiyor</b><small>{preview.notice}</small></div>
         : preview.error ? <div className="live-view-empty"><WarningCircle /><b>Rapor çalıştırılamadı</b><small>{reportErrorMessage(preview.error)}</small></div>
           : !preview.data ? <LoadingState />
             : !previewRows.length ? <div className="live-view-empty"><ChartPieSlice /><b>Bu tanıma uyan kayıt yok</b><small>Süzgeçleri gevşetip tekrar deneyin.</small></div>
-              : <div className={`live-report-preview ${preview.loading ? "refreshing" : ""}`}>
+              // Uygulamanın tabloları en az 820 px tutulur ki uzun listeler telefonda
+              // sıkışmasın, yana kaysın. Gruplu raporlar çoğu zaman iki üç sütundur ve
+              // aynı kural en önemli sütunu (tutarı) ekranın dışına itiyordu; az
+              // sütunlu rapor ekrana sığar, geniş liste eskisi gibi kayar.
+              : <div className={`live-report-preview ${previewColumns.length <= 4 ? "compact" : ""} ${preview.loading ? "refreshing" : ""}`}>
                 <div className="live-table-wrap"><table className="live-table"><thead><tr>{previewColumns.map((column) => <th key={column.key} title={column.key}>{previewColumnLabel(column)}</th>)}</tr></thead><tbody>
                   {previewRows.map((row, index) => <tr key={index}>{previewColumns.map((column) => {
                     const cell = reportPresentedValue(column.key, row);
@@ -3436,15 +3691,36 @@ function LiveStyles() {
     .live-report-refreshing .live-spinner{border-color:#d7ded9;border-top-color:var(--live-green)}
     /* Tazelenirken eski sonuç yerinde kalıp sönükleşir; tablo kaybolup geri
        gelmediği için ekran zıplamaz. */
-    .live-report-preview{transition:opacity .16s ease}
+    .live-report-preview{transition:opacity .16s ease}.live-report-preview.compact .live-table{min-width:0}
     .live-report-preview.refreshing{opacity:.5}
+    /* Hazır rapor kartı düğmedir; kayıtlı rapor kartıyla aynı görünür, açık olan
+       yeşil çerçeveyle ayrılır. */
+    .live-report-builtin{font:inherit;color:inherit;text-align:left;cursor:pointer;width:100%;gap:0}
+    .live-report-builtin:hover{border-color:#b9cbc1;background:#fff}
+    .live-report-builtin.active{border-color:var(--live-green-2);background:#f1f7f3;box-shadow:0 0 0 2px #dcece4}
+    .live-report-builtin:focus-visible{outline:2px solid var(--live-green-2);outline-offset:2px}
+    .live-report-date{display:flex;flex-direction:column;gap:6px;min-width:0}
+    .live-report-date label{display:flex;flex-direction:column;gap:5px;min-width:0}
+    .live-report-date label>span{font-size:10px;font-weight:700;color:#46524c}
+    .live-report-date-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0}
+    .live-report-segment{display:inline-flex;align-self:flex-start;max-width:100%;border:1px solid #ced3cf;border-radius:8px;overflow:hidden}
+    .live-report-segment button{border:0;background:#fff;color:#46524c;font:inherit;font-size:10px;font-weight:700;padding:5px 10px;cursor:pointer;white-space:nowrap}
+    .live-report-segment button+button{border-left:1px solid #ced3cf}
+    .live-report-segment button.active{background:#edf4f0;color:var(--live-green)}
+    .live-report-date small b{color:var(--live-ink)}
+    .live-report-summary{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:10px 24px 0;min-width:0}
+    .live-report-summary>span{font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--live-muted)}
+    .live-report-summary>em{font-style:normal;font-size:10px;border:1px solid var(--live-line);background:#fafaf8;border-radius:14px;padding:4px 9px;overflow-wrap:anywhere;min-width:0}
+    .live-report-summary>small{flex-basis:100%;font-size:10px;color:var(--live-muted)}
     @media(max-width:720px){
       .live-report-groups,.live-report-builder{padding:14px 16px 18px}
       .live-report-groups>section>div{grid-template-columns:1fr}
       /* Dar ekranda süzgeç satırı alt alta iner; kaldırma düğmesi ilk satırın
          sağında kalır ve hiçbir alan yatay taşmaya yol açmaz. */
       .live-report-row{grid-template-columns:minmax(0,1fr) 34px}
-      .live-report-row>label,.live-report-row>.live-report-chips,.live-report-row>.live-report-hint{grid-column:1}
+      .live-report-row>label,.live-report-row>.live-report-chips,.live-report-row>.live-report-hint,.live-report-row>.live-report-date{grid-column:1}
+      .live-report-date-pair{grid-template-columns:1fr}
+      .live-report-summary{padding:10px 16px 0}
       .live-report-row>.live-icon-button{grid-row:1;grid-column:2}
       .live-report-save{grid-template-columns:1fr}
       .live-report-block>footer .live-button{width:100%}
