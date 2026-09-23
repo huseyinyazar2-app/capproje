@@ -89,6 +89,12 @@ async function akis(kaynak, kayitId, eylem, govde = {}) {
 }
 
 const gun = (fark) => new Date(Date.now() + fark * 86400000).toISOString().slice(0, 10);
+// Gerçekleşmiş bir hareketin tarihi geleceğe düşemez. Tarihler proje başlangıcına
+// göre türetildiği için yeni başlamış bir projede "başlangıç + 22 gün" ileri bir
+// tarih verebiliyor; ödenmiş bir fatura ya da depodan yapılmış bir çıkış gelecek
+// tarihli görünürse tanıtımda veri uydurulmuş gibi duruyor. `kayma` aynı güne
+// yığılmayı önler.
+const gecmis = (fark, kayma = 0) => gun(Math.min(fark, -2 - kayma));
 const an = (fark) => new Date(Date.now() + fark * 86400000).toISOString().slice(0, 16);
 const lira = (tutar) => Math.round(tutar * 100);
 const sec = (dizi, indeks) => dizi[indeks % dizi.length];
@@ -203,14 +209,14 @@ const isMerkezleri = [
 ];
 
 const stokKartlari = [
-  { sku: "LV-SUN-18-BYZ", giris: 620, name: "18 mm Suntalam - Beyaz", category: "Levha", unit: "adet", minimum_quantity: 40, average_cost_minor: lira(890), warehouse_location: "A-01" },
+  { sku: "LV-SUN-18-BYZ", giris: 700, name: "18 mm Suntalam - Beyaz", category: "Levha", unit: "adet", minimum_quantity: 40, average_cost_minor: lira(890), warehouse_location: "A-01" },
   { sku: "LV-MDF-18-CVZ", giris: 240, name: "18 mm Ceviz Kaplama MDF", category: "Levha", unit: "adet", minimum_quantity: 20, average_cost_minor: lira(1850), warehouse_location: "A-02" },
   { sku: "LV-MDF-08-HAM", giris: 300, name: "8 mm Ham MDF Arkalık", category: "Levha", unit: "adet", minimum_quantity: 30, average_cost_minor: lira(420), warehouse_location: "A-03" },
   { sku: "BN-PVC-22-BYZ", giris: 4200, name: "PVC Kenar Bandı 22 mm Beyaz", category: "Bant", unit: "metre", minimum_quantity: 500, average_cost_minor: lira(9), warehouse_location: "B-01" },
   { sku: "HR-BLM-LGB-500", giris: 480, name: "Blum Legrabox Çekmece Rayı 500 mm", category: "Hırdavat", unit: "takım", minimum_quantity: 60, average_cost_minor: lira(240), warehouse_location: "C-01" },
-  { sku: "HR-BLM-CLIP", giris: 1600, name: "Blum Clip Top Menteşe 110°", category: "Hırdavat", unit: "adet", minimum_quantity: 200, average_cost_minor: lira(48), warehouse_location: "C-02" },
-  { sku: "TZ-KVR-20-CAL", giris: 60, name: "Kuvars Tezgah 20 mm Calacatta", category: "Tezgah", unit: "m²", minimum_quantity: 4, average_cost_minor: lira(3100), warehouse_location: "D-01" },
-  { sku: "KM-LAK-BYZ-MAT", giris: 180, name: "Lake Boya Beyaz Mat", category: "Kimyasal", unit: "kg", minimum_quantity: 25, average_cost_minor: lira(310), warehouse_location: "E-01" },
+  { sku: "HR-BLM-CLIP", giris: 2000, name: "Blum Clip Top Menteşe 110°", category: "Hırdavat", unit: "adet", minimum_quantity: 200, average_cost_minor: lira(48), warehouse_location: "C-02" },
+  { sku: "TZ-KVR-20-CAL", giris: 90, name: "Kuvars Tezgah 20 mm Calacatta", category: "Tezgah", unit: "m²", minimum_quantity: 4, average_cost_minor: lira(3100), warehouse_location: "D-01" },
+  { sku: "KM-LAK-BYZ-MAT", giris: 220, name: "Lake Boya Beyaz Mat", category: "Kimyasal", unit: "kg", minimum_quantity: 25, average_cost_minor: lira(310), warehouse_location: "E-01" },
   { sku: "KM-YAG-DGL", giris: 90, name: "Doğal Ahşap Yağı", category: "Kimyasal", unit: "litre", minimum_quantity: 15, average_cost_minor: lira(480), warehouse_location: "E-02" },
   { sku: "MT-VDA-4X40", giris: 320, name: "Ahşap Vida 4x40 mm", category: "Metal", unit: "paket", minimum_quantity: 50, average_cost_minor: lira(85), warehouse_location: "F-01" },
   { sku: "MT-MNF-15", giris: 2400, name: "Minifix Gövde 15 mm", category: "Metal", unit: "adet", minimum_quantity: 400, average_cost_minor: lira(6), warehouse_location: "F-02" },
@@ -227,16 +233,42 @@ const hesaplar = [
 const asamalar = ["lead", "discovery", "estimating", "offered", "contracted", "design", "procurement", "production", "installation", "acceptance", "completed"];
 const derinlik = (asama) => asamalar.indexOf(asama);
 
+// Projeler. `bedel` sözleşme tutarı, `maliyet` sözleşme anındaki tahmini
+// maliyettir. `gercek` ise o projede bugüne kadar FİİLEN gerçekleşmiş toplam
+// maliyettir ve tanıtımın en çok bakılan raporunu (Gerçekleşen proje
+// kârlılığı) besler: rapor sözleşme bedelinden kesinleşmiş gideri, projeye
+// çıkan malzemeyi ve üretim sorunu maliyetini düşer. Sayılar üç ilkeye göre
+// seçildi:
+//   · Aşamayla tutarlılık. Teklif aşamasındaki projede hiç gerçekleşen maliyet
+//     yoktur; sözleşmesi yeni imzalanmışta yalnız ön alım vardır; montaj ve
+//     teslim aşamasındakinde maliyetin tamamına yakını gerçekleşmiştir.
+//   · Tahmin birebir tutmaz. Bazı proje tahmini aşar, bazısı altında kalır;
+//     hepsi tam tutsaydı veri uydurma görünürdü.
+//   · Zarar eden proje bulunur. Raporun asıl işi zarar edeni tepeye çıkarmak
+//     olduğu için CP-26006 ve CP-26009 bilerek zararda bırakıldı; biri kötü
+//     fiyatlanmış ve cila hatası yemiş bitmiş bir iş, diğeri son anda yeniden
+//     imal edilen bar tezgahı yüzünden marjı eriyen bir iş.
+// `malzeme` depodan projeye çıkan kalemler (stok kartı sırası ve miktar),
+// `sorun` ise üretimde yaşanan aksaklığın fire/yeniden imalat/maliyet etkisidir.
 const projeler = [
-  { code: "CP-26001", name: "Marmara Otel Lobi ve Resepsiyon", musteri: 0, asama: "production", tur: "Otel", sehir: "İzmir", adres: "Alsancak Mah. Kıbrıs Şehitleri Cad. No:12, Konak / İzmir", bedel: 2480000, maliyet: 1710000, ilerleme: 62, baslangic: -45, bitis: 25, kapsam: "Lobi bankosu, resepsiyon arkası ceviz duvar paneli ve 18 adet standart oda gardırobu." },
-  { code: "CP-26002", name: "Demir Ailesi Mutfak Yenileme", musteri: 2, asama: "design", tur: "Konut", sehir: "Ankara", adres: "Çankaya, Ankara", bedel: 425000, maliyet: 278000, ilerleme: 28, baslangic: -12, bitis: 40, kapsam: "L mutfak, ada tezgah, lake kapak ve Blum mekanizma." },
+  { code: "CP-26001", name: "Marmara Otel Lobi ve Resepsiyon", musteri: 0, asama: "production", tur: "Otel", sehir: "İzmir", adres: "Alsancak Mah. Kıbrıs Şehitleri Cad. No:12, Konak / İzmir", bedel: 2480000, maliyet: 1710000, ilerleme: 62, baslangic: -45, bitis: 25, kapsam: "Lobi bankosu, resepsiyon arkası ceviz duvar paneli ve 18 adet standart oda gardırobu.",
+    gercek: 1835000, malzeme: [{ stok: 0, adet: 160 }, { stok: 6, adet: 40 }, { stok: 5, adet: 900 }],
+    sorun: { tur: "quality", siddet: "normal", yeniden: 8, fire: 2, maliyet: 18500, gecikme: 2, aciklama: "Lake kapaklarda portakallanma görüldü; sekiz kapak zımparalanıp yeniden cilalandı.", neden: "Cila kabini nemi yüksekti, kurutma süresi kısa tutuldu.", cozum: "Kabin nemi düşürüldü, kapaklar yeniden cilalanıp kabul edildi." } },
+  { code: "CP-26002", name: "Demir Ailesi Mutfak Yenileme", musteri: 2, asama: "design", tur: "Konut", sehir: "Ankara", adres: "Çankaya, Ankara", bedel: 425000, maliyet: 278000, ilerleme: 28, baslangic: -12, bitis: 40, kapsam: "L mutfak, ada tezgah, lake kapak ve Blum mekanizma.", gercek: 119000 },
   { code: "CP-26003", name: "Vadi Konutları 24 Daire Mutfak", musteri: 3, asama: "offered", tur: "Toplu Konut", sehir: "Bursa", adres: "Nilüfer, Bursa", bedel: 9600000, maliyet: 7050000, ilerleme: 8, baslangic: 20, bitis: 150, kapsam: "24 daire için standart mutfak paketi, hakedişli ödeme." },
-  { code: "CP-26004", name: "Anadolu Yapı Ofis Bölme Sistemleri", musteri: 1, asama: "installation", tur: "Ofis", sehir: "İstanbul", adres: "Maslak, Sarıyer / İstanbul", bedel: 1340000, maliyet: 920000, ilerleme: 88, baslangic: -70, bitis: 6, kapsam: "Ahşap bölme paneller, 12 kişilik toplantı masası ve akustik duvar kaplaması." },
+  { code: "CP-26004", name: "Anadolu Yapı Ofis Bölme Sistemleri", musteri: 1, asama: "installation", tur: "Ofis", sehir: "İstanbul", adres: "Maslak, Sarıyer / İstanbul", bedel: 1340000, maliyet: 920000, ilerleme: 88, baslangic: -70, bitis: 6, kapsam: "Ahşap bölme paneller, 12 kişilik toplantı masası ve akustik duvar kaplaması.",
+    gercek: 895000, malzeme: [{ stok: 0, adet: 75 }, { stok: 1, adet: 32 }, { stok: 5, adet: 420 }],
+    sorun: { tur: "material", siddet: "normal", yeniden: 3, fire: 1, maliyet: 9200, gecikme: 1, aciklama: "Akustik panel kumaşı yanlış tonda geldi; üç panel yeniden kaplandı.", neden: "Tedarikçi parti değiştirdi, numune onayı alınmadı.", cozum: "Doğru partiden kumaş getirtildi, paneller yeniden kaplandı." } },
   { code: "CP-26005", name: "Kaya Rezidans Giyinme Odası", musteri: 1, asama: "discovery", tur: "Konut", sehir: "İstanbul", adres: "Bebek, Beşiktaş / İstanbul", bedel: 0, ilerleme: 4, baslangic: 10, bitis: 70, kapsam: "Keşif randevusu alındı, ölçü bekleniyor." },
-  { code: "CP-26006", name: "Marmara Otel Restoran Mobilyaları", musteri: 0, asama: "completed", tur: "Otel", sehir: "İzmir", adres: "Alsancak, Konak / İzmir", bedel: 1870000, maliyet: 1290000, ilerleme: 100, baslangic: -120, bitis: -3, kapsam: "48 kişilik restoran masa ve sandalye seti, servis üniteleri." },
-  { code: "CP-26007", name: "Beyaz Ev Villa Mutfak ve Banyo", musteri: 4, asama: "procurement", tur: "Villa", sehir: "İstanbul", adres: "Beykoz, İstanbul", bedel: 1150000, maliyet: 790000, ilerleme: 41, baslangic: -30, bitis: 55, kapsam: "Villa mutfağı, iki banyo dolabı ve giyinme odası." },
-  { code: "CP-26008", name: "Çınar İlkokulu Sınıf Mobilyaları", musteri: 5, asama: "contracted", tur: "Eğitim", sehir: "Ankara", adres: "Çankaya, Ankara", bedel: 680000, maliyet: 470000, ilerleme: 15, baslangic: -8, bitis: 75, kapsam: "18 derslik için sıra, dolap ve öğretmen masası." },
-  { code: "CP-26009", name: "Nazar Cafe ve Restoran Ahşap İşleri", musteri: 6, asama: "acceptance", tur: "Ticari", sehir: "İzmir", adres: "Konak, İzmir", bedel: 940000, maliyet: 645000, ilerleme: 95, baslangic: -95, bitis: 2, kapsam: "Bar tezgahı, duvar rafları, sabit oturma üniteleri." },
+  { code: "CP-26006", name: "Marmara Otel Restoran Mobilyaları", musteri: 0, asama: "completed", tur: "Otel", sehir: "İzmir", adres: "Alsancak, Konak / İzmir", bedel: 1870000, maliyet: 1480000, ilerleme: 100, baslangic: -120, bitis: -3, kapsam: "48 kişilik restoran masa ve sandalye seti, servis üniteleri.",
+    gercek: 2046000, malzeme: [{ stok: 0, adet: 150 }, { stok: 1, adet: 70 }, { stok: 5, adet: 950 }],
+    sorun: { tur: "machine", siddet: "high", yeniden: 12, fire: 4, maliyet: 96000, gecikme: 6, aciklama: "Cila kabininin ısı ayarı bozuldu; on iki masa tablası yeniden cilalandı, dördü hurdaya ayrıldı.", neden: "Kabin termostatı arızalıydı, periyodik bakımı gecikmişti.", cozum: "Termostat değişti, tablalar yeniden cilalandı; iş zararına kapandı." } },
+  { code: "CP-26007", name: "Beyaz Ev Villa Mutfak ve Banyo", musteri: 4, asama: "procurement", tur: "Villa", sehir: "İstanbul", adres: "Beykoz, İstanbul", bedel: 1150000, maliyet: 790000, ilerleme: 41, baslangic: -30, bitis: 55, kapsam: "Villa mutfağı, iki banyo dolabı ve giyinme odası.",
+    gercek: 497000, malzeme: [{ stok: 0, adet: 40 }, { stok: 7, adet: 95 }, { stok: 5, adet: 240 }] },
+  { code: "CP-26008", name: "Çınar İlkokulu Sınıf Mobilyaları", musteri: 5, asama: "contracted", tur: "Eğitim", sehir: "Ankara", adres: "Çankaya, Ankara", bedel: 680000, maliyet: 470000, ilerleme: 15, baslangic: -8, bitis: 75, kapsam: "18 derslik için sıra, dolap ve öğretmen masası.", gercek: 88000 },
+  { code: "CP-26009", name: "Nazar Cafe ve Restoran Ahşap İşleri", musteri: 6, asama: "acceptance", tur: "Ticari", sehir: "İzmir", adres: "Konak, İzmir", bedel: 940000, maliyet: 740000, ilerleme: 95, baslangic: -95, bitis: 2, kapsam: "Bar tezgahı, duvar rafları, sabit oturma üniteleri.",
+    gercek: 966000, malzeme: [{ stok: 0, adet: 70 }, { stok: 6, adet: 18 }, { stok: 5, adet: 450 }],
+    sorun: { tur: "drawing", siddet: "high", yeniden: 1, fire: 1, maliyet: 41000, gecikme: 4, aciklama: "Bar tezgahı eski ölçüyle kesildi; revize çizime göre yeniden imal edildi.", neden: "Revize çizim atölyeye ulaşmadan kesim başlamıştı.", cozum: "Tezgah yeniden imal edildi, kesim onaylı revizyona bağlandı." } },
   { code: "CP-26010", name: "Gökçe Plaza Toplantı Odaları", musteri: 7, asama: "estimating", tur: "Ofis", sehir: "İstanbul", adres: "Şişli, İstanbul", bedel: 1620000, maliyet: 1120000, ilerleme: 12, baslangic: 5, bitis: 95, kapsam: "Altı toplantı odası için masa, kredenz ve akustik panel." },
   { code: "CP-26011", name: "Selvi Apartmanı Merdiven Korkuluğu", musteri: 8, asama: "lead", tur: "Konut", sehir: "Kocaeli", adres: "İzmit, Kocaeli", bedel: 0, ilerleme: 0, baslangic: 15, bitis: 60, kapsam: "Site yönetiminden gelen talep; ahşap küpeşte ve korkuluk yenileme." },
   { code: "CP-26012", name: "Deniz Otel Spa Bölümü Ahşap Kaplama", musteri: 9, asama: "lost", tur: "Otel", sehir: "Muğla", adres: "Bodrum, Muğla", bedel: 0, ilerleme: 5, baslangic: -55, bitis: -20, kapsam: "Spa alanı için ısıl işlem görmüş ahşap kaplama. Fiyat nedeniyle kaybedildi." },
@@ -320,7 +352,12 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
     site_address: proje.adres, status: "lead", priority: sec(["normal", "high", "normal", "low"], sira),
     manager_user_id: ekipKayit?.project_manager, architect_user_id: ekipKayit?.architect,
     planned_start_date: gun(proje.baslangic), planned_end_date: gun(proje.bitis),
-    contract_amount_minor: proje.bedel ? lira(proje.bedel) : undefined,
+    // Sözleşme tutarı ancak sözleşme imzalandıktan sonra projeye yazılır. Teklif
+    // ya da maliyetlendirme aşamasındaki projeye şimdiden sözleşme bedeli
+    // yazmak, kârlılık raporunu hiç maliyeti olmayan ve %100 marjla görünen
+    // satırlarla dolduruyordu; o aşamada fiyat teklifin üzerindedir, projenin
+    // değil. (Rapor zaten bedeli olmayan satırı dışarıda bırakıyor.)
+    contract_amount_minor: proje.bedel && d >= 4 ? lira(proje.bedel) : undefined,
     estimated_cost_minor: proje.maliyet ? lira(proje.maliyet) : undefined,
     progress_percent: proje.ilerleme, description: proje.kapsam, photo_consent: sec(["internal_only", "marketing_allowed", "not_requested"], sira),
   });
@@ -423,36 +460,121 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
       if (d >= 5) await akis("contracts", sozlesme.id, "transition", { status: "active" });
     }
 
-    const avans = await olustur("financial-transactions", {
-      transaction_number: `FN-${proje.code.slice(3)}-01`, project_id: projeId, account_id: hesapKayit[1]?.id,
-      customer_id: musteri?.id, type: "income", category: "Sözleşme avansı", transaction_date: gun(proje.baslangic + 14),
-      amount_minor: lira(proje.bedel * 0.4), currency: "TRY", official: 1, payment_method: "havale",
-      reference: `SZL-${proje.code.slice(3)}`, description: "%40 sözleşme avansı tahsil edildi.", status: "pending",
-    });
-    if (avans) await akis("financial-transactions", avans.id, "approve", {});
+    // Tahsilat zinciri. Avans her sözleşmede tahsil edilir; hakediş ve teslim
+    // bakiyesi ancak iş o aşamaya geldiyse kasaya girer. Böylece tahsil edilen
+    // oran aşamayla birlikte yükseliyor: sözleşmesi yeni imzalanmış projede
+    // %40, üretim/montajdakinde %70, teslim edilmişte %95.
+    const tahsilatPlani = [
+      { oran: 0.4, category: "Sözleşme avansı", description: "%40 sözleşme avansı tahsil edildi.", tarih: proje.baslangic + 14 },
+      ...(d >= 7 ? [{ oran: 0.3, category: "Hakediş tahsilatı", description: "1. dönem hakedişi tahsil edildi.", tarih: proje.baslangic + 60 }] : []),
+      ...(d >= 10 ? [{ oran: 0.25, category: "Teslim bakiyesi", description: "Teslim sonrası bakiye tahsil edildi.", tarih: proje.bitis - 1 }] : []),
+    ];
+    const tahsilatKayit = [];
+    for (const [indeks, tahsilat] of tahsilatPlani.entries()) {
+      const kayit = await olustur("financial-transactions", {
+        transaction_number: `FN-${proje.code.slice(3)}-0${indeks + 1}`, project_id: projeId, account_id: hesapKayit[1]?.id,
+        customer_id: musteri?.id, type: "income", category: tahsilat.category, transaction_date: gecmis(tahsilat.tarih, indeks),
+        amount_minor: lira(Math.round(proje.bedel * tahsilat.oran)), currency: "TRY", official: 1, payment_method: "havale",
+        reference: `SZL-${proje.code.slice(3)}`, description: tahsilat.description, status: "pending",
+      });
+      // Bir finans kaydının API üzerinden ulaşabildiği son durum "approved":
+      // `collected` ve `paid` durumları şemada var ama onlara götüren bir iş
+      // akışı ucu yok (worker/index.js → financialAction yalnız approve ve
+      // reverse tanıyor, PATCH ile durum değiştirmek de kapalı).
+      if (kayit) await akis("financial-transactions", kayit.id, "approve", {});
+      tahsilatKayit.push(kayit);
+    }
 
-    // Proje içi (gayri resmi) maliyet takibi. Resmi defterle karışmaz; "Proje
-    // Finansları" ekranı öntanımlı olarak bu tarafı gösterir.
-    for (const [indeks, hareket] of [
-      { type: "cost_forecast", category: "Malzeme", description: "Levha, kenar bandı ve mekanizma tahmini", oran: 0.34 },
-      { type: "cost_forecast", category: "İşçilik", description: "Atölye ve montaj işçilik tahmini", oran: 0.21 },
-      { type: "expense", category: "Nakliye", description: "Şantiye sevkiyatı ve hamaliye", oran: 0.03 },
+    // Tahmini maliyet (proje içi / gayri resmi). Gerçekleşenle karışmaz;
+    // kârlılık raporu bunu bilerek saymaz. Toplamı projenin tahmini maliyetine
+    // eşit olsun ki "tahmin tuttu mu" sorusu veriden cevaplanabilsin.
+    for (const [indeks, tahmin] of [
+      { category: "Malzeme", description: "Levha, kaplama, kenar bandı ve mekanizma tahmini", oran: 0.55 },
+      { category: "İşçilik", description: "Atölye ve montaj işçilik tahmini", oran: 0.28 },
+      { category: "Dış imalat", description: "Tezgah, cam ve cila dış imalat tahmini", oran: 0.17 },
     ].entries()) {
       await olustur("financial-transactions", {
-        transaction_number: `FN-${proje.code.slice(3)}-PI${indeks + 1}`, project_id: projeId,
-        type: hareket.type, category: hareket.category, transaction_date: gun(proje.baslangic + 20 + indeks * 4),
-        amount_minor: lira(Math.round((proje.maliyet || proje.bedel || 100000) * hareket.oran)),
-        currency: "TRY", official: 0, description: hareket.description, status: "planned",
+        transaction_number: `FN-${proje.code.slice(3)}-TH${indeks + 1}`, project_id: projeId,
+        type: "cost_forecast", category: tahmin.category, transaction_date: gun(proje.baslangic + 18 + indeks * 3),
+        amount_minor: lira(Math.round((proje.maliyet || proje.bedel * 0.7) * tahmin.oran)),
+        currency: "TRY", official: 0, description: tahmin.description, status: "planned",
       });
     }
 
-    const fatura = await olustur("invoices", {
-      invoice_number: `FTR-${proje.code.slice(3)}-01`, direction: "sales", project_id: projeId, customer_id: musteri?.id,
-      issue_date: gun(proje.baslangic + 14), due_date: gun(proje.baslangic + 44), currency: "TRY",
-      subtotal_minor: lira(proje.bedel * 0.4 / 1.2), tax_total_minor: lira((proje.bedel * 0.4 / 1.2) * 0.2),
-      grand_total_minor: lira(proje.bedel * 0.4), paid_total_minor: d >= 9 ? lira(proje.bedel * 0.4) : 0,
-      official: 1, status: d >= 9 ? "paid" : "open", notes: "Avans faturası",
+    // Gerçekleşen gider. Projenin toplam gerçekleşen maliyetinden depodan çıkan
+    // malzeme ile üretim sorunu maliyeti düşülür; kalan finans kalemlerine
+    // dağıtılır. Kalemler aşamaya göre değişiyor: sözleşmesi yeni imzalanmış
+    // projede işçilik ya da nakliye gideri henüz oluşmamıştır.
+    const malzemeMinor = (proje.malzeme || []).reduce((toplam, satir) => toplam + satir.adet * Number(stokKayit[satir.stok]?.average_cost_minor || stokKartlari[satir.stok]?.average_cost_minor || 0), 0);
+    const giderMinor = Math.max(0, lira(proje.gercek || 0) - malzemeMinor - lira(proje.sorun?.maliyet || 0));
+    const giderPlani = d >= 7
+      ? [
+        { category: "Malzeme", description: "Levha, kaplama ve kenar bandı alımı", oran: 0.4, tedarikci: 0, resmi: 1 },
+        { category: "Hırdavat", description: "Blum mekanizma ve bağlantı elemanı alımı", oran: 0.14, tedarikci: 1, resmi: 1 },
+        { category: "İşçilik", description: "Atölye imalat ve montaj işçiliği", oran: 0.23, tedarikci: null, resmi: 0 },
+        { category: "Dış imalat", description: "Tezgah, cam ve cila dış imalatı", oran: 0.17, tedarikci: 2, resmi: 1 },
+        { category: "Nakliye", description: "Şantiye sevkiyatı ve hamaliye", oran: 0.06, tedarikci: null, resmi: 0 },
+      ]
+      : d >= 5
+        ? [
+          { category: "Malzeme", description: "Levha, kaplama ve hırdavat ön alımı", oran: 0.52, tedarikci: 0, resmi: 1 },
+          { category: "Dış imalat", description: "Tezgah ve cila dış imalat avansı", oran: 0.28, tedarikci: 2, resmi: 1 },
+          { category: "Tasarım", description: "Proje, görselleştirme ve imalat çizimi", oran: 0.2, tedarikci: null, resmi: 0 },
+        ]
+        : [
+          { category: "Malzeme", description: "Levha ve kenar bandı ön alımı", oran: 0.66, tedarikci: 0, resmi: 1 },
+          { category: "Tasarım", description: "Proje ve imalat çizimi hizmeti", oran: 0.34, tedarikci: null, resmi: 0 },
+        ];
+    // Son kalem kalanı alır: oranlardan gelen yuvarlama artığı toplamı
+    // bozmasın, gerçekleşen maliyet kuruşu kuruşuna hedeflenen tutar olsun.
+    let kalanGider = giderMinor;
+    for (const [indeks, kalem] of giderPlani.entries()) {
+      const tutar = indeks === giderPlani.length - 1 ? kalanGider : Math.round(giderMinor * kalem.oran);
+      kalanGider -= tutar;
+      if (tutar <= 0) continue;
+      const kayit = await olustur("financial-transactions", {
+        transaction_number: `FN-${proje.code.slice(3)}-GD${indeks + 1}`, project_id: projeId,
+        supplier_id: kalem.tedarikci === null ? undefined : tedarikciKayit[kalem.tedarikci]?.id,
+        type: "expense", category: kalem.category, transaction_date: gecmis(proje.baslangic + 22 + indeks * 7, indeks),
+        amount_minor: tutar, currency: "TRY", official: kalem.resmi, payment_method: sec(["havale", "nakit", "kredi kartı"], indeks),
+        reference: proje.code, description: kalem.description, status: "pending",
+      });
+      if (kayit) await akis("financial-transactions", kayit.id, "approve", {});
+    }
+
+    // Onay bekleyen gider. Gerçek hayatta tedarikçi faturasının bir kısmı her
+    // zaman onay sırasındadır; kârlılık raporu bunu henüz maliyet saymaz ve
+    // finans ekranındaki onay kuyruğu da boş kalmaz.
+    if (d >= 6) await olustur("financial-transactions", {
+      transaction_number: `FN-${proje.code.slice(3)}-GD9`, project_id: projeId, supplier_id: tedarikciKayit[4]?.id,
+      type: "expense", category: "Kimyasal", transaction_date: gecmis(proje.baslangic + 50, 1),
+      amount_minor: lira(Math.round(proje.bedel * 0.012)), currency: "TRY", official: 1, payment_method: "havale",
+      reference: proje.code, description: "Cila ve boya faturası; muhasebe onayı bekliyor.", status: "pending",
     });
+
+    // Satış faturaları. Tahsil edilen kalemin faturası kapanır, bekleyen
+    // bakiyenin faturası açık kalır. Teslim edilmiş ama bakiyesi gelmemiş
+    // projelerin kapanış faturası vadesi geçmiş bırakıldı: "Vadesi geçmiş
+    // alacaklar" raporunun bakacak bir şeyi olsun.
+    const faturaPlani = [
+      { ek: "01", oran: 0.4, notlar: "Avans faturası", durum: d >= 5 ? "paid" : "open", odenen: d >= 5 ? 1 : 0, kesim: proje.baslangic + 14, vade: proje.baslangic + 44 },
+      ...(d >= 7 ? [{ ek: "02", oran: 0.3, notlar: "1. hakediş faturası", durum: "paid", odenen: 1, kesim: proje.baslangic + 58, vade: proje.baslangic + 88 }] : []),
+      ...(d === 6 ? [{ ek: "02", oran: 0.2, notlar: "Ara hakediş faturası; yarısı tahsil edildi", durum: "partial", odenen: 0.5, kesim: -40, vade: -6 }] : []),
+      ...(d >= 10
+        ? [{ ek: "03", oran: 0.25, notlar: "Kapanış faturası", durum: "paid", odenen: 1, kesim: proje.bitis - 8, vade: proje.bitis + 22 }]
+        : d >= 8 ? [{ ek: "03", oran: 0.25, notlar: "Kapanış faturası; vadesi geçti, tahsilat bekleniyor", durum: "overdue", odenen: 0, kesim: -38, vade: -8 }] : []),
+    ];
+    const faturaKayit = [];
+    for (const fatura of faturaPlani) {
+      const toplam = lira(Math.round(proje.bedel * fatura.oran));
+      faturaKayit.push(await olustur("invoices", {
+        invoice_number: `FTR-${proje.code.slice(3)}-${fatura.ek}`, direction: "sales", project_id: projeId, customer_id: musteri?.id,
+        issue_date: gecmis(fatura.kesim), due_date: gun(fatura.vade), currency: "TRY",
+        subtotal_minor: Math.round(toplam / 1.2), tax_total_minor: toplam - Math.round(toplam / 1.2),
+        grand_total_minor: toplam, paid_total_minor: Math.round(toplam * fatura.odenen),
+        official: 1, status: fatura.durum, notes: fatura.notlar,
+      }));
+    }
 
     if (sozlesme) {
       const hakedis = await olustur("progress-payments", {
@@ -466,7 +588,10 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
       if (hakedis && d >= 6) {
         await akis("progress-payments", hakedis.id, "submit", {});
         if (d >= 7) await akis("progress-payments", hakedis.id, "approve", {});
-        if (d >= 9 && fatura) await akis("progress-payments", hakedis.id, "invoice", { invoice_id: fatura.id });
+        // Hakediş kendi faturasına bağlanır (avans faturasına değil), ödenmiş
+        // sayılması için de o dönemin onaylı tahsilat kaydı gösterilir.
+        if (d >= 7 && faturaKayit[1]) await akis("progress-payments", hakedis.id, "invoice", { invoice_id: faturaKayit[1].id });
+        if (d >= 9 && tahsilatKayit[1]) await akis("progress-payments", hakedis.id, "paid", { payment_transaction_id: tahsilatKayit[1].id });
       }
     }
 
@@ -598,13 +723,22 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
       status: "pending", notes: "Çekmece adedi tasarım onayından sonra kesinleşti.",
     });
 
-    const hareket = await olustur("stock-movements", {
-      movement_number: `STK-${proje.code.slice(3)}-01`, inventory_item_id: stokKayit[0]?.id, project_id: projeId,
-      movement_type: "project_issue", movement_date: gun(proje.baslangic + 42), quantity: 24,
-      unit_cost_minor: lira(890), total_cost_minor: lira(21360), status: "draft",
-      reference: proje.code, notes: "Üretim için depodan çıkış.",
-    });
-    if (hareket) await akis("stock-movements", hareket.id, "post", {});
+    // Projeye çıkan malzeme. Kârlılık raporu kesinleşmiş (`posted`) proje
+    // çıkışlarını doğrudan maliyet saydığı için miktarlar projenin
+    // büyüklüğüyle orantılı; tek kalemlik sembolik bir çıkış, 2,5 milyonluk bir
+    // işin malzeme maliyetini 21 bin lira göstererek raporu anlamsızlaştırıyordu.
+    for (const [indeks, cikis] of (proje.malzeme || []).entries()) {
+      const stok = stokKayit[cikis.stok];
+      if (!stok) continue;
+      const birim = Number(stok.average_cost_minor || stokKartlari[cikis.stok]?.average_cost_minor || 0);
+      const hareket = await olustur("stock-movements", {
+        movement_number: `STK-${proje.code.slice(3)}-0${indeks + 1}`, inventory_item_id: stok.id, project_id: projeId,
+        movement_type: "project_issue", movement_date: gecmis(proje.baslangic + 42 + indeks * 3, indeks), quantity: cikis.adet,
+        unit_cost_minor: birim, total_cost_minor: birim * cikis.adet, status: "draft",
+        reference: proje.code, notes: `${stokKartlari[cikis.stok]?.name || "Malzeme"} · üretim için depodan çıkış.`,
+      });
+      if (hareket) await akis("stock-movements", hareket.id, "post", {});
+    }
   }
 
   // Üretim, operasyonlar, sorunlar ve kalite
@@ -643,15 +777,26 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
         await akis("production-operations", operasyon.id, "transition", { status: "in_progress" });
         await akis("production-operations", operasyon.id, "transition", { status: "completed", actual_minutes: operasyonlar[sayi].planned_minutes + sec([-20, 15, 0, 35], sayi) });
       }
-      if (indeks === 0 && !(await varMi("production-issues", "production_order_id", emir.id))) {
+      // Üretim sorununun maliyet etkisi. Fire ve yeniden imalat bedava olmaz;
+      // etkisi sıfır bırakılınca hem kârlılık raporu hem "Fire ve yeniden
+      // imalat" raporu boş rakam gösteriyordu. Kapanmayacak sorunda (üretimi
+      // süren proje) fire ve yeniden imalat açılışta yazılır, çünkü bu alanlar
+      // sonra yalnız `resolve` ile dolar ve kayıt açık kalacaktır.
+      if (indeks === 0 && proje.sorun && !(await varMi("production-issues", "production_order_id", emir.id))) {
+        const kapanacak = d >= 8;
         const sorun = await olustur("production-issues", {
           production_order_id: emir.id, project_id: projeId, work_item_id: isKalemi.id,
-          issue_type: sec(["material", "quality", "machine", "drawing"], sira), severity: "normal",
-          description: "Kaplama levhanın iki parçasında damar yönü uyuşmadı; iki gövde yeniden kesildi.",
-          root_cause: "Farklı parti levha kullanıldı.", status: "open",
+          issue_type: proje.sorun.tur, severity: proje.sorun.siddet, responsible_user_id: ekipKayit?.production,
+          description: proje.sorun.aciklama, root_cause: proje.sorun.neden,
+          rework_quantity: kapanacak ? 0 : proje.sorun.yeniden, scrap_quantity: kapanacak ? 0 : proje.sorun.fire,
+          cost_impact_minor: lira(proje.sorun.maliyet), delay_days: proje.sorun.gecikme, status: "open",
         });
-        if (sorun && d >= 8) {
-          await akis("production-issues", sorun.id, "resolve", { rework_quantity: 2, scrap_quantity: 1, resolution: "Aynı partiden levha getirtildi, iki gövde yeniden üretildi." });
+        if (sorun && kapanacak) {
+          await akis("production-issues", sorun.id, "resolve", {
+            rework_quantity: proje.sorun.yeniden, scrap_quantity: proje.sorun.fire,
+            cost_impact_minor: lira(proje.sorun.maliyet), delay_days: proje.sorun.gecikme,
+            resolution: proje.sorun.cozum,
+          });
         }
       }
       if (d >= 8) {
@@ -752,6 +897,27 @@ async function depoGirisleri(stokKayit) {
       movement_type: "receipt", movement_date: gun(-30 + indeks), quantity: adet,
       unit_cost_minor: stok.average_cost_minor, total_cost_minor: (stok.average_cost_minor || 0) * adet,
       status: "draft", reference: `İrsaliye ${9000 + indeks}`, notes: "Dönem başı mal girişi.",
+    });
+    if (giris) await akis("stock-movements", giris.id, "post", {});
+  }
+
+  // Dönem içi ikmal. Projelere çıkan malzemenin yerine konan alımlar: tek bir
+  // dönem başı girişiyle hem stok projelerin tüketimini kaldırmıyor hem de
+  // "Stok hareket özeti" raporu (bu ay) neredeyse boş kalıyordu.
+  for (const [indeks, ikmal] of [
+    { stok: 0, adet: 420, tarih: -12 },
+    { stok: 5, adet: 2400, tarih: -9 },
+    { stok: 1, adet: 60, tarih: -6 },
+    { stok: 6, adet: 60, tarih: -4 },
+    { stok: 7, adet: 120, tarih: -2 },
+  ].entries()) {
+    const stok = stokKayit[ikmal.stok];
+    if (!stok) continue;
+    const giris = await olustur("stock-movements", {
+      movement_number: `STK-IKM-${String(indeks + 1).padStart(3, "0")}`, inventory_item_id: stok.id,
+      movement_type: "receipt", movement_date: gun(ikmal.tarih), quantity: ikmal.adet,
+      unit_cost_minor: stok.average_cost_minor, total_cost_minor: (stok.average_cost_minor || 0) * ikmal.adet,
+      status: "draft", reference: `İrsaliye ${9500 + indeks}`, notes: "Dönem içi ikmal alımı.",
     });
     if (giris) await akis("stock-movements", giris.id, "post", {});
   }
