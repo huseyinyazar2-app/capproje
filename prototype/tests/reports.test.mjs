@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -566,8 +567,10 @@ test("savedReportId ile definition birlikte gönderilemez", async () => {
   const both = await postRun(env, { savedReportId: saved.id, definition: { resource: "projects", columns: ["name"] } }, reporter.email);
   assert.equal(both.status, 422);
   assert.equal((await payload(both)).error.code, "ambiguous_report_source");
-  // Hiçbiri gelmediğinde eski davranış: tanım eksik.
-  assert.equal((await postRun(env, {}, reporter.email)).status, 422);
+  // Hiçbiri gelmediğinde de çalıştırılacak rapor belirsizdir.
+  const none = await postRun(env, {}, reporter.email);
+  assert.equal(none.status, 422);
+  assert.equal((await payload(none)).error.code, "ambiguous_report_source");
 });
 
 test("export bayrağı kendi yetkisini arar, tam sınırla çalışır ve denetim kaydı bırakır", async () => {
@@ -749,4 +752,372 @@ test("formül koruması genel liste dökümünde de geçerlidir", async () => {
   assert.ok(text.includes('"Normal Proje"'), "normal metin liste dökümünde de bozulmamalı");
   assert.ok(text.includes('"-150000"') && !text.includes(`"'-150000"`), "sayısal tutar liste dökümünde de sayı kalmalı");
   assert.ok(text.includes('"2026-03-31"') && !text.includes(`"'2026-03-31"`), "tarih liste dökümünde de bozulmamalı");
+});
+
+// Göreli tarih testleri saatten bağımsızdır: "şimdi" sunucuya enjekte edilir.
+// 2026-09-23T10:00Z İstanbul'da çarşamba 13:00'tür; hafta 21 Eylül pazartesi başlar.
+const frozenNow = "2026-09-23T10:00:00.000Z";
+const datedProjectDays = [
+  "2025-12-31", "2026-01-01", "2026-03-31", "2026-04-01", "2026-06-25", "2026-06-26", "2026-06-30", "2026-07-01",
+  "2026-08-24", "2026-08-25", "2026-08-31", "2026-09-01", "2026-09-14", "2026-09-16", "2026-09-17", "2026-09-20",
+  "2026-09-21", "2026-09-22", "2026-09-23", "2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01",
+  "2026-10-22", "2026-10-23", "2027-01-01",
+];
+
+function seedDatedProjects(database) {
+  for (const day of datedProjectDays) {
+    database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,planned_end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(`prj-d-${day}`, "tenant-a", day, `Proje ${day}`, "production", day, timestamp, timestamp);
+  }
+  // Tarihi boş proje: "eşit değil" süzgecinde kaybolmamalı, aralıklarda görünmemeli.
+  database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+    .run("prj-d-bos", "tenant-a", "tarihsiz", "Tarihsiz", "production", timestamp, timestamp);
+}
+
+const datedCodes = async (env, filters, email = reporter.email) => {
+  const response = await runReport(env, { resource: "projects", columns: ["code"], filters, sort: [{ field: "code", direction: "asc" }], limit: 5000 }, { email });
+  assert.equal(response.status, 200, JSON.stringify(filters));
+  return (await payload(response)).data.rows.map((row) => row.code);
+};
+
+test("göreli tarih aralıkları İstanbul takvimine göre doğru günleri seçer", async () => {
+  const { database, env } = await setup({ users: [reporter] });
+  seedDatedProjects(database);
+  env.REPORT_CLOCK = frozenNow;
+
+  // Beklenen aralıklar elle yazılmıştır (ilk ve son gün dahil); motorun
+  // hesabını tekrar etmez.
+  const expectations = {
+    today: ["2026-09-23", "2026-09-23"],
+    yesterday: ["2026-09-22", "2026-09-22"],
+    this_week: ["2026-09-21", "2026-09-27"],
+    last_week: ["2026-09-14", "2026-09-20"],
+    this_month: ["2026-09-01", "2026-09-30"],
+    last_month: ["2026-08-01", "2026-08-31"],
+    this_quarter: ["2026-07-01", "2026-09-30"],
+    last_quarter: ["2026-04-01", "2026-06-30"],
+    this_year: ["2026-01-01", "2026-12-31"],
+    last_year: ["2025-01-01", "2025-12-31"],
+    last_7_days: ["2026-09-17", "2026-09-23"],
+    last_30_days: ["2026-08-25", "2026-09-23"],
+    last_90_days: ["2026-06-26", "2026-09-23"],
+    next_7_days: ["2026-09-23", "2026-09-29"],
+    next_30_days: ["2026-09-23", "2026-10-22"],
+  };
+  for (const [relative, [first, last]] of Object.entries(expectations)) {
+    const codes = await datedCodes(env, [{ field: "planned_end_date", op: "between", value: { relative } }]);
+    assert.deepEqual(codes, datedProjectDays.filter((day) => day >= first && day <= last), relative);
+  }
+
+  // Sınırlar açıkça: ayın son günü dahil, ertesi ayın ilki hariç; hafta pazartesi başlar.
+  const thisMonth = await datedCodes(env, [{ field: "planned_end_date", op: "between", value: { relative: "this_month" } }]);
+  assert.ok(thisMonth.includes("2026-09-30") && !thisMonth.includes("2026-10-01") && !thisMonth.includes("2026-08-31"));
+  const thisWeek = await datedCodes(env, [{ field: "planned_end_date", op: "between", value: { relative: "this_week" } }]);
+  assert.ok(thisWeek.includes("2026-09-21"), "pazartesi haftaya dahil olmalı");
+  assert.ok(!thisWeek.includes("2026-09-20"), "önceki pazar bu haftaya girmemeli");
+  assert.ok(thisWeek.includes("2026-09-27") && !thisWeek.includes("2026-09-28"), "pazar dahil, ertesi pazartesi hariç");
+  const lastQuarter = await datedCodes(env, [{ field: "planned_end_date", op: "between", value: { relative: "last_quarter" } }]);
+  assert.ok(lastQuarter.includes("2026-06-30") && !lastQuarter.includes("2026-07-01") && !lastQuarter.includes("2026-03-31"));
+
+  // Sabit tarihli between eskisi gibi iki ucu da kapsar.
+  assert.deepEqual(await datedCodes(env, [{ field: "planned_end_date", op: "between", value: ["2026-09-30", "2026-10-01"] }]), ["2026-09-30", "2026-10-01"]);
+});
+
+test("zaman damgası sütununda gün sınırı İstanbul gece yarısıdır, UTC değil", async () => {
+  const { database, env } = await setup({ users: [reporter] });
+  env.REPORT_CLOCK = frozenNow;
+  const stamps = [
+    ["once", "2026-08-31T20:30:00.000Z"], // İstanbul 31 Ağustos 23:30
+    ["sinir", "2026-08-31T21:00:00.000Z"], // İstanbul 1 Eylül 00:00, tam sınır
+    ["gece", "2026-08-31T21:30:00Z"], // İstanbul 1 Eylül 00:30, milisaniyesiz saklanmış
+    ["son-an", "2026-09-30T20:59:59.999Z"], // İstanbul 30 Eylül 23:59:59
+    ["ekim", "2026-09-30T21:00:00.000Z"], // İstanbul 1 Ekim 00:00
+    ["dun-gec", "2026-09-22T20:59:00.000Z"], // İstanbul 22 Eylül 23:59
+    ["bugun-erken", "2026-09-22T21:00:00.000Z"], // İstanbul 23 Eylül 00:00
+  ];
+  for (const [code, createdAt] of stamps) {
+    database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+      .run(`prj-t-${code}`, "tenant-a", code, code, "production", createdAt, createdAt);
+  }
+  const codesFor = async (filters) => (await datedCodes(env, filters)).sort();
+
+  assert.deepEqual(await codesFor([{ field: "created_at", op: "between", value: { relative: "this_month" } }]), ["bugun-erken", "dun-gec", "gece", "sinir", "son-an"].sort());
+  assert.deepEqual(await codesFor([{ field: "created_at", op: "between", value: { relative: "last_month" } }]), ["once"]);
+  assert.deepEqual(await codesFor([{ field: "created_at", op: "between", value: { relative: "today" } }]), ["bugun-erken"]);
+  assert.deepEqual(await codesFor([{ field: "created_at", op: "between", value: { relative: "yesterday" } }]), ["dun-gec"]);
+  // Nokta belirteci zaman damgasında bütün günü kapsar.
+  assert.deepEqual(await codesFor([{ field: "created_at", op: "eq", value: { relative: "today" } }]), ["bugun-erken"]);
+  assert.deepEqual(await codesFor([{ field: "created_at", op: "lt", value: { relative: "today", offsetDays: -22 } }]), ["once"], "1 Eylül'den önce yalnız İstanbul'da 31 Ağustos olan kayıt kalmalı");
+});
+
+test("gün, sunucunun saat diliminden değil İstanbul'dan okunur", async () => {
+  const { database, env } = await setup({ users: [reporter] });
+  seedDatedProjects(database);
+  const previousZone = process.env.TZ;
+  // UTC+14: sunucunun yerel tarihi İstanbul'dan bir gün ileride.
+  process.env.TZ = "Pacific/Kiritimati";
+  try {
+    env.REPORT_CLOCK = frozenNow;
+    assert.equal(new Date(frozenNow).getDate(), 24, "deney düzeneği: yerel saat gerçekten ertesi günde olmalı");
+    assert.deepEqual(await datedCodes(env, [{ field: "planned_end_date", op: "between", value: { relative: "today" } }]), ["2026-09-23"]);
+    // UTC'de hâlâ 23 Eylül, İstanbul'da 24 Eylül 01:30.
+    env.REPORT_CLOCK = "2026-09-23T22:30:00.000Z";
+    assert.deepEqual(await datedCodes(env, [{ field: "planned_end_date", op: "between", value: { relative: "yesterday" } }]), ["2026-09-23"]);
+    // Ay dönümü: UTC'de 30 Eylül, İstanbul'da 1 Ekim.
+    env.REPORT_CLOCK = "2026-09-30T21:30:00.000Z";
+    const october = await datedCodes(env, [{ field: "planned_end_date", op: "between", value: { relative: "this_month" } }]);
+    assert.deepEqual(october, ["2026-10-01", "2026-10-22", "2026-10-23"]);
+  } finally {
+    if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone;
+  }
+});
+
+test("bugün + gün kaydırmasıyla gecikmiş ve yaklaşan işler seçilir", async () => {
+  const { database, env } = await setup({ users: [reporter] });
+  seedDatedProjects(database);
+  env.REPORT_CLOCK = frozenNow;
+  const today = (op, offsetDays) => ({ field: "planned_end_date", op, value: offsetDays === undefined ? { relative: "today" } : { relative: "today", offsetDays } });
+
+  const overdue = await datedCodes(env, [today("lt")]);
+  assert.deepEqual(overdue, datedProjectDays.filter((day) => day < "2026-09-23"), "bugün dahil olmamalı");
+  const upcoming = await datedCodes(env, [today("gte"), today("lte", 7)]);
+  assert.deepEqual(upcoming, ["2026-09-23", "2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30"]);
+  assert.deepEqual(await datedCodes(env, [today("eq", -1)]), ["2026-09-22"]);
+  assert.deepEqual(await datedCodes(env, [today("gt", 0), today("lt", 5)]), ["2026-09-27"]);
+  assert.deepEqual(await datedCodes(env, [today("gt", -2), today("lte", 0)]), ["2026-09-22", "2026-09-23"]);
+  // Ay sonunu aşan kaydırma takvimde doğru yere düşer.
+  assert.deepEqual(await datedCodes(env, [today("eq", 8)]), ["2026-10-01"]);
+  // "Eşit değil" tarihsiz kaydı da getirir; eski ne davranışıyla aynı.
+  const notToday = await datedCodes(env, [today("ne")]);
+  assert.ok(!notToday.includes("2026-09-23"));
+  assert.ok(notToday.includes("tarihsiz"));
+  assert.equal(notToday.length, datedProjectDays.length);
+});
+
+test("göreli tarihin hatalı kullanımı anlaşılır bir 422 ile reddedilir", async () => {
+  const { database, env } = await setup({ users: [reporter] });
+  seedDatedProjects(database);
+  env.REPORT_CLOCK = frozenNow;
+  const attempts = [
+    [{ field: "planned_end_date", op: "lt", value: { relative: "this_month" } }, "aralık belirteci karşılaştırmada"],
+    [{ field: "planned_end_date", op: "between", value: { relative: "next_month" } }, "bilinmeyen aralık"],
+    [{ field: "planned_end_date", op: "eq", value: { relative: "tomorrow" } }, "bilinmeyen nokta"],
+    [{ field: "planned_end_date", op: "between", value: { relative: "today", offsetDays: 1 } }, "aralıkta kaydırma"],
+    [{ field: "planned_end_date", op: "lt", value: { relative: "today", offsetDays: 3651 } }, "aralık dışı kaydırma"],
+    [{ field: "planned_end_date", op: "lt", value: { relative: "today", offsetDays: -3651 } }, "aralık dışı eksi kaydırma"],
+    [{ field: "planned_end_date", op: "lt", value: { relative: "today", offsetDays: 1.5 } }, "kesirli kaydırma"],
+    [{ field: "planned_end_date", op: "lt", value: { relative: "today", offsetDays: "3" } }, "metin kaydırma"],
+    [{ field: "planned_end_date", op: "in", value: { relative: "today" } }, "in işleci"],
+    [{ field: "planned_end_date", op: "contains", value: { relative: "today" } }, "contains işleci"],
+    [{ field: "planned_end_date", op: "eq", value: { relative: "today", saat: "13:00" } }, "tanınmayan alan"],
+    [{ field: "code", op: "eq", value: { relative: "today" } }, "metin sütunu"],
+    [{ field: "status", op: "between", value: { relative: "this_month" } }, "durum sütunu"],
+    [{ field: "contract_amount_minor", op: "gt", value: { relative: "today" } }, "para sütunu"],
+  ];
+  for (const [filter, label] of attempts) {
+    const response = await runReport(env, { resource: "projects", columns: ["code"], filters: [filter] }, { email: reporter.email });
+    assert.equal(response.status, 422, label);
+    const { error } = await payload(response);
+    assert.equal(error.code, "invalid_relative_date", label);
+    assert.ok(error.message && !/undefined|\[object/.test(error.message), `${label} için mesaj okunur olmalı: ${error.message}`);
+  }
+  // Belirteçler sınırın içinde kalınca geçer.
+  assert.equal((await runReport(env, { resource: "projects", columns: ["code"], filters: [{ field: "planned_end_date", op: "lt", value: { relative: "today", offsetDays: -3650 } }] }, { email: reporter.email })).status, 200);
+});
+
+test("göreli tarihli tanım kaydedilir ve her çalıştırmada o günün tarihine çözülür", async () => {
+  const { database, env } = await setup({ users: [reporter] });
+  seedDatedProjects(database);
+  env.REPORT_CLOCK = frozenNow;
+  const save = (definition) => send(env, "/api/v1/saved-reports", { method: "POST", email: reporter.email, body: { name: "Bu ay bitenler", resource: "projects", definition_json: definition } });
+
+  const definition = { resource: "projects", columns: ["code"], filters: [{ field: "planned_end_date", op: "between", value: { relative: "this_month" } }], sort: [{ field: "code", direction: "asc" }] };
+  const created = await save(definition);
+  assert.equal(created.status, 200, "motorun kabul ettiği belirteç kayıtta da kabul edilmeli");
+  const saved = (await payload(created)).data;
+  assert.deepEqual(saved.definition_json, definition, "belirteç sabit tarihe çevrilip saklanmamalı");
+
+  const bad = await save({ resource: "projects", columns: ["code"], filters: [{ field: "code", op: "between", value: { relative: "this_month" } }] });
+  assert.equal(bad.status, 422, "motorun reddettiği belirteç kaydedilememeli");
+  assert.equal((await payload(bad)).error.code, "invalid_relative_date");
+
+  const september = (await payload(await postRun(env, { savedReportId: saved.id }, reporter.email))).data.rows.map((row) => row.code);
+  assert.equal(september[0], "2026-09-01");
+  assert.equal(september.at(-1), "2026-09-30");
+
+  // Aynı kayıt bir ay sonra kendiliğinden ekimi gösterir.
+  env.REPORT_CLOCK = "2026-10-15T09:00:00.000Z";
+  const october = (await payload(await postRun(env, { savedReportId: saved.id }, reporter.email))).data.rows.map((row) => row.code);
+  assert.deepEqual(october, ["2026-10-01", "2026-10-22", "2026-10-23"]);
+});
+
+test("enjekte saat yalnız geliştirme kimliği açıkken dikkate alınır, üretimde gerçek saat geçerlidir", async () => {
+  const { database, env } = await setup({ users: [reporter] });
+  // Başlık kimliği kapalıyken de istek yapılabilsin diye gerçek bir API anahtarı.
+  const rawToken = "rapor-saat-testi-anahtari";
+  database.prepare("INSERT INTO api_tokens (id,user_id,name,token_hash,expires_at,created_at) VALUES (?,?,?,?,?,?)")
+    .run("tok-saat", reporter.id, "Saat testi", createHash("sha256").update(rawToken).digest("hex"), null, timestamp);
+  const istanbulDay = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Istanbul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const realToday = istanbulDay();
+  for (const [code, day] of [["gecmis", "2000-01-15"], ["bugun", realToday]]) {
+    database.prepare("INSERT INTO projects (id,tenant_id,code,name,status,planned_end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(`prj-saat-${code}`, "tenant-a", code, code, "production", day, timestamp, timestamp);
+  }
+  const codesWith = async (flags, relative) => {
+    const headers = new Headers({ authorization: `Bearer ${rawToken}`, "x-tenant-id": "tenant-a", "content-type": "application/json" });
+    const body = JSON.stringify({ definition: { resource: "projects", columns: ["code"], filters: [{ field: "planned_end_date", op: "between", value: { relative } }] } });
+    const response = await worker.fetch(new Request("https://example.test/api/v1/reports/run", { method: "POST", headers, body }), { ...env, ...flags });
+    assert.equal(response.status, 200);
+    return (await payload(response)).data.rows.map((row) => row.code);
+  };
+
+  // Karşılaştırma: geliştirme ortamında saat gerçekten 2000 yılına donar.
+  assert.deepEqual(await codesWith({ ALLOW_DEV_AUTH: "true", REPORT_CLOCK: "2000-01-15T10:00:00.000Z" }, "this_month"), ["gecmis"]);
+
+  // Üretim: bayrak kapalı ya da hiç yokken REPORT_CLOCK tanımlı olsa bile yok sayılır.
+  for (const flags of [{ ALLOW_DEV_AUTH: "false", REPORT_CLOCK: "2000-01-15T10:00:00.000Z" }, { ALLOW_DEV_AUTH: undefined, REPORT_CLOCK: "2000-01-15T10:00:00.000Z" }]) {
+    assert.deepEqual(await codesWith(flags, "this_month"), realToday.slice(0, 7) === "2000-01" ? ["gecmis", "bugun"] : ["bugun"], "donmuş saat üretimde sessizce eski ayı göstermemeli");
+    const today = await codesWith(flags, "today");
+    // Test gece yarısına denk gelirse gün değişmiş olabilir; o durumda boş dönmesi de doğrudur.
+    assert.ok(today.length === 1 ? today[0] === "bugun" : istanbulDay() !== realToday, `gerçek bugün seçilmeliydi: ${JSON.stringify(today)}`);
+  }
+});
+
+test("adından anlaşılmayan tarih, zaman damgası, yüzde ve sayı sütunları doğru tipte sınıflanır", async () => {
+  const { env } = await setup();
+  const fields = new Map((await payload(await send(env, "/api/v1/reports/fields"))).data.map((item) => [item.resource, item.columns]));
+  const typeOf = (resource, key) => fields.get(resource)?.find((column) => column.key === key)?.type;
+  const expected = [
+    ["project-tasks", "planned_start", "date"], ["project-tasks", "planned_end", "date"],
+    ["production-orders", "planned_start", "date"], ["production-orders", "planned_end", "date"],
+    // Üretim emri iş akışı bunlara UTC anı yazar; gün sınırı İstanbul'a göre kesilmeli.
+    ["production-orders", "actual_start", "datetime"], ["production-orders", "actual_end", "datetime"],
+    ["installations", "planned_start", "date"], ["installations", "actual_end", "datetime"],
+    ["resource-assignments", "planned_end", "date"], ["production-operations", "planned_end", "date"],
+    ["material-requirements", "needed_by", "date"], ["purchase-requests", "needed_by", "date"],
+    ["progress-payments", "period_start", "date"], ["progress-payments", "period_end", "date"],
+    ["offers", "valid_until", "date"], ["supplier-quotations", "valid_until", "date"],
+    ["supplier-quotations", "lead_time_days", "number"], ["production-issues", "delay_days", "number"],
+    // Oranlar 0-100 arası yüzde olarak saklanır (18 = %18).
+    ["contracts", "advance_rate", "percent"], ["contracts", "retention_rate", "percent"],
+    ["offer-items", "discount_rate", "percent"], ["offer-items", "tax_rate", "percent"], ["bom-lines", "scrap_rate", "percent"],
+    // Kur yüzde değil, sayıdır; adı "rate" ile bitse de.
+    ["financial-transactions", "exchange_rate", "number"],
+    ["suppliers", "rating", "number"], ["handovers", "satisfaction_score", "number"], ["contracts", "warranty_months", "number"],
+    ["files", "size_bytes", "number"], ["survey-measurements", "width", "number"], ["survey-measurements", "height", "number"],
+    ["survey-measurements", "depth", "number"], ["survey-measurements", "length", "number"], ["work-items", "width", "number"],
+    ["bom-lines", "quantity_per_unit", "number"], ["production-operations", "sequence", "number"], ["bom-lines", "sort_order", "number"],
+    // Yalnız saat ya da ay tutan sütunlara gün sınırı uygulanmaz.
+    ["attendance", "check_in", "text"], ["attendance", "check_out", "text"], ["payroll-inputs", "period", "text"],
+  ];
+  for (const [resource, key, type] of expected) assert.equal(typeOf(resource, key), type, `${resource}.${key}`);
+});
+
+test("planlanan bitişi geçmiş görevler göreli tarihle seçilir", async () => {
+  const { database, env } = await setup();
+  seedProjects(database);
+  env.REPORT_CLOCK = frozenNow;
+  const tasks = [
+    ["dun-bitmeliydi", "2026-09-22", "in_progress"],
+    ["gecen-ay", "2026-08-31", "todo"],
+    ["bugun-bitiyor", "2026-09-23", "todo"],
+    ["yarin", "2026-09-24", "blocked"],
+    ["bitmis-eski", "2026-09-01", "completed"],
+    ["tarihsiz", null, "todo"],
+  ];
+  for (const [title, plannedEnd, status] of tasks) {
+    database.prepare("INSERT INTO project_tasks (id,tenant_id,project_id,title,status,planned_end,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(`tsk-${title}`, "tenant-a", "prj-1", title, status, plannedEnd, timestamp, timestamp);
+  }
+  const response = await runReport(env, {
+    resource: "project-tasks", columns: ["title", "planned_end"],
+    filters: [{ field: "planned_end", op: "lt", value: { relative: "today" } }, { field: "status", op: "in", value: ["todo", "in_progress", "blocked"] }],
+    sort: [{ field: "planned_end", direction: "asc" }],
+  });
+  assert.equal(response.status, 200);
+  const body = await payload(response);
+  assert.deepEqual(body.data.rows.map((row) => row.title), ["gecen-ay", "dun-bitmeliydi"]);
+  assert.deepEqual(body.data.columns.find((column) => column.key === "planned_end"), { key: "planned_end", type: "date" });
+
+  const upcoming = await payload(await runReport(env, { resource: "project-tasks", columns: ["title"], filters: [{ field: "planned_end", op: "between", value: { relative: "next_7_days" } }], sort: [{ field: "planned_end", direction: "asc" }] }));
+  assert.deepEqual(upcoming.data.rows.map((row) => row.title), ["bugun-bitiyor", "yarin"]);
+});
+
+test("gün sayısı sütunlarında toplam ve ortalama alınabilir", async () => {
+  const { database, env } = await setup();
+  seedProjects(database);
+  database.prepare("INSERT INTO suppliers (id,tenant_id,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("sup-1", "tenant-a", "Kereste AŞ", "active", timestamp, timestamp);
+  database.prepare("INSERT INTO suppliers (id,tenant_id,name,status,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("sup-2", "tenant-a", "Cam Ltd", "active", timestamp, timestamp);
+  for (const requestId of ["pr-1", "pr-2"]) {
+    database.prepare("INSERT INTO purchase_requests (id,tenant_id,request_number,description,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(requestId, "tenant-a", requestId.toUpperCase(), "Kereste", timestamp, timestamp);
+  }
+  // Bir talebe bir tedarikçi yalnız bir teklif verebilir; ortalama için iki talep gerekir.
+  for (const [id, requestId, supplier, days] of [["q-1", "pr-1", "sup-1", 10], ["q-2", "pr-2", "sup-1", 20], ["q-3", "pr-1", "sup-2", 7]]) {
+    database.prepare("INSERT INTO supplier_quotations (id,tenant_id,purchase_request_id,supplier_id,lead_time_days,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run(id, "tenant-a", requestId, supplier, days, timestamp, timestamp);
+  }
+  database.prepare("INSERT INTO production_orders (id,tenant_id,order_number,project_id,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("po-1", "tenant-a", "UE-1", "prj-1", timestamp, timestamp);
+  for (const [id, type, days] of [["iss-1", "material", 3], ["iss-2", "material", 4], ["iss-3", "machine", 2]]) {
+    database.prepare("INSERT INTO production_issues (id,tenant_id,production_order_id,issue_type,description,delay_days,reported_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)").run(id, "tenant-a", "po-1", type, "Sorun", days, timestamp, timestamp, timestamp);
+  }
+
+  const delays = await runReport(env, { resource: "production-issues", group: { by: ["issue_type"], aggregates: [{ fn: "sum", field: "delay_days", as: "toplam_gecikme" }] }, sort: [{ field: "issue_type", direction: "asc" }] });
+  assert.equal(delays.status, 200, "gecikme günü sayısal kabul edilmeli");
+  const delayBody = await payload(delays);
+  assert.deepEqual(delayBody.data.rows, [{ issue_type: "machine", toplam_gecikme: 2 }, { issue_type: "material", toplam_gecikme: 7 }]);
+  assert.deepEqual(delayBody.data.columns.find((column) => column.key === "toplam_gecikme"), { key: "toplam_gecikme", type: "number" });
+
+  const leadTimes = await runReport(env, { resource: "supplier-quotations", group: { by: ["supplier_id"], aggregates: [{ fn: "avg", field: "lead_time_days", as: "ort_termin" }] }, sort: [{ field: "ort_termin", direction: "desc" }] });
+  assert.equal(leadTimes.status, 200, "termin günü sayısal kabul edilmeli");
+  assert.deepEqual((await payload(leadTimes)).data.rows.map(({ supplier_name, ort_termin }) => [supplier_name, ort_termin]), [["Kereste AŞ", 15], ["Cam Ltd", 7]]);
+});
+
+test("İstanbul'da gece tamamlanan üretim emri doğru güne düşer", async () => {
+  const { database, env } = await setup();
+  seedProjects(database);
+  env.REPORT_CLOCK = frozenNow;
+  // Biçim, üretim emri iş akışının `now()` ile yazdığıyla aynı: milisaniyeli UTC ISO.
+  const orders = [
+    ["gece-bitti", "2026-09-22T22:30:00.000Z"], // İstanbul 23 Eylül 01:30
+    ["dun-aksam", "2026-09-22T20:30:00.000Z"], // İstanbul 22 Eylül 23:30
+    ["bugun-ogle", "2026-09-23T09:00:00.000Z"], // İstanbul 23 Eylül 12:00
+  ];
+  for (const [code, completedAt] of orders) {
+    database.prepare("INSERT INTO production_orders (id,tenant_id,order_number,project_id,status,actual_start,actual_end,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(`po-${code}`, "tenant-a", code, "prj-1", "completed", "2026-09-20T06:00:00.000Z", completedAt, timestamp, timestamp);
+  }
+  const finished = async (value) => (await payload(await runReport(env, { resource: "production-orders", columns: ["order_number"], filters: [{ field: "actual_end", op: "between", value }], sort: [{ field: "order_number", direction: "asc" }] }))).data.rows.map((row) => row.order_number);
+  // UTC'de 22 Eylül olan 22:30 anı, İstanbul'da bugündür; `date` sınırı onu düne atardı.
+  assert.deepEqual(await finished({ relative: "today" }), ["bugun-ogle", "gece-bitti"]);
+  assert.deepEqual(await finished({ relative: "yesterday" }), ["dun-aksam"]);
+  // Nokta belirteci de aynı günü görür.
+  const sameDay = (await payload(await runReport(env, { resource: "production-orders", columns: ["order_number"], filters: [{ field: "actual_end", op: "eq", value: { relative: "today" } }] }))).data.rows.map((row) => row.order_number).sort();
+  assert.deepEqual(sameDay, ["bugun-ogle", "gece-bitti"]);
+});
+
+test("memnuniyet puanının ortalaması alınır, sıra alanı sayısal sıralanır", async () => {
+  const { database, env } = await setup();
+  seedProjects(database);
+  for (const [id, project, score] of [["ho-1", "prj-1", 5], ["ho-2", "prj-1", 4], ["ho-3", "prj-3", 3], ["ho-4", "prj-3", null]]) {
+    database.prepare("INSERT INTO handovers (id,tenant_id,handover_number,project_id,handover_date,customer_contact,satisfaction_score,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run(id, "tenant-a", id.toUpperCase(), project, "2026-09-01", "Müşteri", score, timestamp, timestamp);
+  }
+  const satisfaction = await runReport(env, { resource: "handovers", group: { by: ["project_id"], aggregates: [{ fn: "avg", field: "satisfaction_score", as: "ort_memnuniyet" }, { fn: "count", as: "adet" }] }, sort: [{ field: "ort_memnuniyet", direction: "desc" }] });
+  assert.equal(satisfaction.status, 200, "memnuniyet puanı sayısal kabul edilmeli");
+  const body = await payload(satisfaction);
+  // Puanı girilmemiş teslim ortalamayı düşürmez; SQL AVG boş değeri saymaz.
+  assert.deepEqual(body.data.rows.map(({ project_name, ort_memnuniyet, adet }) => [project_name, ort_memnuniyet, adet]), [["P-1 · Lobi", 4.5, 2], ["P-3 · Mutfak", 3, 2]]);
+  assert.deepEqual(body.data.columns.find((column) => column.key === "ort_memnuniyet"), { key: "ort_memnuniyet", type: "number" });
+
+  database.prepare("INSERT INTO production_orders (id,tenant_id,order_number,project_id,created_at,updated_at) VALUES (?,?,?,?,?,?)").run("po-1", "tenant-a", "UE-1", "prj-1", timestamp, timestamp);
+  // Değer metin olarak gelse de sütun INTEGER olduğu için sayı saklanır.
+  for (const [id, sequence] of [["op-a", "10"], ["op-b", 9], ["op-c", 2]]) {
+    database.prepare("INSERT INTO production_operations (id,tenant_id,production_order_id,name,sequence,created_at,updated_at) VALUES (?,?,?,?,?,?,?)").run(id, "tenant-a", "po-1", id, sequence, timestamp, timestamp);
+  }
+  const operations = await payload(await runReport(env, { resource: "production-operations", columns: ["name", "sequence"], sort: [{ field: "sequence", direction: "asc" }] }));
+  assert.deepEqual(operations.data.rows.map((row) => row.sequence), [2, 9, 10], "metin sıralaması 10'u 9'dan önce koyardı");
+  assert.deepEqual(operations.data.columns.find((column) => column.key === "sequence"), { key: "sequence", type: "number" });
+  const afterNine = await payload(await runReport(env, { resource: "production-operations", columns: ["name"], filters: [{ field: "sequence", op: "gt", value: 9 }] }));
+  assert.deepEqual(afterNine.data.rows.map((row) => row.name), ["op-a"]);
+  // Toplam artık "sayısal değil" diye reddedilmez.
+  assert.equal((await runReport(env, { resource: "production-operations", group: { by: ["production_order_id"], aggregates: [{ fn: "max", field: "sequence", as: "son" }, { fn: "sum", field: "sequence", as: "toplam" }] } })).status, 200);
 });

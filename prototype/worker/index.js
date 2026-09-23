@@ -1,4 +1,5 @@
 import { databaseFromEnv } from "./database.js";
+import { builtinReports } from "./report-catalog.js";
 
 // "0" ve "false" metinleri JavaScript'te doğru kabul edilir; seçim listesinden
 // gelen değerlerin yanlış yorumlanmaması için ayrıca çözümlenir.
@@ -3215,15 +3216,46 @@ async function reportColumnsFor(env, config) {
     .filter((column) => actual.has(column) && !JSON_COLUMNS.has(column));
 }
 
+// Adı sonekten anlaşılmayan sütunlar açık kümelerle sınıflanır; sonek
+// tahmini genişletilmez, yoksa "rate" ile biten bir kur yüzde sanılır. Kümeler
+// kayıt defterindeki bütün `fields` listeleri taranıp göçteki tanım, sunucunun
+// yazdığı değer ve istemcinin girdi tipiyle karşılaştırılarak çıkarıldı.
+// Sınıflanmayan sütunda göreli tarih reddedilir, sum/avg "sayısal değil" der
+// ve metin sıralaması 10'u 9'dan önce koyar.
+//
+// Tarih: planned_start/planned_end (görev, üretim emri, operasyon, kaynak
+// ataması, montaj), needed_by, period_start/period_end, valid_until istemcinin
+// tarih seçicisinden ya da sunucudan `YYYY-MM-DD` olarak yazılır. `date`
+// sınırı (`YYYY-MM-DD`) hem bunlarda hem Z'siz yerel saatli değerde doğru keser.
+// `period` (bordro, `YYYY-AA`) ve yalnız saat tutan `check_in`/`check_out`
+// bilinçli olarak dışarıda: gün sınırı onlarda anlamsız.
+const REPORT_DATE_COLUMNS = new Set(["planned_start", "planned_end", "needed_by", "period_start", "period_end", "valid_until"]);
+// Zaman damgası: actual_start/actual_end'i üretim emri iş akışı (başlatma ve
+// tamamlama geçişi) sunucu `now()` ile UTC ISO an olarak yazar (`...Z`). `date`
+// sınırıyla kesilseydi İstanbul'da 00:00-03:00 arasında biten iş UTC'deki bir
+// önceki güne düşerdi. `datetime` sınırı (İstanbul gece yarısının UTC anı)
+// salt `YYYY-MM-DD` yazılmış değeri de doğru güne koyar; montajdaki aynı adlı
+// sütunlara sunucu bir şey yazmıyor, elle girilirse o biçimde gelir.
+const REPORT_DATETIME_COLUMNS = new Set(["actual_start", "actual_end"]);
+// Yüzde: bu oranlar 0-100 arası saklanır (18 = %18), kesir değil. Kanıt:
+// scrap_rate sunucuda `/100` ile çarpana çevrilir ve CHECK'i `< 100`; tax_rate
+// varsayılanı 20 (KDV %20); istemci formu dördünü de "(%)" etiketi ve 0-100
+// sınırıyla alır; istemcinin yüzde biçimleyicisi değeri çarpmadan yazar.
+const REPORT_PERCENT_COLUMNS = new Set(["advance_rate", "discount_rate", "retention_rate", "scrap_rate", "tax_rate"]);
+// Sayı: kur (yüzde değil), puanlar (tedarikçi 0-5, memnuniyet 1-5), süre, boyut
+// ve sıra alanları. Sıra alanlarının toplamı anlamsız ama zararsız; asıl
+// kazanç sayısal süzme ve doğru sıralama.
+const REPORT_NUMBER_COLUMNS = new Set(["exchange_rate", "rating", "satisfaction_score", "warranty_months", "size_bytes", "width", "height", "depth", "length", "quantity_per_unit", "sequence", "sort_order"]);
+
 // Tip, sütun adından çıkarılır; arayüz tarih alanını takvimle, para alanını
 // kuruş çevirisiyle göstersin diye.
 function reportColumnType(column) {
   if (column.endsWith("_minor")) return "money";
-  if (column.endsWith("_at")) return "datetime";
-  if (column.endsWith("_date") || column.startsWith("date_")) return "date";
+  if (column.endsWith("_at") || REPORT_DATETIME_COLUMNS.has(column)) return "datetime";
+  if (column.endsWith("_date") || column.startsWith("date_") || REPORT_DATE_COLUMNS.has(column)) return "date";
   if (column === "status" || column.endsWith("_status") || column === "result" || column.endsWith("_result")) return "status";
-  if (column.endsWith("_percent")) return "percent";
-  if (column.endsWith("_count") || column.endsWith("_minutes") || column === "quantity" || column.endsWith("_quantity")) return "number";
+  if (column.endsWith("_percent") || REPORT_PERCENT_COLUMNS.has(column)) return "percent";
+  if (column.endsWith("_count") || column.endsWith("_minutes") || column.endsWith("_days") || column === "quantity" || column.endsWith("_quantity") || REPORT_NUMBER_COLUMNS.has(column)) return "number";
   return "text";
 }
 
@@ -3260,9 +3292,142 @@ function reportFilterProblem(filter) {
   return problem(422, "invalid_report_filter", `${filter?.field || "süzgeç"} için geçersiz değer.`);
 }
 
-function reportFilterClause(filter, field, clauses, bindings) {
+// Göreli tarih: kaydedilmiş rapor "1-30 Eylül" yerine "bu ay" der ve her
+// çalıştırmada kendiliğinden güncel kalır. Belirteç çalıştırma anında
+// çözülür; tanımda hiçbir zaman sabit tarihe dönüşüp saklanmaz.
+const REPORT_RELATIVE_RANGES = new Set(["today", "yesterday", "this_week", "last_week", "this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year", "last_7_days", "last_30_days", "last_90_days", "next_7_days", "next_30_days"]);
+const REPORT_RELATIVE_MAX_OFFSET = 3650;
+// Firma İstanbul'da çalışıyor, sunucu ise herhangi bir saat diliminde
+// olabilir. "Bugün" sunucunun yerel saatinden okunursa gece 00:00-03:00
+// arasında açılan rapor dünü gösterir; bu yüzden gün sınırı açıkça bu saat
+// diliminde hesaplanır. Biçimleyici bir kez kurulur, her istekte değil.
+const REPORT_TIME_ZONE = "Europe/Istanbul";
+const reportZoneFormatter = new Intl.DateTimeFormat("en-US", { timeZone: REPORT_TIME_ZONE, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+function reportZoneParts(instant) {
+  const parts = Object.fromEntries(reportZoneFormatter.formatToParts(new Date(instant)).filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+  return { year: parts.year, month: parts.month, day: parts.day, hour: parts.hour % 24, minute: parts.minute, second: parts.second };
+}
+
+// "Şimdi" yalnız testler için dışarıdan verilebilir: env.REPORT_CLOCK bir ISO
+// an taşırsa saat onu gösterir, böylece "bu ay" testi takvimden bağımsız
+// kalır. Üretimde yanlışlıkla tanımlanırsa her göreli rapor o anda donar ve
+// kimse fark etmez ("bu ay" aylarca eylülü gösterir); bu yüzden yalnız
+// geliştirme kimliğinin açık olduğu ortamda dikkate alınır, üretimde yok sayılır.
+function reportClock(env) {
+  const injected = env?.ALLOW_DEV_AUTH === "true" && typeof env?.REPORT_CLOCK === "string" ? Date.parse(env.REPORT_CLOCK) : NaN;
+  return Number.isFinite(injected) ? injected : Date.now();
+}
+
+// Takvim hesabı saat dilimsiz bir gün sayacıyla yapılır: Date.UTC burada
+// yalnız "yıl-ay-gün + n gün" aritmetiği için kullanılıyor, bir an olarak
+// değil. Ay sonu taşmasını (31 Ağustos + 1) motor kendisi çözer.
+function reportCalendarDay(year, month, day) {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() };
+}
+const reportShiftDay = (value, days) => reportCalendarDay(value.year, value.month, value.day + days);
+const reportDayText = (value) => `${String(value.year).padStart(4, "0")}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
+
+// İstanbul'daki bir günün başladığı UTC anı. Ofset sabit varsayılmaz (Türkiye
+// 2016'dan önce yaz saati uyguluyordu ve kural yine değişebilir); tahmin
+// edilen anın İstanbul'daki karşılığına bakılıp fark kadar düzeltilir.
+function reportZoneMidnightUtc(value) {
+  const wall = Date.UTC(value.year, value.month - 1, value.day);
+  let instant = wall;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const parts = reportZoneParts(instant);
+    const offset = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - instant;
+    instant = wall - offset;
+  }
+  // Saklanan zaman damgaları toISOString biçiminde (milisaniyeli, Z ile);
+  // sınır da aynı biçimde yazılır ki metin karşılaştırması an karşılaştırmasıyla
+  // birebir örtüşsün.
+  return new Date(instant).toISOString();
+}
+
+// Belirteç [başlangıç, bitiş) gün aralığına çevrilir; bitiş, kapsanan son
+// günün ertesidir. Tarih sütununda gün metni, zaman damgası sütununda o günün
+// İstanbul'daki başlangıcının UTC anı kullanılır.
+function reportRelativeRange(name, now) {
+  const current = reportZoneParts(now);
+  const today = reportCalendarDay(current.year, current.month, current.day);
+  const weekday = (new Date(Date.UTC(today.year, today.month - 1, today.day)).getUTCDay() + 6) % 7;
+  const monday = reportShiftDay(today, -weekday);
+  const quarterMonth = Math.floor((today.month - 1) / 3) * 3 + 1;
+  switch (name) {
+    case "today": return [today, reportShiftDay(today, 1)];
+    case "yesterday": return [reportShiftDay(today, -1), today];
+    case "this_week": return [monday, reportShiftDay(monday, 7)];
+    case "last_week": return [reportShiftDay(monday, -7), monday];
+    case "this_month": return [reportCalendarDay(today.year, today.month, 1), reportCalendarDay(today.year, today.month + 1, 1)];
+    case "last_month": return [reportCalendarDay(today.year, today.month - 1, 1), reportCalendarDay(today.year, today.month, 1)];
+    case "this_quarter": return [reportCalendarDay(today.year, quarterMonth, 1), reportCalendarDay(today.year, quarterMonth + 3, 1)];
+    case "last_quarter": return [reportCalendarDay(today.year, quarterMonth - 3, 1), reportCalendarDay(today.year, quarterMonth, 1)];
+    case "this_year": return [reportCalendarDay(today.year, 1, 1), reportCalendarDay(today.year + 1, 1, 1)];
+    case "last_year": return [reportCalendarDay(today.year - 1, 1, 1), reportCalendarDay(today.year, 1, 1)];
+    // "Son 7 gün" bugünü de kapsar ve tam yedi gündür; "önümüzdeki 7 gün" de
+    // bugünden başlar. Böylece bugün teslim edilecek iş iki listede de kaybolmaz.
+    case "last_7_days": return [reportShiftDay(today, -6), reportShiftDay(today, 1)];
+    case "last_30_days": return [reportShiftDay(today, -29), reportShiftDay(today, 1)];
+    case "last_90_days": return [reportShiftDay(today, -89), reportShiftDay(today, 1)];
+    case "next_7_days": return [today, reportShiftDay(today, 7)];
+    case "next_30_days": return [today, reportShiftDay(today, 30)];
+    default: return null;
+  }
+}
+
+const isReportRelativeValue = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, "relative");
+
+function reportRelativeProblem(message) {
+  return problem(422, "invalid_relative_date", message);
+}
+
+// Nokta belirteci de gün çözünürlüğündedir: zaman damgası sütununda "bugün"e
+// eşit olmak, bugünün herhangi bir anında olmak demektir. Bu yüzden her
+// karşılaştırma, günün başı ile ertesi günün başı arasındaki yarı açık aralık
+// üzerinden kurulur; tarih sütununda da aynı biçim doğru sonucu verir.
+function reportRelativeClause(filter, field, clauses, bindings, now) {
+  const op = filter.op;
+  const token = filter.value;
+  const type = reportColumnType(field);
+  if (type !== "date" && type !== "datetime") return reportRelativeProblem(`${field} bir tarih sütunu değil; göreli tarih yalnız tarih sütunlarında kullanılabilir.`);
+  const extra = Object.keys(token).filter((key) => key !== "relative" && key !== "offsetDays");
+  if (extra.length) return reportRelativeProblem(`Göreli tarihte tanınmayan alan: ${extra[0]}`);
+  const bound = (value) => (type === "date" ? reportDayText(value) : reportZoneMidnightUtc(value));
+  if (op === "between") {
+    if (typeof token.relative !== "string" || !REPORT_RELATIVE_RANGES.has(token.relative)) return reportRelativeProblem(`Tanınmayan göreli tarih aralığı: ${typeof token.relative === "string" ? token.relative : "geçersiz değer"}`);
+    if (token.offsetDays !== undefined) return reportRelativeProblem("Göreli tarih aralığında gün kaydırması kullanılamaz.");
+    const [start, end] = reportRelativeRange(token.relative, now);
+    clauses.push(`(${field}>=? AND ${field}<?)`);
+    bindings.push(bound(start), bound(end));
+    return null;
+  }
+  if (!REPORT_COMPARISONS[op]) return reportRelativeProblem("Göreli tarih yalnız arasında, eşit, eşit değil, önce veya sonra süzgeçleriyle kullanılabilir.");
+  if (token.relative !== "today") {
+    return REPORT_RELATIVE_RANGES.has(token.relative)
+      ? reportRelativeProblem(`${token.relative} bir aralıktır; yalnız "arasında" süzgeciyle kullanılabilir.`)
+      : reportRelativeProblem(`Tanınmayan göreli tarih: ${typeof token.relative === "string" ? token.relative : "geçersiz değer"}`);
+  }
+  const offset = token.offsetDays === undefined || token.offsetDays === null ? 0 : token.offsetDays;
+  if (!Number.isInteger(offset) || Math.abs(offset) > REPORT_RELATIVE_MAX_OFFSET) return reportRelativeProblem(`Gün kaydırması -${REPORT_RELATIVE_MAX_OFFSET} ile ${REPORT_RELATIVE_MAX_OFFSET} arasında bir tam sayı olmalıdır.`);
+  const current = reportZoneParts(now);
+  const day = reportShiftDay(reportCalendarDay(current.year, current.month, current.day), offset);
+  const start = bound(day);
+  const next = bound(reportShiftDay(day, 1));
+  if (op === "eq") { clauses.push(`(${field}>=? AND ${field}<?)`); bindings.push(start, next); }
+  else if (op === "ne") { clauses.push(`(${field} IS NULL OR ${field}<? OR ${field}>=?)`); bindings.push(start, next); }
+  else if (op === "gt") { clauses.push(`${field}>=?`); bindings.push(next); }
+  else if (op === "gte") { clauses.push(`${field}>=?`); bindings.push(start); }
+  else if (op === "lt") { clauses.push(`${field}<?`); bindings.push(start); }
+  else { clauses.push(`${field}<?`); bindings.push(next); }
+  return null;
+}
+
+function reportFilterClause(filter, field, clauses, bindings, now) {
   const op = filter.op;
   if (!REPORT_OPERATORS.has(op)) return problem(422, "unsupported_report_operator", `Desteklenmeyen süzgeç işleci: ${typeof op === "string" ? op : "geçersiz değer"}`);
+  if (isReportRelativeValue(filter.value)) return reportRelativeClause(filter, field, clauses, bindings, now);
   if (op === "empty") { clauses.push(`(${field} IS NULL OR ${field}='')`); return null; }
   if (op === "not_empty") { clauses.push(`(${field} IS NOT NULL AND ${field}<>'')`); return null; }
   if (op === "between") {
@@ -3323,13 +3488,16 @@ async function buildReportPlan(env, principal, definition, mode) {
     bindings.push(...scope.bindings);
   }
 
+  // Bütün süzgeçler aynı "şimdi"yi görür: gece yarısına denk gelen bir
+  // çalıştırmada bir süzgecin bugünü, ötekinin yarını olmasın.
+  const now = reportClock(env);
   const filters = definition.filters === undefined || definition.filters === null ? [] : definition.filters;
   if (!Array.isArray(filters) || filters.length > REPORT_MAX_FILTERS) return { error: problem(422, "validation_error", `filters en fazla ${REPORT_MAX_FILTERS} öğeli bir dizi olmalıdır.`) };
   for (const filter of filters) {
     if (!filter || typeof filter !== "object" || Array.isArray(filter)) return { error: problem(422, "validation_error", "Her süzgeç bir JSON nesnesi olmalıdır.") };
     const columnProblem = reportColumnProblem(principal, columnSet, filter.field, "filters");
     if (columnProblem) return { error: columnProblem };
-    const clauseProblem = reportFilterClause(filter, filter.field, clauses, bindings);
+    const clauseProblem = reportFilterClause(filter, filter.field, clauses, bindings, now);
     if (clauseProblem) return { error: clauseProblem };
   }
 
@@ -3530,9 +3698,11 @@ async function loadSavedReport(env, principal, reportId) {
 }
 
 // Döküm izini tek yer yazar: aynı dökümün iki uçtan iki ayrı biçimde iz
-// bırakması, denetim kaydını sonradan okunamaz hale getirir.
-function auditReportExport(env, principal, request, reportId, plan, rowCount) {
-  return audit(env, principal, request, "export", "saved-reports", reportId, { resource: plan.slug, row_count: rowCount });
+// bırakması, denetim kaydını sonradan okunamaz hale getirir. Tür ayrıca
+// verilir: hazır rapor veritabanında yoktur, "saved-reports" diye yazılırsa
+// kaydı okuyan kişi o kimliği tabloda arar ve bulamaz.
+function auditReportExport(env, principal, request, entityType, reportId, plan, rowCount) {
+  return audit(env, principal, request, "export", entityType, reportId, { resource: plan.slug, row_count: rowCount });
 }
 
 async function runReport(request, env, principal) {
@@ -3545,14 +3715,30 @@ async function runReport(request, env, principal) {
   const exporting = body?.export === true;
   if (exporting && !allowed(principal, "export")) return problem(403, "forbidden", "Dışa aktarma yetkiniz yok.");
   const savedReportId = body?.savedReportId ?? null;
-  // İkisi birden geldiğinde hangisinin çalıştığı tahmine kalırdı; sessizce
+  const builtinReportId = body?.builtinReportId ?? null;
+  // Birden fazlası geldiğinde hangisinin çalıştığı tahmine kalırdı; sessizce
   // birini seçmek, kullanıcının bakmadığı tanımı çalıştırmak demektir.
-  if (savedReportId !== null && (body?.definition ?? null) !== null) return problem(422, "ambiguous_report_source", "savedReportId ile definition birlikte gönderilemez.");
+  const sourceCount = [body?.definition ?? null, savedReportId, builtinReportId].filter((value) => value !== null).length;
+  if (sourceCount > 1) return problem(422, "ambiguous_report_source", "definition, savedReportId ve builtinReportId alanlarından yalnız biri gönderilmelidir.");
+  if (sourceCount === 0) return problem(422, "ambiguous_report_source", "Çalıştırılacak rapor belirtilmedi: definition, savedReportId veya builtinReportId gönderilmelidir.");
   let definition = body?.definition;
+  // Denetim kaydında hangi raporun döküldüğü okunabilsin: gövdeden gelen tanımın
+  // kimliği yoktur, hazır rapor kendi türüyle yazılır.
+  let auditType = "saved-reports";
+  let auditId = null;
   if (savedReportId !== null) {
     const saved = await loadSavedReport(env, principal, savedReportId);
     if (saved.error) return saved.error;
     definition = saved.definition;
+    auditId = savedReportId;
+  }
+  if (builtinReportId !== null) {
+    if (typeof builtinReportId !== "string") return problem(422, "validation_error", "builtinReportId metin olmalıdır.");
+    const builtin = builtinReports.find((report) => report.id === builtinReportId);
+    if (!builtin) return problem(404, "not_found", "Hazır rapor bulunamadı.");
+    definition = builtin.definition;
+    auditType = "builtin-reports";
+    auditId = builtin.id;
   }
   // Döküm önizleme olamaz: 20 satırlık bir dosya kimsenin işine yaramaz.
   const mode = exporting ? "export" : body?.preview === true ? "preview" : "run";
@@ -3562,8 +3748,24 @@ async function runReport(request, env, principal) {
   let result;
   try { result = await runReportPlan(env, principal, plan); }
   catch (error) { return problem(422, "report_query_failed", "Rapor çalıştırılamadı; tanımı kontrol edin.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
-  if (exporting) await auditReportExport(env, principal, request, savedReportId, plan, result.rows.length);
+  if (exporting) await auditReportExport(env, principal, request, auditType, auditId, plan, result.rows.length);
   return json({ data: { columns: result.columns, rows: result.rows }, meta: { rowCount: result.rows.length, truncated: result.rows.length >= plan.limit, preview } });
+}
+
+// Hazır raporlar herkese aynı listeyle sunulmaz: kaynağını okuyamayan ya da
+// korumalı bir sütuna dokunan rapor, açılınca 403 veren bir kart olarak
+// görünmemeli. Karar motorun kendi kapısından verilir, ayrı bir yetki tablosu
+// tutulmaz; katalog değiştiğinde süzme de kendiliğinden uyar. Katalogdaki
+// sıra, kategorilerin arayüzde okunma sırası olduğu için korunur.
+async function builtinReportList(env, principal) {
+  if (!allowed(principal, "reports.read")) return problem(403, "forbidden", "Rapor görüntüleme yetkiniz yok.");
+  const data = [];
+  for (const report of builtinReports) {
+    const plan = await buildReportPlan(env, principal, report.definition, "run");
+    if (plan.error) continue;
+    data.push({ id: report.id, category: report.category, name: report.name, description: report.description, definition: report.definition });
+  }
+  return json({ data });
 }
 
 // Bağlı kaydın adı zaten sütunlarda varken ham kimliği de yazmak, dosyayı açan
@@ -3587,7 +3789,7 @@ async function exportReport(request, env, principal) {
   let result;
   try { result = await runReportPlan(env, principal, plan); }
   catch (error) { return problem(422, "report_query_failed", "Rapor çalıştırılamadı; tanımı kontrol edin.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
-  await auditReportExport(env, principal, request, reportId, plan, result.rows.length);
+  await auditReportExport(env, principal, request, "saved-reports", reportId, plan, result.rows.length);
   return csvResponse(csvReportColumns(result.columns), result.rows, `rapor-${plan.slug}`);
 }
 
@@ -3613,6 +3815,7 @@ async function dispatchAuthenticated(request, env, principal, url, segments) {
   if (segments.length === 5 && segments[2] === "purchase-requests" && segments[4] === "quotation-comparison" && request.method === "GET" && validId(segments[3])) return compareQuotations(env, principal, segments[3]);
   if (url.pathname === "/api/v1/work-centers/load" && request.method === "GET") return workCenterLoad(request, env, principal);
   if (url.pathname === "/api/v1/reports/fields" && request.method === "GET") return reportFields(env, principal);
+  if (url.pathname === "/api/v1/reports/builtin" && request.method === "GET") return builtinReportList(env, principal);
   if (url.pathname === "/api/v1/reports/run" && request.method === "POST") return runReport(request, env, principal);
   if (url.pathname === "/api/v1/reports/export" && request.method === "GET") return exportReport(request, env, principal);
   if (url.pathname === "/api/v1/password-reset-requests") return passwordResetRequestsRoute(request, env, principal);
