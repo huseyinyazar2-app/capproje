@@ -85,74 +85,138 @@ const UNCLASSIFIED_ON_PURPOSE = new Map([
   ["check_out", "Yalnız saat tutar; hangi gün olduğu `work_date` sütununda."],
 ]);
 
-test("istemcinin yazabildiği her tarih benzeri sütun açıkça sınıflandırılmıştır", () => {
-  const writable = new Map();
-  for (const [slug, config] of Object.entries(__testing.resources)) {
-    for (const column of config.fields || []) {
-      if (!writable.has(column)) writable.set(column, []);
-      writable.get(column).push(slug);
-    }
-  }
+// Her kaynağın her yazılabilir alanı, ait olduğu tabloyla birlikte. Denetim
+// artık sütun adı üzerinden değil tablo+sütun çifti üzerinden yürüyor: aynı ad
+// bir tabloda sınıflandırılıp ötekinde unutulabilir.
+const writableColumns = () => Object.entries(__testing.resources)
+  .flatMap(([slug, config]) => (config.fields || []).map((column) => ({ slug, table: config.table, column })));
 
+test("her kaynağın her yazılabilir tarih benzeri sütunu tablo+sütun olarak çözülebiliyor", () => {
   const unclassified = [];
-  for (const [column, slugs] of writable) {
+  for (const { slug, table, column } of writableColumns()) {
     if (!DATE_LIKE_COLUMN.test(column)) continue;
-    if (__testing.dateColumnKinds.has(column)) continue;
     if (UNCLASSIFIED_ON_PURPOSE.has(column)) continue;
-    unclassified.push(`${column} (${slugs.join(", ")})`);
+    if (__testing.dateColumnKind(table, column)) continue;
+    unclassified.push(`${table}.${column} (${slug})`);
   }
-  assert.deepEqual(unclassified, [], "Bu sütunlar tarih benzeri adlandırıldı ama sınıflandırılmadı; `date`, `datetime` ya da `both` olarak DATE_COLUMN_KINDS içine yazılmalı veya gerekçesiyle muafiyet listesine alınmalı.");
+  assert.deepEqual(unclassified, [], "Bu sütunlar tarih benzeri adlandırıldı ama sınıfı çözülemedi; DATE_COLUMN_KINDS içine `sütun` ya da `tablo.sütun` anahtarıyla `date`/`datetime` olarak yazılmalı veya gerekçesiyle muafiyet listesine alınmalı.");
 
   // Muafiyet listesi de bayatlayabilir: listedeki bir sütun sonradan
   // sınıflandırılırsa ya da kayıt defterinden çıkarsa, iki yer birbirine
   // karşı sessizce yalan söylemeye başlar.
+  const byColumn = new Set(writableColumns().map((item) => item.column));
   for (const column of UNCLASSIFIED_ON_PURPOSE.keys()) {
-    assert.ok(writable.has(column), `${column} artık yazılabilir bir alan değil; muafiyet listesinden çıkarılmalı.`);
+    assert.ok(byColumn.has(column), `${column} artık yazılabilir bir alan değil; muafiyet listesinden çıkarılmalı.`);
     assert.ok(!__testing.dateColumnKinds.has(column), `${column} hem sınıflandırılmış hem muaf görünüyor.`);
   }
+});
 
-  // Sınıflandırma listesi de tersinden denetleniyor: sadece `notifications.due_at`
-  // yazılamayan bir sütun olarak burada duruyor, gerekçesi kodda yazılı.
-  const classifiedButUnknown = [...__testing.dateColumnKinds.keys()].filter((column) => !writable.has(column));
-  assert.deepEqual(classifiedButUnknown, ["due_at"]);
+test("sınıflandırma listesinde karşılığı olmayan anahtar kalmıyor", () => {
+  // Liste tersinden de denetleniyor, yoksa kaldırılan bir sütunun sınıfı
+  // listede ölü bir satır olarak kalır ve bir gün başka bir şeyi yanlış
+  // sınıflandırır.
+  const writable = writableColumns();
+  const columns = new Set(writable.map((item) => item.column));
+  const pairs = new Set(writable.map((item) => `${item.table}.${item.column}`));
+  const orphans = [];
+  for (const key of __testing.dateColumnKinds.keys()) {
+    if (key.includes(".")) { if (!pairs.has(key)) orphans.push(key); continue; }
+    if (!columns.has(key)) orphans.push(key);
+  }
+  // Tek istisna `notifications.due_at`: istemci o kaynağa yazamıyor ama sonek
+  // kuralı onu yanlış sınıflayacağı için doğrusu şimdiden yazılı.
+  assert.deepEqual(orphans, ["due_at"]);
+});
+
+test("ad kalıbı yedeğine muhtaç yazılabilir tek bir sütun yok", () => {
+  // `created_at` / `approved_at` gibi istemcinin yazamadığı sütunlar için ad
+  // kalıbı yedeği duruyor. Ama yazılabilir bir sütun tipini o yedekten alırsa,
+  // yazarken doğrulama ile raporun sınıfı ayrı kaynaklardan gelir: rapor onu
+  // tarih sayarken yazma yolu serbest metin sayar.
+  const leaning = [];
+  for (const { slug, table, column } of writableColumns()) {
+    const reported = __testing.reportColumnType(table, column);
+    if (reported !== "date" && reported !== "datetime") continue;
+    if (__testing.dateColumnKind(table, column)) continue;
+    leaning.push(`${table}.${column} (${slug})`);
+  }
+  assert.deepEqual(leaning, [], "Bu sütunlar raporda tarih sayılıyor ama sınıfı yalnız ad kalıbından geliyor.");
+});
+
+test("sınıflandırma tablo bağlamı olmadan sorgulanamaz", () => {
+  // Bağlam verilmediğinde eski davranışa sessizce düşen bir imza, unutulan bir
+  // çağrı yerini görünmez yapardı: o sütun yıllarca yanlış sınıfla çalışır ve
+  // hiçbir test düşmez. Bu yüzden eksik bağlam gürültülü.
+  for (const table of [undefined, null, ""]) {
+    assert.throws(() => __testing.dateColumnKind(table, "actual_start"), /tablo bağlamı/);
+    assert.throws(() => __testing.reportColumnType(table, "actual_start"), /tablo bağlamı/);
+    // Para sütunu tabloya hiç bakmadan cevaplanıyor; kapı ondan önce olmalı.
+    assert.throws(() => __testing.reportColumnType(table, "amount_minor"), /tablo bağlamı/);
+  }
 });
 
 // ——— 2. Sınıf isimden değil, sütunun tuttuğundan türer ————————————————————
 
-test("adı yalan söyleyen sütunlar saklanan değere göre sınıflanır", () => {
-  const kinds = __testing.dateColumnKinds;
-  // `projects.actual_end_date` adı gün diyor; proje kapanış iş akışı ISO an
-  // yazıyor. `production_orders.actual_start`/`actual_end` adında hiçbir ipucu
-  // taşımıyor ama aynısını yapıyor. Üçü de gün yazılabilen yollara da sahip.
-  assert.equal(kinds.get("actual_end_date"), "both");
-  assert.equal(kinds.get("actual_start_date"), "both");
-  assert.equal(kinds.get("actual_start"), "both");
-  assert.equal(kinds.get("actual_end"), "both");
+test("aynı ad iki tabloda farklı sınıf verir", () => {
+  const kind = __testing.dateColumnKind;
+  // Üretim emri aşama geçişi bu iki sütuna doğrudan SQL ile `now()` çıktısını
+  // yazıyor; tanıtım verisinde ölçülen değer `2026-09-23T13:14:21.472Z`.
+  assert.equal(kind("production_orders", "actual_start"), "datetime");
+  assert.equal(kind("production_orders", "actual_end"), "datetime");
+  // Montajda aynı adlara yazan hiçbir sunucu yolu yok ve komşuları
+  // `planned_start` / `planned_end` düz gün.
+  assert.equal(kind("installations", "actual_start"), "date");
+  assert.equal(kind("installations", "actual_end"), "date");
+  // Proje kapanışı `actual_end_date` değerini ISO an olarak yazıyor; ikizi
+  // ondan ayrılmıyor.
+  assert.equal(kind("projects", "actual_start_date"), "datetime");
+  assert.equal(kind("projects", "actual_end_date"), "datetime");
+
+  // Adı yalan söyleyen sütunlar genel kurala bilerek hiç yazılmadı: üçüncü bir
+  // tablo aynı adı kullanmaya başlarsa kayıt defteri denetimi onu sınıfsız
+  // görüp karar verilmesini istesin, komşusunun sınıfını devralmasın.
+  for (const column of ["actual_start", "actual_end", "actual_start_date", "actual_end_date"]) {
+    assert.equal(__testing.dateColumnKinds.has(column), false, `${column} genel kurala düşmüş; tablo ayrımı anlamsızlaşır.`);
+  }
+
+  // Her tabloda aynı şeyi anlatan sütunlar tablo tablo yazılmıyor; tek kural
+  // hepsine yetiyor.
+  assert.equal(kind("production_orders", "planned_start"), "date");
+  assert.equal(kind("installations", "planned_start"), "date");
+  assert.equal(kind("financial_transactions", "due_date"), "date");
+  assert.equal(kind("invoices", "due_date"), "date");
+  assert.equal(kind("employees", "hire_date"), "date");
   // `notifications.due_at` `_at` ile bitiyor ama düz gün tutuyor: projenin
   // `planned_end_date` değeri olduğu gibi kopyalanıyor.
-  assert.equal(kinds.get("due_at"), "date");
+  assert.equal(kind("notifications", "due_at"), "date");
 });
 
 test("rapor motoru sınıflandırmayı tek kaynaktan okur", () => {
   const type = __testing.reportColumnType;
   // Daha önce hiçbir ad kalıbına uymadığı için `text` sayılıyorlardı: üretimin
   // gerçekleşme tarihine göre rapor süzülemiyordu.
-  assert.equal(type("actual_start"), "datetime");
-  assert.equal(type("actual_end"), "datetime");
+  assert.equal(type("production_orders", "actual_start"), "datetime");
+  assert.equal(type("production_orders", "actual_end"), "datetime");
+  // Aynı ad, başka tablo, başka tip.
+  assert.equal(type("installations", "actual_start"), "date");
   // `_date` soneki yüzünden `date` sayılıyordu; ISO an tutuyor.
-  assert.equal(type("actual_end_date"), "datetime");
+  assert.equal(type("projects", "actual_end_date"), "datetime");
   // `_at` soneki yüzünden `datetime` sayılıyordu; düz gün tutuyor.
-  assert.equal(type("due_at"), "date");
+  assert.equal(type("notifications", "due_at"), "date");
 
-  // Sınıflandırılan her sütun rapor motorunda da tarih sütunu olmalı, yoksa
-  // "tek kaynak" yalnız adı olur.
-  for (const [column, kind] of __testing.dateColumnKinds) {
-    assert.equal(type(column), kind === "date" ? "date" : "datetime", `${column} rapor motorunda yanlış sınıflandı.`);
+  // Sınıflandırılan her anahtar rapor motorunda da aynı tipi vermeli, yoksa
+  // "tek kaynak" yalnız adı olur. Genel anahtarlar hiçbir tablo kuralının
+  // gölgelemediği bir tabloyla sorgulanıyor.
+  for (const [key, kind] of __testing.dateColumnKinds) {
+    const dot = key.indexOf(".");
+    const table = dot === -1 ? "tablo_bulunmayan" : key.slice(0, dot);
+    const column = dot === -1 ? key : key.slice(dot + 1);
+    assert.equal(type(table, column), kind, `${key} rapor motorunda yanlış sınıflandı.`);
   }
   // Ad kalıpları sınıflandırılmamış sütunlar için yedek olarak duruyor.
-  assert.equal(type("created_at"), "datetime");
-  assert.equal(type("period"), "text");
-  assert.equal(type("check_in"), "text");
+  assert.equal(type("projects", "created_at"), "datetime");
+  assert.equal(type("payroll_inputs", "period"), "text");
+  assert.equal(type("attendance", "check_in"), "text");
 });
 
 // ——— 3. Yazarken doğrulama ————————————————————————————————————————————————
@@ -210,17 +274,37 @@ test("zaman damgası sütunu düz günü reddeder, saat dilimsiz yerel anı kabu
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM project_communications").get().count, 4);
 });
 
-test("her ikisi meşru olan sütun hem günü hem anı kabul eder", async () => {
+const order = (extra) => ({ order_number: `UE-${Math.random().toString(36).slice(2, 8)}`, project_id: "project-a", ...extra });
+const installation = (extra) => ({ installation_number: `MNT-${Math.random().toString(36).slice(2, 8)}`, project_id: "project-a", ...extra });
+
+test("aynı ad iki uçta iki farklı biçim ister", async () => {
   const { env } = await setup();
-  // Üretim emri iş akışı buraya ISO an yazıyor; montaj tarafında aynı sütunlara
-  // yazan bir sunucu yolu yok ve oradaki eşleri düz gün.
-  const order = (extra) => ({ order_number: `UE-${Math.random().toString(36).slice(2, 8)}`, project_id: "project-a", ...extra });
+  // Üretim emri aşama geçişi `actual_start` sütununa ISO an yazıyor. Uç da anı
+  // kabul etmezse kendi kodumuz kendi kuralımıza takılırdı.
   assert.equal((await send(env, "/api/v1/production-orders", { body: order({ actual_start: "2026-09-23T11:53:29.355Z" }) })).status, 200);
-  assert.equal((await send(env, "/api/v1/production-orders", { body: order({ actual_start: "2026-09-23" }) })).status, 200);
-  // Gevşeklik yalnız iki geçerli biçimle sınırlı; çöp yine geçmiyor.
-  const { status, body } = await payload(await send(env, "/api/v1/production-orders", { body: order({ actual_start: "0" }) }));
-  assert.equal(status, 422);
-  assert.match(body.error.message, /^actual_start /);
+  // Eskiden `both` olduğu için düz gün de geçiyordu; artık o sütunda gün, iş
+  // akışının yazdığı anlarla aynı sütunda karışık biçim demek.
+  const orderDay = await payload(await send(env, "/api/v1/production-orders", { body: order({ actual_start: "2026-09-23" }) }));
+  assert.equal(orderDay.status, 422);
+  assert.match(orderDay.body.error.message, /^actual_start /);
+  assert.match(orderDay.body.error.message, /zaman damgası/);
+
+  // Montajda aynı ad düz gün demek: yazan bir sunucu yolu yok, komşuları gün.
+  assert.equal((await send(env, "/api/v1/installations", { body: installation({ actual_start: "2026-09-23" }) })).status, 200);
+  const installationMoment = await payload(await send(env, "/api/v1/installations", { body: installation({ actual_start: "2026-09-23T11:53:29.355Z" }) }));
+  assert.equal(installationMoment.status, 422);
+  assert.match(installationMoment.body.error.message, /^actual_start /);
+  assert.match(installationMoment.body.error.message, /takvim günü/);
+});
+
+test("gün ve an ayrımı yapılan sütunlarda çöp değer yine reddediliyor", async () => {
+  const { env } = await setup();
+  for (const value of ["0", "bugün", "01.09.2026", "2026-02-30", true]) {
+    const production = await payload(await send(env, "/api/v1/production-orders", { body: order({ actual_end: value }) }));
+    assert.equal(production.status, 422, `üretim emri ${JSON.stringify(value)} kabul etti`);
+    const assembly = await payload(await send(env, "/api/v1/installations", { body: installation({ actual_end: value }) }));
+    assert.equal(assembly.status, 422, `montaj ${JSON.stringify(value)} kabul etti`);
+  }
 });
 
 test("boş değer temizlemektir, hata değil", async () => {
@@ -328,6 +412,65 @@ test("gerçekleşme tarihine göre rapor süzülebilir", async () => {
   assert.equal(body.data.columns.find((column) => column.key === "actual_end").type, "datetime");
 });
 
+test("rapor çıktısındaki sütun tipi de kaydın tablosundan geliyor", async () => {
+  const { database, env } = await setup();
+  database.prepare("INSERT INTO installations (id,tenant_id,installation_number,project_id,actual_start,actual_end,status,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    .run("ins-1", "tenant-a", "MNT-1", "project-a", "2026-09-22", "2026-09-23", "completed", "{}", timestamp, timestamp);
+  database.prepare("INSERT INTO production_orders (id,tenant_id,order_number,project_id,actual_start,status,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
+    .run("po-1", "tenant-a", "UE-1", "project-a", "2026-09-22T09:00:00.000Z", "completed", "{}", timestamp, timestamp);
+
+  const typesOf = async (resource, definition) => {
+    const { status, body } = await payload(await send(env, "/api/v1/reports/run", { body: { definition: { resource, ...definition } } }));
+    assert.equal(status, 200, JSON.stringify(body));
+    return Object.fromEntries(body.data.columns.map((column) => [column.key, column.type]));
+  };
+
+  // Sütun listesi, gruplama ve toplam — üçü de tipi ayrı yerden soruyor; aynı
+  // adın iki tabloda iki tip vermesi üçünde de görünmeli, yoksa arayüz montaj
+  // gününü saatiyle birlikte gösterir.
+  assert.equal((await typesOf("installations", { columns: ["installation_number", "actual_start"] })).actual_start, "date");
+  assert.equal((await typesOf("production-orders", { columns: ["order_number", "actual_start"] })).actual_start, "datetime");
+  assert.equal((await typesOf("installations", { group: { by: ["actual_start"] } })).actual_start, "date");
+  assert.equal((await typesOf("production-orders", { group: { by: ["actual_start"] } })).actual_start, "datetime");
+  assert.equal((await typesOf("installations", { group: { by: ["status"], aggregates: [{ fn: "max", field: "actual_end", as: "son" }] } })).son, "date");
+  assert.equal((await typesOf("production-orders", { group: { by: ["status"], aggregates: [{ fn: "max", field: "actual_start", as: "son" }] } })).son, "datetime");
+
+  // Rapor kurucunun alan kataloğu da aynı kaynaktan besleniyor.
+  const fields = new Map((await payload(await send(env, "/api/v1/reports/fields", { method: "GET" }))).body.data.map((item) => [item.resource, item.columns]));
+  const typeOf = (resource, key) => fields.get(resource).find((column) => column.key === key).type;
+  assert.equal(typeOf("installations", "actual_start"), "date");
+  assert.equal(typeOf("production-orders", "actual_start"), "datetime");
+});
+
+test("görünümden raporlanan kaynakta tablo anahtarı görünümün adıdır", async () => {
+  const { env } = await setup();
+  const config = __testing.resources["project-profitability"];
+  // Kârlılık bir SQL görünümünden (göç 0017) okunuyor; sınıflandırmanın tablo
+  // anahtarı da rapor motorunun sütun beyaz listesi de aynı addan, yani
+  // görünümün adından türüyor.
+  assert.equal(config.table, "project_profitability");
+  // Görünümün adı projenin adı değildir: `projects` için yazılan tablo kuralı
+  // buraya sızmamalı, çünkü görünüm o sütunu hiç taşımıyor.
+  assert.equal(__testing.dateColumnKind("projects", "actual_end_date"), "datetime");
+  assert.equal(__testing.dateColumnKind("project_profitability", "actual_end_date"), null);
+
+  const clocked = { ...env, REPORT_CLOCK: "2026-09-23T12:00:00.000Z" };
+  const definition = {
+    resource: "project-profitability",
+    columns: ["code", "status", "contract_amount_minor", "created_at"],
+    filters: [{ field: "created_at", op: "between", value: { relative: "this_year" } }],
+  };
+  const { status, body } = await payload(await send(clocked, "/api/v1/reports/run", { body: { definition } }));
+  assert.equal(status, 200);
+  assert.deepEqual(body.data.rows.map((row) => row.code), ["P-1"]);
+  const types = Object.fromEntries(body.data.columns.map((column) => [column.key, column.type]));
+  // `created_at` görünümde de istemcinin yazamadığı bir sütun: tipini ad kalıbı
+  // yedeğinden alıyor ve göreli tarih süzgeci bu yüzden çalışıyor.
+  assert.equal(types.created_at, "datetime");
+  assert.equal(types.contract_amount_minor, "money");
+  assert.equal(types.status, "status");
+});
+
 // ——— 5. Tanıtım verisi ————————————————————————————————————————————————————
 
 test("tanıtım verisinin ürettiği bütün tarihler yeni denetimden geçer", async () => {
@@ -355,6 +498,6 @@ test("tanıtım verisinin ürettiği bütün tarihler yeni denetimden geçer", a
 
   // Betiğin tarih olmayan zaman alanları sınıflandırma dışında kaldığı için
   // denetime hiç girmiyor; girseydi ikisi de reddedilirdi.
-  assert.equal(__testing.reportColumnType("check_in"), "text");
-  assert.equal(__testing.reportColumnType("period"), "text");
+  assert.equal(__testing.reportColumnType("attendance", "check_in"), "text");
+  assert.equal(__testing.reportColumnType("payroll_inputs", "period"), "text");
 });

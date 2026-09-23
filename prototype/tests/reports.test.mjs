@@ -992,7 +992,11 @@ test("adından anlaşılmayan tarih, zaman damgası, yüzde ve sayı sütunları
     ["production-orders", "planned_start", "date"], ["production-orders", "planned_end", "date"],
     // Üretim emri iş akışı bunlara UTC anı yazar; gün sınırı İstanbul'a göre kesilmeli.
     ["production-orders", "actual_start", "datetime"], ["production-orders", "actual_end", "datetime"],
-    ["installations", "planned_start", "date"], ["installations", "actual_end", "datetime"],
+    // Montajda aynı ad düz gün demek: o sütunlara yazan hiçbir sunucu yolu yok
+    // ve komşuları `planned_start` / `planned_end` gün tutuyor. Aynı adın iki
+    // tabloda iki tip vermesi, sınıflandırmanın tablo+sütunla anahtarlanmasının
+    // bütün amacı.
+    ["installations", "planned_start", "date"], ["installations", "actual_start", "date"], ["installations", "actual_end", "date"],
     ["resource-assignments", "planned_end", "date"], ["production-operations", "planned_end", "date"],
     ["material-requirements", "needed_by", "date"], ["purchase-requests", "needed_by", "date"],
     ["progress-payments", "period_start", "date"], ["progress-payments", "period_end", "date"],

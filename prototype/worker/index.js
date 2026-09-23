@@ -334,16 +334,25 @@ const JSON_FIELD_LIMIT = 100000;
 // unutulur, aynı sütun yazarken gün sayılıp raporda metin sayılırdı — nitekim
 // `actual_start` / `actual_end` bir süre tam olarak böyleydi.
 //
-// Anahtar tablo değil sütun adıdır: aynı ad birden çok tabloda geçiyor
-// (`due_date` dörtte, `planned_start` beşte) ve hepsinde aynı şeyi tutuyor.
-// Rapor motoru da tipi zaten sütun adından soruyor.
+// Anahtar iki katmanlı aranır: önce `tablo.sütun`, o susarsa yalın `sütun`.
+// Liste baştan sona tablo anahtarlı DEĞİL, çünkü altmış küsur sütunun çoğu
+// hangi tabloda geçerse geçsin aynı şeyi anlatıyor (`due_date` dört tabloda,
+// `planned_start` beşte, `transaction_date` ile `hire_date` birer tabloda ama
+// adları kadar açık). Hepsini tablo tablo yazmak listeyi okunmaz hâle
+// getirirdi; daha kötüsü, aynı sütunu taşıyan yeni bir tablo eklendiğinde o
+// sütun sessizce sınıfsız kalır ve doğrulamadan muaf olurdu. Genel kural bu
+// yüzden sütun adına bağlı kalıyor.
 //
-// `both` = hem gün hem an meşru. Yalnız sunucu iş akışının ISO an yazdığı, ama
-// istemcinin de gün yazabildiği "gerçekleşen başlangıç/bitiş" sütunlarında
-// kullanılıyor; birini yasaklamak bugün çalışan bir yolu kırardı. Karışık biçim
-// okumayı bozmuyor: metin sıralamasında `2026-09-18`, aynı günün
-// `2026-09-18T...` değerlerinin tamamından önce gelir, yani gün sınırı ikisini
-// de doğru tarafa koyar.
+// Tablo anahtarı yalnız ADI YALAN SÖYLEYEN sütunlara veriliyor: aynı adın iki
+// tabloda gerçekten iki farklı şey tuttuğu yerlere. Bugün bunlar "gerçekleşen
+// başlangıç / bitiş" çiftleri. Böyle bir sütun genel kurala hiç yazılmıyor ki
+// üçüncü bir tablo aynı adı kullanmaya başladığında kayıt defteri denetimi
+// (tests/date-columns.test.mjs) onu sınıfsız görüp karar verilmeye zorlasın —
+// sessizce komşusunun sınıfını devralmasın.
+//
+// `both` diye bir sınıf yok. Tablo bağlamı geldikten sonra her sütunun tek bir
+// doğru cevabı var; "hem gün hem an kabul" demek, doğrulamayı tam da en
+// belirsiz sütunlarda en gevşek bırakmak olurdu.
 //
 // Bilerek DIŞARIDA: `period` (bordro dönemi, `YYYY-AA`), `check_in` / `check_out`
 // (yalnız saat) ve `lead_time_days` (gün sayısı). Hiçbiri takvim günü değil;
@@ -362,17 +371,31 @@ const DATE_COLUMN_KINDS = new Map([
   // indirgenirse İstanbul'da gece yarısından sonra kaydedilen iş bir önceki güne
   // düşer.
   ...["approved_at", "completed_at", "resolved_at", "accepted_at", "occurred_at", "next_follow_up_at", "taken_at"].map((column) => [column, "datetime"]),
-  // Adı yalan söyleyen dörtlü. Üretim emri iş akışı `actual_start` / `actual_end`
-  // değerini, proje kapanışı ise `actual_end_date` değerini ISO an olarak
-  // yazıyor. Aynı sütunlara istemci API'den gün de yazabiliyor ve montaj
-  // (`installations`) tarafında bu sütunlara yazan hiçbir sunucu yolu yok —
-  // oradaki eşleri `planned_start` / `planned_end` düz gün. `actual_start_date`
-  // ikizinden ayrılmıyor: bir çiftin iki ucunun farklı biçim istemesi,
-  // doğrulamanın kendisinden daha çok hata üretir.
-  ...["actual_start", "actual_end", "actual_start_date", "actual_end_date"].map((column) => [column, "both"]),
+  // Adı yalan söyleyen sütunlar; tek ayırt edici bilgi tablo olduğu için tablo
+  // anahtarlı yazılıyorlar. `production_orders` aşama geçişi `actual_start` ve
+  // `actual_end` değerini doğrudan SQL ile `now()` çıktısı olarak yazıyor
+  // (tanıtım verisinde ölçüldü: `2026-09-23T13:14:21.472Z`), proje kapanışı da
+  // `actual_end_date` için aynısını yapıyor. Sınıf `date` olsaydı kendi iş
+  // akışımız kendi kuralımıza takılırdı — şimdilik yalnız raporda, o sütunu
+  // güne indirgeyerek: İstanbul'da gece yarısından sonra biten iş bir önceki
+  // güne düşerdi. `actual_start_date` ikizinden ayrılmıyor: sunucu onu bugün
+  // hiç yazmıyor ama bir çiftin iki ucunun farklı biçim istemesi doğrulamanın
+  // kendisinden çok hata üretir.
+  ...["production_orders.actual_start", "production_orders.actual_end", "projects.actual_start_date", "projects.actual_end_date"].map((key) => [key, "datetime"]),
+  // Montajda aynı adlar düz gün demek: bu sütunlara yazan hiçbir sunucu yolu
+  // yok (tanıtım verisinde ikisi de boş kalıyor) ve komşuları
+  // `planned_start` / `planned_end` gün olarak yazılıyor. Montaj ekibi gününü
+  // giriyor, saatini değil.
+  ...["installations.actual_start", "installations.actual_end"].map((key) => [key, "date"]),
 ]);
 
-const dateColumnKind = (column) => DATE_COLUMN_KINDS.get(column) || null;
+// Tablo bağlamı zorunlu ve eksikse gürültülü: bağlam verilmeyince eski
+// davranışa sessizce düşen bir imza, unutulan bir çağrı yerini görünmez yapar
+// ve o sütun yanlış sınıfla yıllarca çalışır.
+function dateColumnKind(table, column) {
+  if (typeof table !== "string" || !table) throw new TypeError(`dateColumnKind: ${column} sütunu tablo bağlamı olmadan sorgulandı.`);
+  return DATE_COLUMN_KINDS.get(`${table}.${column}`) || DATE_COLUMN_KINDS.get(column) || null;
+}
 
 // Kalıp eşleşmesi tek başına yetmez: `2026-02-30` ve `2026-13-01` kalıba uyar
 // ama takvimde yoktur. Date nesnesi taşan günü sessizce ileri kaydırdığı için
@@ -397,16 +420,13 @@ const isDateText = (value) => typeof value === "string" && DATE_ONLY_PATTERN.tes
 const isDateTimeText = (value) => typeof value === "string" && DATETIME_PATTERN.test(value) && isCalendarDay(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
 
 function dateValueMatches(kind, value) {
-  if (kind === "date") return isDateText(value);
-  if (kind === "datetime") return isDateTimeText(value);
-  return isDateText(value) || isDateTimeText(value);
+  return kind === "datetime" ? isDateTimeText(value) : isDateText(value);
 }
 
 // Hata alanı adıyla söyler ve ne yazılacağını gösterir; "geçersiz tarih" diyen
 // bir mesaj, uzun bir formda hangi kutunun suçlu olduğunu söylemiyor.
 function dateValueError(column, kind) {
   if (kind === "datetime") return `${column} geçerli bir zaman damgası olmalıdır; YYYY-AA-GGTSS:DD biçiminde yazın (örn. 2026-09-23T14:30). Alanı temizlemek için boş bırakın.`;
-  if (kind === "both") return `${column} geçerli bir takvim günü (YYYY-AA-GG) veya zaman damgası (YYYY-AA-GGTSS:DD) olmalıdır. Alanı temizlemek için boş bırakın.`;
   return `${column} geçerli bir takvim günü olmalıdır; YYYY-AA-GG biçiminde yazın (örn. 2026-09-23). Alanı temizlemek için boş bırakın.`;
 }
 
@@ -943,8 +963,8 @@ function normalizeInput(slug, config, body, creating) {
       if (serialized.length > JSON_FIELD_LIMIT) return { error: `${key} en fazla ${JSON_FIELD_LIMIT} karakter olabilir.` };
       values[key] = serialized;
     } else if (BOOLEAN_COLUMNS.includes(key)) values[key] = booleanValue(value) ? 1 : 0;
-    else if (dateColumnKind(key)) {
-      const kind = dateColumnKind(key);
+    else if (dateColumnKind(config.table, key)) {
+      const kind = dateColumnKind(config.table, key);
       // Boş değer temizlemektir, hata değil: arayüz bir tarih kutusu silindiğinde
       // boş metin ya da null gönderiyor. Reddedilseydi kullanıcı bir kez girdiği
       // tarihi bir daha silemezdi.
@@ -2966,7 +2986,8 @@ async function settleFinancialTransaction(request, env, principal, record, actio
   const settledOn = body.settled_on === undefined || body.settled_on === null || body.settled_on === "" ? timestamp.slice(0, 10) : body.settled_on;
   // Denetim, CRUD ucundakiyle aynı kaynaktan: kalıp burada tekrar yazılsaydı
   // aynı sütun iş akışından `2026-02-30` kabul edip CRUD'dan etmezdi.
-  if (!isDateText(settledOn)) return problem(422, "validation_error", dateValueError("settled_on", "date"));
+  const settledKind = dateColumnKind(resources["financial-transactions"].table, "settled_on");
+  if (!dateValueMatches(settledKind, settledOn)) return problem(422, "validation_error", dateValueError("settled_on", settledKind));
   // Tarih ve kaydeden kişi kendi sütunlarına yazılıyor (göç 0019). Daha önce
   // `metadata_json` içine giriyorlardı ve oradan raporlanamıyor,
   // sıralanamıyorlardı: rapor motoru sütunları `PRAGMA table_info` ile beyaz
@@ -3317,7 +3338,8 @@ async function resolveFileContext(env, principal, form, entityType, entityId) {
   // okuyorlar. Gevşek `Date.parse` "5 Mart 2020" gibi bir metni de geçiriyordu
   // ve o değer sütunda tarih sıralamasını bozardı. Arayüzün `datetime-local`
   // kutusundan gelen saat dilimsiz `2026-09-23T14:30` biçimi kabul edilir.
-  if (takenAt && !isDateTimeText(takenAt)) return { error: problem(422, "validation_error", dateValueError("taken_at", "datetime")) };
+  const takenAtKind = dateColumnKind(resources.files.table, "taken_at");
+  if (takenAt && !dateValueMatches(takenAtKind, takenAt)) return { error: problem(422, "validation_error", dateValueError("taken_at", takenAtKind)) };
   const spaceName = String(form.get("space_name") || "").trim().slice(0, 120) || null;
   return { context: { ...context, project_id: projectId, space_name: spaceName, capture_stage: captureStage, taken_at: takenAt || null, visibility, photo_consent_snapshot: project?.photo_consent || null } };
 }
@@ -3675,15 +3697,21 @@ const REPORT_NUMBER_COLUMNS = new Set(["exchange_rate", "rating", "satisfaction_
 
 // Tip, önce açık sınıflandırmadan, o susarsa sütun adından çıkarılır; arayüz
 // tarih alanını takvimle, para alanını kuruş çevirisiyle göstersin diye.
-function reportColumnType(column) {
+// Tablo, sınıflandırmanın iki katmanlı anahtarı için gerekli; görünümden
+// raporlanan kaynaklarda (`project-profitability`) görünümün adıdır ve
+// `PRAGMA table_info` sütun beyaz listesiyle aynı yerden, `config.table`
+// üzerinden gelir.
+function reportColumnType(table, column) {
+  // Bağlam burada da zorunlu; yoksa para ve yüzde sütunları tabloyu hiç
+  // sormadan cevaplanır ve bağlamsız bir çağrı yeri denetimden kaçardı.
+  if (typeof table !== "string" || !table) throw new TypeError(`reportColumnType: ${column} sütunu tablo bağlamı olmadan sorgulandı.`);
   if (column.endsWith("_minor")) return "money";
   // Açık liste her zaman tahminden önce gelir; ad kalıpları yalnız
-  // sınıflandırılmamış sütunlar için yedektir. `both` rapor tarafında
-  // `datetime` sayılır: o sınır (İstanbul gece yarısının UTC anı) düz
-  // `YYYY-AA-GG` değerini de doğru güne koyar, tersi doğru değildir — `date`
-  // sınırı ISO anı UTC gününe göre keser ve İstanbul'da 00:00-03:00 arasında
-  // biten iş bir önceki güne düşerdi.
-  const dateKind = dateColumnKind(column);
+  // sınıflandırılmamış sütunlar için yedektir. Yedeğin asıl müşterisi
+  // `created_at` / `approved_at` gibi istemcinin hiç yazamadığı ama
+  // raporlanabilen sütunlar: onlar kayıt defterindeki `fields` listesinde
+  // olmadığı için sınıflandırma zorunluluğu altında değiller.
+  const dateKind = dateColumnKind(table, column);
   if (dateKind) return dateKind === "date" ? "date" : "datetime";
   if (column.endsWith("_at")) return "datetime";
   if (column.endsWith("_date") || column.startsWith("date_")) return "date";
@@ -3829,10 +3857,10 @@ function reportRelativeProblem(message) {
 // eşit olmak, bugünün herhangi bir anında olmak demektir. Bu yüzden her
 // karşılaştırma, günün başı ile ertesi günün başı arasındaki yarı açık aralık
 // üzerinden kurulur; tarih sütununda da aynı biçim doğru sonucu verir.
-function reportRelativeClause(filter, field, clauses, bindings, now) {
+function reportRelativeClause(filter, table, field, clauses, bindings, now) {
   const op = filter.op;
   const token = filter.value;
-  const type = reportColumnType(field);
+  const type = reportColumnType(table, field);
   if (type !== "date" && type !== "datetime") return reportRelativeProblem(`${field} bir tarih sütunu değil; göreli tarih yalnız tarih sütunlarında kullanılabilir.`);
   const extra = Object.keys(token).filter((key) => key !== "relative" && key !== "offsetDays");
   if (extra.length) return reportRelativeProblem(`Göreli tarihte tanınmayan alan: ${extra[0]}`);
@@ -3866,10 +3894,10 @@ function reportRelativeClause(filter, field, clauses, bindings, now) {
   return null;
 }
 
-function reportFilterClause(filter, field, clauses, bindings, now) {
+function reportFilterClause(filter, table, field, clauses, bindings, now) {
   const op = filter.op;
   if (!REPORT_OPERATORS.has(op)) return problem(422, "unsupported_report_operator", `Desteklenmeyen süzgeç işleci: ${typeof op === "string" ? op : "geçersiz değer"}`);
-  if (isReportRelativeValue(filter.value)) return reportRelativeClause(filter, field, clauses, bindings, now);
+  if (isReportRelativeValue(filter.value)) return reportRelativeClause(filter, table, field, clauses, bindings, now);
   if (op === "empty") { clauses.push(`(${field} IS NULL OR ${field}='')`); return null; }
   if (op === "not_empty") { clauses.push(`(${field} IS NOT NULL AND ${field}<>'')`); return null; }
   if (op === "between") {
@@ -3939,7 +3967,7 @@ async function buildReportPlan(env, principal, definition, mode) {
     if (!filter || typeof filter !== "object" || Array.isArray(filter)) return { error: problem(422, "validation_error", "Her süzgeç bir JSON nesnesi olmalıdır.") };
     const columnProblem = reportColumnProblem(principal, columnSet, filter.field, "filters");
     if (columnProblem) return { error: columnProblem };
-    const clauseProblem = reportFilterClause(filter, filter.field, clauses, bindings, now);
+    const clauseProblem = reportFilterClause(filter, config.table, filter.field, clauses, bindings, now);
     if (clauseProblem) return { error: clauseProblem };
   }
 
@@ -3962,7 +3990,7 @@ async function buildReportPlan(env, principal, definition, mode) {
     }
     groupBy = [...new Set(groupBy)];
     selectParts = [...groupBy];
-    for (const column of groupBy) outputColumns.push({ key: column, type: reportColumnType(column) });
+    for (const column of groupBy) outputColumns.push({ key: column, type: reportColumnType(config.table, column) });
 
     const aggregates = group.aggregates === undefined || group.aggregates === null ? [] : group.aggregates;
     if (!Array.isArray(aggregates) || aggregates.length > REPORT_MAX_AGGREGATES) return { error: problem(422, "validation_error", `group.aggregates en fazla ${REPORT_MAX_AGGREGATES} öğeli bir dizi olmalıdır.`) };
@@ -3980,7 +4008,7 @@ async function buildReportPlan(env, principal, definition, mode) {
       } else {
         const columnProblem = reportColumnProblem(principal, columnSet, aggregate.field, "aggregates.field");
         if (columnProblem) return { error: columnProblem };
-        const fieldType = reportColumnType(aggregate.field);
+        const fieldType = reportColumnType(config.table, aggregate.field);
         if ((fn === "sum" || fn === "avg") && !REPORT_NUMERIC_TYPES.has(fieldType)) {
           return { error: problem(422, "non_numeric_aggregate", `${aggregate.field} sayısal bir sütun değil; ${fn} uygulanamaz.`) };
         }
@@ -4007,7 +4035,7 @@ async function buildReportPlan(env, principal, definition, mode) {
     }
     selectedColumns = [...new Set(requested)];
     selectParts = [...selectedColumns];
-    for (const column of selectedColumns) outputColumns.push({ key: column, type: reportColumnType(column) });
+    for (const column of selectedColumns) outputColumns.push({ key: column, type: reportColumnType(config.table, column) });
   }
 
   const sort = definition.sort === undefined || definition.sort === null ? [] : definition.sort;
@@ -4239,7 +4267,7 @@ async function reportFields(env, principal) {
     const otherEnums = enumFields[slug] || {};
     const columns = reportVisibleColumns(principal, await reportColumnsFor(env, config)).map((column) => {
       const values = column === "status" ? statusEnums[slug] : otherEnums[column];
-      return values?.length ? { key: column, type: reportColumnType(column), values: [...values] } : { key: column, type: reportColumnType(column) };
+      return values?.length ? { key: column, type: reportColumnType(config.table, column), values: [...values] } : { key: column, type: reportColumnType(config.table, column) };
     });
     if (!columns.length) continue;
     data.push({ resource: slug, columns });
@@ -4670,5 +4698,5 @@ async function scheduledHandler(_controller, env, context) {
   else await task;
 }
 
-export const __testing = { authenticate, handleApi, writeBackup, resources, normalizeTurkishMobile, passwordRecord, dateColumnKinds: DATE_COLUMN_KINDS, reportColumnType };
+export const __testing = { authenticate, handleApi, writeBackup, resources, normalizeTurkishMobile, passwordRecord, dateColumnKinds: DATE_COLUMN_KINDS, dateColumnKind, reportColumnType };
 export default { fetch: fetchHandler, scheduled: scheduledHandler };
