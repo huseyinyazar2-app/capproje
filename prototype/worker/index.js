@@ -52,7 +52,11 @@ const resources = {
   // böyle duruyor. `settled_by` ise bilerek dışarıda: bu kaynakta
   // `approved_by` de dışarıda ve kimin parayı kapattığı bilgisi istemcinin
   // yazabileceği bir alan olmamalı — sunucu onu tahsilat ucunda kendi yazıyor.
-  "financial-transactions": { table: "financial_transactions", required: ["transaction_number", "type", "transaction_date", "amount_minor"], search: ["transaction_number", "category", "reference", "description"], filters: ["project_id", "account_id", "customer_id", "supplier_id", "type", "status", "official"], refs: { project_id: "projects", account_id: "accounts", customer_id: "customers", supplier_id: "suppliers" }, fields: ["transaction_number","project_id","account_id","customer_id","supplier_id","type","category","transaction_date","due_date","settled_on","amount_minor","currency","exchange_rate","official","payment_method","reference","description","status","metadata_json"] },
+  //
+  // `derivedFilters.overdue`: "vadesi geçmiş" bir sütuna eşitlenemez, üç
+  // alandan (durum, vade, bugün) türer; bu yüzden `filters` listesinde değil.
+  // Koşulun kendisi `overdueFinanceCondition` içinde, tek yerde duruyor.
+  "financial-transactions": { table: "financial_transactions", required: ["transaction_number", "type", "transaction_date", "amount_minor"], search: ["transaction_number", "category", "reference", "description"], filters: ["project_id", "account_id", "customer_id", "supplier_id", "type", "status", "official"], derivedFilters: { overdue: overdueFinanceCondition }, refs: { project_id: "projects", account_id: "accounts", customer_id: "customers", supplier_id: "suppliers" }, fields: ["transaction_number","project_id","account_id","customer_id","supplier_id","type","category","transaction_date","due_date","settled_on","amount_minor","currency","exchange_rate","official","payment_method","reference","description","status","metadata_json"] },
   invoices: { table: "invoices", required: ["invoice_number", "direction", "issue_date"], search: ["invoice_number", "notes"], filters: ["project_id", "customer_id", "supplier_id", "direction", "status", "official"], refs: { project_id: "projects", customer_id: "customers", supplier_id: "suppliers" }, fields: ["invoice_number","direction","project_id","customer_id","supplier_id","issue_date","due_date","currency","subtotal_minor","tax_total_minor","grand_total_minor","paid_total_minor","official","datasoft_status","status","notes","metadata_json"] },
   employees: { table: "employees", required: ["employee_number", "first_name", "last_name"], search: ["employee_number", "first_name", "last_name", "department", "title", "email"], filters: ["department", "status"], fields: ["employee_number","user_id","first_name","last_name","national_id_masked","birth_date","email","phone","department","title","employment_type","hire_date","termination_date","manager_employee_id","salary_amount_minor","salary_currency","emergency_contact","address","status","metadata_json"] },
   attendance: { table: "attendance", required: ["employee_id", "work_date"], search: ["location", "notes"], filters: ["employee_id", "work_date", "status"], refs: { employee_id: "employees" }, fields: ["employee_id","work_date","check_in","check_out","regular_minutes","overtime_minutes","location","source","status","notes","metadata_json"] },
@@ -930,6 +934,64 @@ async function getPermissionCatalog(env, principal) {
 // "Resmi" / "Proje içi" sekmeleri boş görünüyordu.
 const booleanFilters = new Set(["official", "is_outsourced", "is_system"]);
 
+// "Vadesi geçmiş" tek bir cümledir: onaylı, vadesi dolu ve vadesi bugünden
+// önce. Cümleyi üreten tek yer burasıdır; liste süzgeci de panodaki vadesi
+// geçen alt toplamları da buradan okur. İki ayrı yerde yazılsaydı biri
+// güncellenip öteki unutulurdu ve kullanıcı aynı soruya iki farklı cevap
+// alırdı: listede "Gecikti" rozeti taşıyan bir satır panoda toplama girmezdi.
+// Arayüzdeki karşılığı `isOverdueFinanceRow` (src/LiveWorkspace.jsx); ikisinin
+// aynı kümeyi verdiği tests/finance-overdue.test.mjs ile ölçülüyor.
+//
+// Vade günü dolduğu gün henüz gecikme değil (`<`, `<=` değil): o gün ödeme
+// hâlâ vaktinde yapılabilir. Vadesi olmayan hareket hiç gecikmez, ölçecek
+// tarih yoktur. `collected`/`paid` para hareket ettiği için, `pending`/
+// `draft`/`planned` ise henüz bir taahhüt olmadığı için kapsam dışıdır.
+//
+// Gün sınırı firmanın saat diliminde çizilir (`reportTodayText`), SQLite'ın
+// UTC'sinde değil; gerekçesi orada yazılı.
+//
+// GLOB kalıbı "vadesi dolu" cümlesinin karşılığıdır; boş olmayı elemekle
+// kalmaz, yazılanın gerçekten bir gün olmasını da arar.
+// `due_date` yazılırken tarih olduğu doğrulanmıyor (sütun serbest metin), yani
+// `""` ya da `"0"` gibi bir değer gerçekten kaydedilebiliyor — ve `'' < '2026-09-23'`
+// SQLite'ta doğrudur. Kalıp olmasaydı böyle bir satır süzgeçte "vadesi geçmiş"
+// çıkar, ekranda rozetsiz görünürdü: tam da olmaması gereken, sessizce yanlış
+// küme. Ekran kuralı gün metnini ilk on karakterden okuduğu için (`slice(0, 10)`)
+// kalıp sonda `*` ile bitiyor: "2026-09-15T08:00:00Z" iki tarafta da aynı
+// cevabı verir. Karşılaştırma `due_date` sütununun kendisiyle yapılıyor
+// (substr ile sarmalanmıyor) ki tarih indeksi kullanılabilsin.
+function overdueFinanceCondition(env) {
+  return { clause: "(status='approved' AND due_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' AND due_date<?)", bindings: [reportTodayText(env)] };
+}
+
+// Liste ve CSV çıktısı aynı süzgeçleri görmeli, yoksa ekranda süzülmüş liste
+// dosyaya süzülmemiş iner. Bu yüzden iki uç da süzgeci buradan kurar.
+//
+// İki tür süzgeç var. `filters` bir sütuna eşitlenir. `derivedFilters` ise
+// sütuna eşitlenemeyen, birkaç alandan türeyen koşullardır; kaynak tanımı
+// koşulu kendisi bildirir, uçlar genel kalır — burada hangi kaynağın neyi
+// süzdüğü yazmaz.
+function resourceFilters(url, config, env) {
+  const clauses = [];
+  const bindings = [];
+  for (const field of config.filters || []) {
+    const value = url.searchParams.get(field);
+    if (value === null || value === "") continue;
+    clauses.push(`${field}=?`);
+    bindings.push(booleanFilters.has(field) ? (["true", "1"].includes(value) ? 1 : 0) : value);
+  }
+  for (const [name, condition] of Object.entries(config.derivedFilters || {})) {
+    // Türetilmiş süzgeç bir aç/kapa anahtarıdır: yalnız açıkça açıldığında
+    // koşul eklenir. Kapalıyken ("false", "0" ya da hiç gönderilmemiş) tek bir
+    // kaydı bile elemez, yani var olan süzgeçlerin kapsamını daraltmaz.
+    if (!["true", "1"].includes(url.searchParams.get(name) ?? "")) continue;
+    const derived = condition(env);
+    clauses.push(derived.clause);
+    bindings.push(...derived.bindings);
+  }
+  return { clauses, bindings };
+}
+
 // Elektronik tablo `=`, `+`, `-`, `@` ile başlayan hücreyi formül olarak
 // çalıştırır ve DDE üzerinden komut çalıştırmaya kadar gidebilir. Müşteri adını,
 // proje açıklamasını, notu kullanıcı yazıyor; yani hücrenin içeriği saldırganın
@@ -954,14 +1016,9 @@ async function exportResource(request, env, principal, slug, config) {
   if (!allowed(principal, "export")) return problem(403, "forbidden", "Dışa aktarma yetkiniz yok.");
   if (!allowed(principal, permissionFor(slug, "read"))) return problem(403, "forbidden", "Bu kayıtları görüntüleme yetkiniz yok.");
   const url = new URL(request.url);
-  const clauses = ["tenant_id=?"];
-  const bindings = [principal.tenantId];
-  for (const field of config.filters || []) {
-    const value = url.searchParams.get(field);
-    if (value === null || value === "") continue;
-    clauses.push(`${field}=?`);
-    bindings.push(booleanFilters.has(field) ? (["true", "1"].includes(value) ? 1 : 0) : value);
-  }
+  const filters = resourceFilters(url, config, env);
+  const clauses = ["tenant_id=?", ...filters.clauses];
+  const bindings = [principal.tenantId, ...filters.bindings];
   const scope = rowScopeFor(config, principal, "read");
   const limit = Math.min(10000, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "5000", 10) || 5000));
   const rows = await all(env.DB.prepare(`SELECT * FROM ${config.table} WHERE ${scopedWhere(clauses, scope).join(" AND ")} ORDER BY ${config.table === "audit_logs" ? "created_at" : "updated_at"} DESC LIMIT ?`).bind(...bindings, ...scope.bindings, limit));
@@ -988,6 +1045,11 @@ function csvResponse(columns, rows, filenameBase) {
 async function getDashboard(env, principal) {
   if (!allowed(principal, "dashboard.read")) return problem(403, "forbidden", "Dashboard görüntüleme yetkiniz yok.");
   const tenant = principal.tenantId;
+  // Vadesi geçmenin tanımı burada yeniden yazılmaz; liste süzgeci ile aynı
+  // yardımcıdan gelir. Gün sınırı da oradan geldiği için panodaki "vadesi
+  // geçen" toplamı ile listede "Gecikti" rozeti taşıyan satırlar gecenin bir
+  // yarısı bile ayrışmaz.
+  const overdue = overdueFinanceCondition(env);
   const queries = [
     ["projects", "SELECT COUNT(*) AS count FROM projects WHERE tenant_id=? AND status NOT IN ('completed','cancelled')"],
     ["openOffers", "SELECT COUNT(*) AS count,COALESCE(SUM(grand_total_minor),0) AS amount_minor FROM offers WHERE tenant_id=? AND status IN ('sent','pending')"],
@@ -1008,16 +1070,30 @@ async function getDashboard(env, principal) {
     // fişin durumu yarın değiştiğinde bir sorgunun unutulmasından iyidir.
     //
     // Durum listesinde `overdue` yok (göç 0019): vadesi geçmiş olmak saklanan
-    // bir durum değil, `due_date`ten okunan bir özellik. Alt toplam
-    // (`overdue_amount_minor`) zaten `due_date`e bakıyordu ve tek doğru kaynak
-    // odur; durum kodu da listede dursaydı, kodu bugün hiçbir satır taşımasa
-    // bile iki farklı "vadesi geçti" tanımı yan yana yaşamaya devam ederdi.
-    ["receivables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor,COALESCE(SUM(CASE WHEN due_date IS NOT NULL AND due_date<date('now') THEN amount_minor ELSE 0 END),0) AS overdue_amount_minor FROM financial_transactions WHERE tenant_id=? AND type='income' AND status IN ('planned','pending','approved') AND reversal_of_id IS NULL"],
-    ["payables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor FROM financial_transactions WHERE tenant_id=? AND type='expense' AND status IN ('planned','pending','approved') AND reversal_of_id IS NULL"],
+    // bir durum değil, `due_date`ten okunan bir özellik. Durum kodu listede
+    // dursaydı, kodu bugün hiçbir satır taşımasa bile iki farklı "vadesi
+    // geçti" tanımı yan yana yaşamaya devam ederdi.
+    //
+    // Toplamın kapsamı ile vadesi geçmenin tanımı ayrı şeylerdir: hangi
+    // satırların alacak sayıldığını aşağıdaki WHERE söyler, hangilerinin
+    // gecikmiş sayıldığını `overdue.clause`. Alt toplam bu yüzden yalnız
+    // onaylı hareketleri sayar — `planned`/`pending` bir hareket alacaktır ama
+    // henüz kesinleşmemiştir, ekranda da "Gecikti" rozeti almaz.
+    //
+    // Bağlama sırası SQL'deki `?` sırasıdır: gün sınırı SELECT listesinde,
+    // firma kimliği WHERE'de geçtiği için önce gün, sonra firma bağlanır.
+    //
+    // Vadesi geçen alt toplamı artık gelirde de giderde de var: vadesi geçmiş
+    // borç, vadesi geçmiş alacak kadar gerçektir ve pano ikisini de aynı
+    // cümleyle sayar.
+    ["receivables", `SELECT COALESCE(SUM(amount_minor),0) AS amount_minor,COALESCE(SUM(CASE WHEN ${overdue.clause} THEN amount_minor ELSE 0 END),0) AS overdue_amount_minor FROM financial_transactions WHERE tenant_id=? AND type='income' AND status IN ('planned','pending','approved') AND reversal_of_id IS NULL`, [...overdue.bindings, tenant]],
+    ["payables", `SELECT COALESCE(SUM(amount_minor),0) AS amount_minor,COALESCE(SUM(CASE WHEN ${overdue.clause} THEN amount_minor ELSE 0 END),0) AS overdue_amount_minor FROM financial_transactions WHERE tenant_id=? AND type='expense' AND status IN ('planned','pending','approved') AND reversal_of_id IS NULL`, [...overdue.bindings, tenant]],
     ["employees", "SELECT COUNT(*) AS count FROM employees WHERE tenant_id=? AND status='active'"],
   ];
   const data = {};
-  for (const [name, sql] of queries) data[name] = await one(env.DB.prepare(sql).bind(tenant));
+  // Sorguların çoğu yalnız firma kimliğini bağlar; kendi bağlamalarını bildiren
+  // (vadesi geçen alt toplamı gibi) sorgular listede onları yanında taşır.
+  for (const [name, sql, values] of queries) data[name] = await one(env.DB.prepare(sql).bind(...(values ?? [tenant])));
   data.recentProjects = (await all(env.DB.prepare("SELECT id,code,name,status,progress_percent,updated_at FROM projects WHERE tenant_id=? ORDER BY updated_at DESC LIMIT 6").bind(tenant))).map(decodeRow);
   data.pipeline = (await all(env.DB.prepare("SELECT status,COUNT(*) AS count FROM projects WHERE tenant_id=? AND status NOT IN ('cancelled','lost') GROUP BY status ORDER BY status").bind(tenant))).map(decodeRow);
   data.attention = await one(env.DB.prepare(`SELECT
@@ -1362,14 +1438,12 @@ async function listResource(request, env, principal, slug, config) {
   const url = new URL(request.url);
   const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "25", 10) || 25));
-  const clauses = ["tenant_id=?"];
-  const bindings = [principal.tenantId];
-  for (const field of config.filters || []) {
-    const value = url.searchParams.get(field);
-    if (value === null || value === "") continue;
-    clauses.push(`${field}=?`);
-    bindings.push(booleanFilters.has(field) ? (["true", "1"].includes(value) ? 1 : 0) : value);
-  }
+  // Süzgeçler WHERE'in içindedir, sonradan satır ayıklayarak değil: aşağıdaki
+  // `COUNT(*)`, sayfalama ve satırlar aynı koşulu görsün. Sayım ile liste
+  // ayrışsaydı sayfa sayısı yalan söylerdi.
+  const filters = resourceFilters(url, config, env);
+  const clauses = ["tenant_id=?", ...filters.clauses];
+  const bindings = [principal.tenantId, ...filters.bindings];
   const q = url.searchParams.get("q")?.trim();
   if (q && config.search?.length) {
     clauses.push(`(${config.search.map((field) => `COALESCE(${field},'') LIKE ? ESCAPE '\\'`).join(" OR ")})`);
@@ -3587,6 +3661,14 @@ function reportCalendarDay(year, month, day) {
 }
 const reportShiftDay = (value, days) => reportCalendarDay(value.year, value.month, value.day + days);
 const reportDayText = (value) => `${String(value.year).padStart(4, "0")}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
+
+// Firmanın bugünü, tarih sütunlarının saklandığı biçimde (yyyy-aa-gg). Rapor
+// motorunun dışındaki sorgular da günü buradan okumalı: SQLite'ın `date('now')`
+// değeri UTC'dir ve Türkiye UTC+3 olduğu için gece 00:00-03:00 arasında dünü
+// verir. O üç saat boyunca vadesi dün dolmuş bir alacak "henüz gecikmedi"
+// sayılır, ekran ise gecikti der; aynı soruya iki cevap çıkar.
+// `reportClock` sayesinde testler bu sınırı sabit bir ana çivileyebiliyor.
+const reportTodayText = (env) => reportDayText(reportZoneParts(reportClock(env)));
 
 // İstanbul'daki bir günün başladığı UTC anı. Ofset sabit varsayılmaz (Türkiye
 // 2016'dan önce yaz saati uyguluyordu ve kural yine değişebilir); tahmin
