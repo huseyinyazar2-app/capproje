@@ -46,3 +46,33 @@ test("Turso migration splitter keeps trigger bodies as one SQL statement", async
   assert.match(source, /END;\\s\*\$/);
   assert.doesNotMatch(source, /\.split\(\/;\\s\*/);
 });
+
+test("a comment line ending in a semicolon does not cut a statement in half", async () => {
+  const { splitSqlStatements } = await import("../scripts/migrate-turso.mjs");
+  // Türkçe açıklamalar noktalı virgülle biten cümleler kurabiliyor. Böyle bir
+  // satır kod sanılırsa görünüm ortadan bölünür ve göç "incomplete input" ile
+  // düşer; bu bir kez gerçekten oldu (0017_project_profitability.sql).
+  const sql = [
+    "CREATE VIEW IF NOT EXISTS ornek AS",
+    "SELECT",
+    "  -- asli kayıt zaten `reversed` olup toplamdan düşüyor;",
+    "  SUM(amount_minor) AS toplam",
+    "FROM financial_transactions;",
+    "",
+    "CREATE INDEX IF NOT EXISTS idx_ornek ON financial_transactions(tenant_id);",
+  ].join("\n");
+
+  const statements = splitSqlStatements(sql);
+  assert.equal(statements.length, 2);
+  assert.match(statements[0], /^CREATE VIEW/);
+  assert.match(statements[0], /FROM financial_transactions$/);
+  assert.match(statements[1], /^CREATE INDEX/);
+});
+
+test("a trailing comment after real code still closes the statement", async () => {
+  const { splitSqlStatements } = await import("../scripts/migrate-turso.mjs");
+  const sql = "CREATE INDEX IF NOT EXISTS a ON t(x); -- neden burada\nCREATE INDEX IF NOT EXISTS b ON t(y);";
+  const statements = splitSqlStatements(sql);
+  assert.equal(statements.length, 2);
+  assert.match(statements[1], /^CREATE INDEX IF NOT EXISTS b/);
+});

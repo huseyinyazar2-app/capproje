@@ -20,7 +20,11 @@ export function splitSqlStatements(sql) {
     if (commentOnly(buffer) && /^\s*CREATE\s+TRIGGER\b/i.test(line)) trigger = true;
     buffer += `${line}\n`;
     if (commentOnly(buffer)) continue;
-    const complete = trigger ? /^\s*END;\s*$/i.test(line) : /;\s*(?:--.*)?$/.test(line);
+    // Yorum satırı statement'ı bitiremez. Türkçe açıklamalar noktalı virgülle
+    // biten cümleler kurabiliyor; bu satır kod sanılırsa CREATE VIEW ortadan
+    // ikiye bölünür ve göç "incomplete input" ile düşer.
+    const codeLine = /^\s*--/.test(line) ? "" : line;
+    const complete = trigger ? /^\s*END;\s*$/i.test(codeLine) : /;\s*(?:--.*)?$/.test(codeLine);
     if (!complete) continue;
     statements.push(buffer.trim().replace(/;\s*$/, ""));
     buffer = "";
