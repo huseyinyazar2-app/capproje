@@ -45,7 +45,14 @@ const resources = {
   "production-orders": { table: "production_orders", required: ["order_number", "project_id"], search: ["order_number", "workshop", "assigned_team", "instructions"], filters: ["project_id", "work_item_id", "supplier_id", "status", "trade_type"], refs: { project_id: "projects", work_item_id: "work_items", supplier_id: "suppliers" }, fields: ["order_number","project_id","work_item_id","production_type","trade_type","supplier_id","workshop","assigned_team","planned_start","planned_end","actual_start","actual_end","quantity","completed_quantity","quality_status","status","instructions","metadata_json"] },
   installations: { table: "installations", required: ["installation_number", "project_id"], search: ["installation_number", "location", "acceptance_contact", "issue_notes"], filters: ["project_id", "team_lead_user_id", "status"], refs: { project_id: "projects" }, fields: ["installation_number","project_id","location","team_lead_user_id","team_json","planned_start","planned_end","actual_start","actual_end","progress_percent","status","acceptance_contact","acceptance_date","issue_notes","metadata_json"] },
   accounts: { table: "accounts", required: ["code", "name", "type"], search: ["code", "name", "bank_name", "iban"], filters: ["type", "status"], fields: ["code","name","type","currency","bank_name","iban","opening_balance_minor","current_balance_minor","status","metadata_json"] },
-  "financial-transactions": { table: "financial_transactions", required: ["transaction_number", "type", "transaction_date", "amount_minor"], search: ["transaction_number", "category", "reference", "description"], filters: ["project_id", "account_id", "customer_id", "supplier_id", "type", "status", "official"], refs: { project_id: "projects", account_id: "accounts", customer_id: "customers", supplier_id: "suppliers" }, fields: ["transaction_number","project_id","account_id","customer_id","supplier_id","type","category","transaction_date","due_date","amount_minor","currency","exchange_rate","official","payment_method","reference","description","status","metadata_json"] },
+  // `settled_on` (göç 0019) `fields` içinde: rapor motorunun sütun beyaz
+  // listesi buradan türüyor ve tahsilat tarihi raporlanabilir, süzülebilir,
+  // sıralanabilir olmadan sütun olmanın bir anlamı kalmazdı. Aynı listedeki
+  // `actual_start`/`completed_at` gibi iş akışının yazdığı öteki tarihler de
+  // böyle duruyor. `settled_by` ise bilerek dışarıda: bu kaynakta
+  // `approved_by` de dışarıda ve kimin parayı kapattığı bilgisi istemcinin
+  // yazabileceği bir alan olmamalı — sunucu onu tahsilat ucunda kendi yazıyor.
+  "financial-transactions": { table: "financial_transactions", required: ["transaction_number", "type", "transaction_date", "amount_minor"], search: ["transaction_number", "category", "reference", "description"], filters: ["project_id", "account_id", "customer_id", "supplier_id", "type", "status", "official"], refs: { project_id: "projects", account_id: "accounts", customer_id: "customers", supplier_id: "suppliers" }, fields: ["transaction_number","project_id","account_id","customer_id","supplier_id","type","category","transaction_date","due_date","settled_on","amount_minor","currency","exchange_rate","official","payment_method","reference","description","status","metadata_json"] },
   invoices: { table: "invoices", required: ["invoice_number", "direction", "issue_date"], search: ["invoice_number", "notes"], filters: ["project_id", "customer_id", "supplier_id", "direction", "status", "official"], refs: { project_id: "projects", customer_id: "customers", supplier_id: "suppliers" }, fields: ["invoice_number","direction","project_id","customer_id","supplier_id","issue_date","due_date","currency","subtotal_minor","tax_total_minor","grand_total_minor","paid_total_minor","official","datasoft_status","status","notes","metadata_json"] },
   employees: { table: "employees", required: ["employee_number", "first_name", "last_name"], search: ["employee_number", "first_name", "last_name", "department", "title", "email"], filters: ["department", "status"], fields: ["employee_number","user_id","first_name","last_name","national_id_masked","birth_date","email","phone","department","title","employment_type","hire_date","termination_date","manager_employee_id","salary_amount_minor","salary_currency","emergency_contact","address","status","metadata_json"] },
   attendance: { table: "attendance", required: ["employee_id", "work_date"], search: ["location", "notes"], filters: ["employee_id", "work_date", "status"], refs: { employee_id: "employees" }, fields: ["employee_id","work_date","check_in","check_out","regular_minutes","overtime_minutes","location","source","status","notes","metadata_json"] },
@@ -113,7 +120,7 @@ const backupTables = ["customers","suppliers","projects","offers","offer_items",
 // hesaplanan bir görünüm. Kaynakları zaten yukarıda yedekleniyor, türetilmiş
 // satırları yedeğe yazmak aynı veriyi ikinci kez saklamak olurdu ve geri
 // yükleme sırasında görünüme INSERT edilemeyeceği için yedek hataya düşerdi.
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql", "0015_reports.sql", "0016_report_views.sql", "0017_project_profitability.sql", "0018_finance_settlement.sql"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql", "0015_reports.sql", "0016_report_views.sql", "0017_project_profitability.sql", "0018_finance_settlement.sql", "0019_finance_settlement_date.sql"];
 const BACKUP_SCHEMA_VERSION = backupMigrations.length;
 const dailyBackupSeen = new Map();
 const DAILY_BACKUP_SEEN_LIMIT = 500;
@@ -235,7 +242,13 @@ const statusEnums = {
   "purchase-orders": ["draft","ordered","partial","received","cancelled"],
   "production-orders": ["draft","planned","released","waiting_material","in_progress","quality_control","paused","completed","cancelled"],
   installations: ["planned","survey_needed","site_waiting","in_transit","in_progress","incomplete","completed","cancelled"],
-  "financial-transactions": ["draft","planned","pending","approved","collected","paid","overdue","reversed","cancelled"],
+  // `overdue` bu kümede yok (göç 0019 onu veritabanı kuralından da çıkardı):
+  // vadesi geçmiş olmak ayrı bir durum değil, onaylı bir kaydın `due_date`
+  // alanından okunan bir özelliktir. Saklanan bir kod olsaydı vade
+  // uzatıldığında bayatlar, kayıt "Gecikti" olarak asılı kalırdı.
+  // `invoices` aynı kodu tutmaya devam ediyor; orada fatura o durumda
+  // açılabiliyor ve `overdue-receivables` raporu onu süzüyor.
+  "financial-transactions": ["draft","planned","pending","approved","collected","paid","reversed","cancelled"],
   invoices: ["draft","open","partial","paid","collected","overdue","cancelled"],
   employees: ["active","on_leave","inactive","terminated"],
   attendance: ["present","absent","leave","remote","holiday","sick"],
@@ -520,7 +533,7 @@ const referenceNameSources = {
 // Kişi alanları ayrı tutuluyor: bunlar firma tablolarını değil users tablosunu
 // gösterir ve tenant_id ile süzülemez. "Takip sorumlusu" alanında kimlik değil
 // kişinin adı yazmalı; kimse atanmamışsa hiçbir şey yazmamalı.
-const userReferenceColumns = new Set(["approved_by", "uploaded_by", "created_by", "reported_by", "user_id"]);
+const userReferenceColumns = new Set(["approved_by", "uploaded_by", "created_by", "reported_by", "settled_by", "user_id"]);
 
 function isUserReferenceColumn(column) {
   return column.endsWith("_user_id") || userReferenceColumns.has(column);
@@ -993,8 +1006,14 @@ async function getDashboard(env, principal) {
     // fiş bugün her zaman `approved` doğduğu için tahsilat toplamlarına zaten
     // giremiyor, ama koruma orada da duruyor — kuralın her sorguda aynı olması,
     // fişin durumu yarın değiştiğinde bir sorgunun unutulmasından iyidir.
-    ["receivables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor,COALESCE(SUM(CASE WHEN due_date IS NOT NULL AND due_date<date('now') THEN amount_minor ELSE 0 END),0) AS overdue_amount_minor FROM financial_transactions WHERE tenant_id=? AND type='income' AND status IN ('planned','pending','approved','overdue') AND reversal_of_id IS NULL"],
-    ["payables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor FROM financial_transactions WHERE tenant_id=? AND type='expense' AND status IN ('planned','pending','approved','overdue') AND reversal_of_id IS NULL"],
+    //
+    // Durum listesinde `overdue` yok (göç 0019): vadesi geçmiş olmak saklanan
+    // bir durum değil, `due_date`ten okunan bir özellik. Alt toplam
+    // (`overdue_amount_minor`) zaten `due_date`e bakıyordu ve tek doğru kaynak
+    // odur; durum kodu da listede dursaydı, kodu bugün hiçbir satır taşımasa
+    // bile iki farklı "vadesi geçti" tanımı yan yana yaşamaya devam ederdi.
+    ["receivables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor,COALESCE(SUM(CASE WHEN due_date IS NOT NULL AND due_date<date('now') THEN amount_minor ELSE 0 END),0) AS overdue_amount_minor FROM financial_transactions WHERE tenant_id=? AND type='income' AND status IN ('planned','pending','approved') AND reversal_of_id IS NULL"],
+    ["payables", "SELECT COALESCE(SUM(amount_minor),0) AS amount_minor FROM financial_transactions WHERE tenant_id=? AND type='expense' AND status IN ('planned','pending','approved') AND reversal_of_id IS NULL"],
     ["employees", "SELECT COUNT(*) AS count FROM employees WHERE tenant_id=? AND status='active'"],
   ];
   const data = {};
@@ -2744,10 +2763,10 @@ async function settleFinancialTransaction(request, env, principal, record, actio
   // Yalnız kesinleşmiş bir kayıt kapanabilir. `draft`, `planned` ve `pending`
   // henüz onaylanmamıştır; oradan doğrudan tahsilata atlamak onay adımını
   // atlar, `approved_at`/`approved_by` boş kalır ve denetim izi yalan söyler.
-  // `cancelled` hiç olmamış, `reversed` ters kayıtla geri alınmıştır. `overdue`
-  // ise onaylanmış ama vadesi geçmiş kayıttır: kapanmasının tek yolu budur,
-  // dışarıda bırakmak raporda sonsuza dek açık kalan bir alacak bırakırdı.
-  if (!["approved", "overdue"].includes(record.status)) return problem(409, "invalid_transition", `${record.status} durumundaki hareket ${action === "collect" ? "tahsil edilemez" : "ödenemez"}; önce onaylanmalıdır.`);
+  // `cancelled` hiç olmamış, `reversed` ters kayıtla geri alınmıştır.
+  // Vadesi geçmiş alacak ayrı bir durum değil, `approved` olup `due_date`i
+  // geçmiş kayıttır (göç 0019); kapanma yolu bu yüzden tek küme: `approved`.
+  if (record.status !== "approved") return problem(409, "invalid_transition", `${record.status} durumundaki hareket ${action === "collect" ? "tahsil edilemez" : "ödenemez"}; önce onaylanmalıdır.`);
   // Ters kayıt bir düzeltme fişidir, kasadan geçmez. Tahsil edilmiş saymak eksi
   // tutarı tahsilat toplamına sokar ve hiç yaşanmamış bir tahsilatı rapora
   // yazardı; `reverse` ucu da aynı nedenle yalnız asli kaydı kabul ediyor.
@@ -2767,11 +2786,16 @@ async function settleFinancialTransaction(request, env, principal, record, actio
   const reference = typeof body.reference === "string" && body.reference.trim() ? body.reference.trim() : null;
   // Tahsilat tarihi verilebilir, çünkü para çoğu zaman kaydın girildiği günden
   // önce hareket eder. `transaction_date` üzerine yazılmaz: o tahakkuk
-  // tarihidir ve bütün tarih bazlı raporlar ona dayanıyor. Tarihin kendi sütunu
-  // yok, bu yüzden `metadata_json` içine ve denetim kaydına yazılıyor.
+  // tarihidir ve bütün tarih bazlı raporlar ona dayanıyor.
   const settledOn = body.settled_on === undefined || body.settled_on === null || body.settled_on === "" ? timestamp.slice(0, 10) : body.settled_on;
   if (typeof settledOn !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(settledOn)) return problem(422, "validation_error", "settled_on YYYY-AA-GG biçiminde bir tarih olmalıdır.");
-  const statement = env.DB.prepare(`UPDATE financial_transactions SET status=?,payment_method=COALESCE(?,payment_method),reference=COALESCE(?,reference),metadata_json=json_set(COALESCE(metadata_json,'{}'),'$.${target}_on',?,'$.${target}_by',?),updated_at=? WHERE id=? AND tenant_id=? AND status IN ('approved','overdue')`)
+  // Tarih ve kaydeden kişi kendi sütunlarına yazılıyor (göç 0019). Daha önce
+  // `metadata_json` içine giriyorlardı ve oradan raporlanamıyor,
+  // sıralanamıyorlardı: rapor motoru sütunları `PRAGMA table_info` ile beyaz
+  // listeliyor, JSON içindeki bir alan o listeye hiç giremiyor. Tahsilat ve
+  // ödeme tek sütun çiftini paylaşıyor; bir hareket ikisinden yalnız birine
+  // ulaşabildiği için ayrı sütun tutmak yarısı hep boş iki sütun demekti.
+  const statement = env.DB.prepare("UPDATE financial_transactions SET status=?,payment_method=COALESCE(?,payment_method),reference=COALESCE(?,reference),settled_on=?,settled_by=?,updated_at=? WHERE id=? AND tenant_id=? AND status='approved'")
     .bind(target, paymentMethod, reference, settledOn, principal.user.id, timestamp, record.id, principal.tenantId);
   try { await commitWorkflow(env, principal, request, [statement], action, "financial-transactions", record.id, { from: record.status, to: target, settled_on: settledOn, payment_method: paymentMethod, reference }); }
   catch (error) { return workflowCommitProblem(env, error); }
@@ -2927,8 +2951,9 @@ async function progressPaymentAction(request, env, principal, paymentId, action)
     // `collected` ve `paid`, `approved`'dan geri değil ileri adımlardır: para
     // gerçekten el değiştirmiştir. Yalnız `approved` kabul edilseydi, parayı
     // finans ekranından tahsil eden kullanıcı hakedişi bir daha "Ödendi"
-    // yapamaz, zinciri kendi doğru hamlesiyle kilitlerdi. `overdue` bilerek
-    // dışarıda: vadesi geçmiş demek, tahsil edilmiş demek değildir. Düzeltme
+    // yapamaz, zinciri kendi doğru hamlesiyle kilitlerdi. Vadesi geçmiş bir
+    // kayıt burada ayrıca sayılmıyor; o da `approved` durumundadır (göç 0019)
+    // ve vadesinin geçmiş olması tahsil edildiği anlamına gelmez. Düzeltme
     // fişi de ödeme sayılmaz, asli kaydın kendisi gösterilmelidir.
     const settled = ["approved", "collected", "paid"].includes(transaction?.status) && !transaction.reversal_of_id;
     if (!transaction || transaction.project_id !== record.project_id || !settled) return problem(422, "cross_tenant_reference", "Hakediş projesine ait onaylı payment_transaction_id zorunludur.");
@@ -3457,7 +3482,13 @@ async function reportColumnsFor(env, config) {
 // sınırı (`YYYY-MM-DD`) hem bunlarda hem Z'siz yerel saatli değerde doğru keser.
 // `period` (bordro, `YYYY-AA`) ve yalnız saat tutan `check_in`/`check_out`
 // bilinçli olarak dışarıda: gün sınırı onlarda anlamsız.
-const REPORT_DATE_COLUMNS = new Set(["planned_start", "planned_end", "needed_by", "period_start", "period_end", "valid_until"]);
+// `settled_on` (göç 0019, tahsilat/ödeme tarihi) da buraya yazılı: adı ne
+// `_date` ile bitiyor ne `date_` ile başlıyor, sınıflanmasaydı `text` sayılır
+// ve sütunun varlık nedeni olan sorular kapalı kalırdı — göreli tarih süzgeci
+// ("bu ay") reddedilir, arayüz takvim yerine metin kutusu çizerdi. Sunucu ve
+// iş akışı ucu onu her zaman `YYYY-MM-DD` yazıyor, yani `date` sınırı doğru
+// keser.
+const REPORT_DATE_COLUMNS = new Set(["planned_start", "planned_end", "needed_by", "period_start", "period_end", "settled_on", "valid_until"]);
 // Zaman damgası: actual_start/actual_end'i üretim emri iş akışı (başlatma ve
 // tamamlama geçişi) sunucu `now()` ile UTC ISO an olarak yazar (`...Z`). `date`
 // sınırıyla kesilseydi İstanbul'da 00:00-03:00 arasında biten iş UTC'deki bir

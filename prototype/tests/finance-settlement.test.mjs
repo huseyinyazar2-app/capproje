@@ -24,6 +24,7 @@ function loadWorkflowActions() {
   const parts = [
     section(apiSource, "const STATUS_VALUES = Object.freeze({", "const reverseStatuses"),
     section(apiSource, "export function statusCodeFor", "export const demoAuthEnabled").replace("export ", ""),
+    section(liveSource, "const WORKSPACE_TIME_ZONE", "// Derleme damgası"),
     section(liveSource, "const projectStageLabels = {", "\n"),
     section(liveSource, "const enumLabels = {", "// Denetim kaydı modülü"),
     section(liveSource, "function localizedEnum(value)", "// Sunucudaki üst yetki"),
@@ -63,15 +64,12 @@ test("onaylı gelir hareketinde tahsilat, onaylı gider hareketinde ödeme düğ
 
 test("vadesi geçmiş alacak da tek tıkla kapatılabilir", () => {
   // Bütün işin çıkış noktası: vadesi geçmiş alacak listesinden hiçbir kalem
-  // düşmüyordu. `overdue` onaylanmış ama vadesi kaçmış kayıttır; sunucu da
-  // tahsilat ve ödemeyi `approved` ile `overdue` durumlarında kabul ediyor.
-  assert.ok(keysFor(transaction({ type: "income", status: "Gecikti" })).includes("collect"));
-  assert.ok(keysFor(transaction({ type: "expense", status: "Gecikti" })).includes("pay"));
-
-  // Ters kayıt ise vadesi geçmiş kayda uygulanmaz; sunucu onu yalnız
-  // approved/collected/paid durumunda kabul ediyor.
-  assert.deepEqual(keysFor(transaction({ type: "income", status: "Gecikti" })), ["collect"]);
-  assert.deepEqual(keysFor(transaction({ type: "expense", status: "Gecikti" })), ["pay"]);
+  // düşmüyordu. Vadesi geçmiş olmak artık ayrı bir durum değil, onaylı bir
+  // kaydın vadesinden okunan bir özellik; ekranda "Gecikti" rozetiyle görünse
+  // de altındaki durum `approved` olduğu için düğmeler yerinde kalmalı.
+  const overdue = { dueDate: "2026-09-15", status: "Onaylandı" };
+  assert.deepEqual(keysFor(transaction({ ...overdue, type: "income" })), ["collect", "reverse"]);
+  assert.deepEqual(keysFor(transaction({ ...overdue, type: "expense" })), ["pay", "reverse"]);
 });
 
 test("kapanmış kayıt ters kayıtla düzeltilebilir, ikinci kez kapatılamaz", () => {
@@ -103,16 +101,14 @@ test("hakediş, avans ve maliyet tahmini hareketleri bu ekrandan kapatılmaz", (
   // finans hareketini `approved` durumunda bekliyor; buradan kapatmak hakedişi
   // kilitlerdi. Maliyet tahmini ise gerçekleşmiş bir para hareketi değil.
   for (const type of ["progress_payment", "advance", "cost_forecast"]) {
-    for (const status of ["Onaylandı", "Gecikti"]) {
-      const keys = keysFor(transaction({ type, status }));
-      assert.ok(!keys.includes("collect"), `${type} türü tahsil edilememeli`);
-      assert.ok(!keys.includes("pay"), `${type} türü ödenememeli`);
-    }
+    const keys = keysFor(transaction({ type, status: "Onaylandı" }));
+    assert.ok(!keys.includes("collect"), `${type} türü tahsil edilememeli`);
+    assert.ok(!keys.includes("pay"), `${type} türü ödenememeli`);
   }
 });
 
-test("tahsilat ve ödeme yalnız kesinleşmiş ya da vadesi geçmiş hareketin durumunda çıkar", () => {
-  // Sunucunun kabul ettiği küme `approved` ve `overdue`. Onaylanmamış kayıttan
+test("tahsilat ve ödeme yalnız kesinleşmiş hareketin durumunda çıkar", () => {
+  // Sunucunun kabul ettiği tek durum `approved`. Onaylanmamış kayıttan
   // doğrudan tahsilata atlamak onay adımını atlar; `cancelled` hiç olmamış,
   // `reversed` geri alınmış, `collected`/`paid` zaten kapanmıştır.
   const rejected = ["Taslak", "Planlandı", "Onay bekliyor", "Tahsil edildi", "Ödendi", "Ters kaydedildi", "İptal"];

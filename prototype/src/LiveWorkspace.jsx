@@ -51,6 +51,16 @@ const moneyKurus = new Intl.NumberFormat("tr-TR", { minimumFractionDigits: 2, ma
 const numberDigits = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 2 });
 const dateOnly = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric" });
 const dateWithTime = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+// "Bugün"ün sınırı firmanın saat dilimine göre çizilir. Tarayıcının yerel
+// saatinden okunursa yurt dışındaki bir ortağın ya da saati yanlış ayarlı bir
+// tabletin ekranında vadesi bugün dolan bir alacak gecikmiş görünür. Dilim
+// worker/index.js içindeki REPORT_TIME_ZONE ile aynı olmalıdır; ayrışırsa aynı
+// kayıt ekranda gecikmiş, raporda gecikmemiş çıkar. "en-CA" burada bir dil
+// tercihi değil, YYYY-AA-GG üreten biçimdir: sunucudan gelen tarihlerle
+// doğrudan karşılaştırılabilsin diye.
+const WORKSPACE_TIME_ZONE = "Europe/Istanbul";
+const workspaceDayFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: WORKSPACE_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+const workspaceToday = (instant = Date.now()) => workspaceDayFormatter.format(new Date(instant));
 // Derleme damgası ekranın sol üstünde durur. Bir telefonda sorun yaşandığında
 // ilk soru "bu cihaz hangi sürümü açıyor" oluyor; cevabı kullanıcının kendi
 // gözüyle görebilmesi gerekir. Değer derleme sırasında yazılır.
@@ -259,8 +269,21 @@ const configs = {
       field("category", "Kategori", "select", { options: ["Malzeme", "İşçilik", "Taşeron", "Nakliye", "Montaj", "Genel gider", "Satış"] }),
       field("amount", "Tutar", "number", { required: true }), field("currency", "Para birimi", "select", { options: ["TRY", "USD", "EUR"] }),
       field("transactionDate", "İşlem tarihi", "date", { required: true }), field("dueDate", "Vade / hakediş tarihi", "date"),
-      field("status", "Durum", "select", { options: ["Planlandı", "Onay bekliyor", "Onaylandı", "Tahsil edildi", "Ödendi", "Gecikti"] }),
+      // Sunucu bir finans hareketini yalnız `draft`, `planned` ya da `pending`
+      // durumunda açtırır; onay, tahsilat, ödeme ve ters kayıt kendi iş akışı
+      // uçlarından geçer. Listede duran "Onaylandı", "Tahsil edildi", "Ödendi"
+      // ve "Gecikti" seçenekleri bu yüzden hiç kaydedilemiyordu: kullanıcı
+      // birini seçip formu gönderdiğinde tek gördüğü sunucu hatasıydı.
+      // "Gecikti" ayrıca artık bir durum bile değil, vadeden türetiliyor.
+      field("status", "Durum", "select", { options: ["Taslak", "Planlandı", "Onay bekliyor"] }),
       field("description", "Açıklama", "textarea", { wide: true }),
+    ],
+    // Tahsilat tarihi ve onu kaydeden kişi formda yer almaz — iş akışı ucundan
+    // yazılırlar — ama "bu para ne zaman girdi" sorusunun cevabı kaydın
+    // detayında görünmelidir. Değeri olmayan alan hiç çizilmez.
+    detailExtras: [
+      field("settledOn", "Tahsilat / ödeme tarihi", "date"),
+      field("settledBy", "Kaydeden"),
     ],
   },
   accounting: {
@@ -747,6 +770,31 @@ function statusTone(value = "") {
   return "neutral";
 }
 
+// Vadesi geçmiş olmak bir durum değil, vade tarihinden türeyen bir olgudur.
+// Saklanan bir "gecikti" durumu, vade uzatıldığı anda bayatlar: kayıt artık
+// gecikmiş değildir ama listede öyle görünmeye devam eder ve birinin elle
+// geri çevirmesi gerekir. Tek doğru kaynak `dueDate` olunca rozet vade
+// değiştiğinde kendiliğinden düzelir. Alttaki gerçek durum `approved` kalır;
+// bu yüzden tahsilat, ödeme ve ters kayıt koşulları buradan etkilenmez.
+// Gün, ölçüldüğü an değil verildiği an sabitlensin diye dışarıdan da
+// geçilebilir; ekran her zaman bugünü verir, test ise sabit bir günü.
+function isOverdueFinanceRow(moduleId, row, today = workspaceToday()) {
+  if (moduleId !== "finance" || !row) return false;
+  if (statusCodeFor("finance", row.status) !== "approved") return false;
+  const due = String(row.dueDate ?? "").slice(0, 10);
+  // Vadesi olmayan hareket hiç gecikmez: gecikmeyi ölçecek bir tarih yoktur.
+  // Vade günü dolduğu gün henüz gecikme sayılmaz, ertesi gün sayılır.
+  return /^\d{4}-\d{2}-\d{2}$/.test(due) && due < today;
+}
+
+// Durum sütununda ve kayıt detayında gösterilecek metin. Rozet yalnız sunum
+// katmanındadır: kaydın kendi `status` alanına dokunmaz, iş akışı koşulları
+// onu okumaya devam eder.
+function statusText(moduleId, row, key = "status") {
+  if (key === "status" && isOverdueFinanceRow(moduleId, row)) return "Gecikti";
+  return recordValue(row, key);
+}
+
 const enumLabels = {
   active: "Aktif", passive: "Pasif", inactive: "Pasif", invited: "Davet edildi", disabled: "Devre dışı",
   draft: "Taslak", planned: "Planlandı", pending: "Onay bekliyor", approved: "Onaylandı", rejected: "Reddedildi", cancelled: "İptal",
@@ -774,7 +822,10 @@ const enumLabels = {
   punch_open: "Eksikler açık", accepted: "Kabul edildi", open: "Açık", resolved: "Çözüldü",
   phone: "Telefon", email: "E-posta", whatsapp: "WhatsApp", meeting: "Toplantı", inbound: "Gelen", outbound: "Giden", follow_up: "Takipte",
   employee: "Personel", team: "Ekip", work_center: "İş merkezi", subcontractor: "Taşeron", shortage: "Eksik", covered: "Karşılandı",
-  costing: "Maliyet çalışılıyor", sent: "Sunuldu", revision_requested: "Revizyon istendi", collected: "Tahsil edildi", overdue: "Gecikti", on_leave: "İzinli",
+  costing: "Maliyet çalışılıyor", sent: "Sunuldu", revision_requested: "Revizyon istendi", collected: "Tahsil edildi", on_leave: "İzinli",
+  // Yalnız faturanın durumudur. Finans hareketinde saklanan bir "gecikti"
+  // durumu yok; oradaki rozet vadeden türetilir (isOverdueFinanceRow).
+  overdue: "Gecikti",
   selected: "Seçildi", expired: "Süresi doldu", skipped: "Atlandı",
   quality: "Kalite", machine: "Makine / tezgah", drawing: "Çizim", manpower: "İş gücü", supplier: "Tedarikçi",
   blacklisted: "Kara listede",
@@ -811,6 +862,9 @@ const reportColumnLabels = Object.fromEntries(Object.entries(RESOURCE_SLUGS).map
   const labels = {};
   for (const [name, label] of config?.columns || []) labels[reportColumnNameFor(key, name)] ??= label;
   for (const item of config?.fields || []) labels[reportColumnNameFor(key, item.name)] ??= item.label;
+  // Formda düzenlenmeyen ama kayıtta duran alanlar da raporlanabiliyor;
+  // etiketleri aynı yerden okunmazsa rapor kurucusunda İngilizce yedeğe düşer.
+  for (const item of config?.detailExtras || []) labels[reportColumnNameFor(key, item.name)] ??= item.label;
   return [slug, labels];
 }));
 // Kaynağın kendi ekranında etiketi olmayan sütunlar. Aynı kavram başka bir
@@ -1053,25 +1107,31 @@ function coreWorkflowActions(module, row, session) {
     // olmadan kayıt para kasaya girdikten sonra da `approved` kalıyor, proje
     // kârlılığı ise yalnız `collected`/`paid` hareketleri tahsilat sayıyordu —
     // yani kullanıcı tahsil ettiği parayı hiçbir yerde kaydedemiyordu.
-    // `overdue` de kapanabilir ve asıl derdi o çözer: vadesi geçmiş alacak
-    // listesinden bir kalemin düşmesinin tek yolu budur.
+    // Vadesi geçmiş alacak da buradan kapanır: rozet vadeden türetilse de
+    // altındaki gerçek durum `approved` olduğu için koşul onu kendiliğinden
+    // kapsar. Vaktiyle burada ayrıca `overdue` aranıyordu; o durum artık hiç
+    // oluşmadığı için koşulu kalabalıklaştırmaktan başka işe yaramıyordu.
     // Tür ayrımı sunucununkiyle aynı: tahsilat yalnız `income`, ödeme yalnız
     // `expense` hareketinde. Hakediş ve avans sunucuda karşı taraftan okunuyor
     // ama bu ekranda müşteri/tedarikçi alanı hiç yok; hakediş zaten kendi
     // zincirinden (hakediş → fatura → ödeme) kapanıyor ve o zincir bağladığı
     // finans hareketini `approved` durumunda bekliyor — buradan kapatmak onu
     // kilitlerdi. Maliyet tahmini ise gerçekleşmiş bir hareket değil.
-    if (["approved", "overdue"].includes(status)) {
+    // Onay penceresinde tahsilat tarihi sorulur: para çoğu zaman kaydın
+    // girildiği günden önce hareket eder, çek bir hafta önce tahsil edilir,
+    // havale dün düşer. Sunucu tarih verilmezse bugünü yazdığı için alan
+    // bugünle dolu açılır; varsayılan davranış aynı kalır, kullanıcı yalnız
+    // gerektiğinde tarihi geriye çeker.
+    if (status === "approved") {
       if (row.type === "income" && hasCapability(session, "financial-transactions.collect")) {
-        actions.push({ key: "collect", label: "Tahsil edildi", title: "Tahsilatı kaydet", message: "Gelir hareketi tahsil edildi olarak kapanacak ve proje kârlılığındaki tahsilata eklenecek.", tone: "success" });
+        actions.push({ key: "collect", label: "Tahsil edildi", title: "Tahsilatı kaydet", message: "Gelir hareketi tahsil edildi olarak kapanacak ve proje kârlılığındaki tahsilata eklenecek.", inputKey: "settled_on", inputLabel: "Tahsilat tarihi", inputType: "date", inputDefault: workspaceToday(), tone: "success" });
       }
       if (row.type === "expense" && hasCapability(session, "financial-transactions.pay")) {
-        actions.push({ key: "pay", label: "Ödendi", title: "Ödemeyi kaydet", message: "Gider hareketi ödendi olarak kapanacak.", tone: "success" });
+        actions.push({ key: "pay", label: "Ödendi", title: "Ödemeyi kaydet", message: "Gider hareketi ödendi olarak kapanacak.", inputKey: "settled_on", inputLabel: "Ödeme tarihi", inputType: "date", inputDefault: workspaceToday(), tone: "success" });
       }
     }
     // Yanlış girilmiş bir tahsilat da düzeltilebilmeli: kesinleşmiş kayıt
-    // düzenlenemediği ve silinemediği için ters kayıt tek çıkış yolu. Vadesi
-    // geçmiş kayıt henüz kesinleşmediğinden sunucu onu ters kayda almıyor.
+    // düzenlenemediği ve silinemediği için ters kayıt tek çıkış yolu.
     if (["approved", "collected", "paid"].includes(status) && hasCapability(session, "financial-transactions.reverse")) {
       actions.push({ key: "reverse", label: "Ters kayıt", title: "Finans hareketini ters kaydet", message: "Orijinal hareket korunacak ve eşit tutarlı ters kayıt oluşturulacak.", reasonRequired: true, tone: "danger" });
     }
@@ -1192,7 +1252,7 @@ function Table({ rows, config, canEdit, onEdit, onDetail, canDelete, onDelete, o
   const hasActions = canEdit || Boolean(onDetail) || Boolean(onDelete) || Boolean(onPermissions) || Boolean(getWorkflowActions);
   return <div className="live-table-wrap"><table className="live-table"><thead><tr>{config.columns.map(([, label]) => <th key={label}>{label}</th>)}{hasActions && <th aria-label="İşlem" />}</tr></thead><tbody>{rows.map((row, index) => {
     const actions = row._offlineQueued ? [] : getWorkflowActions?.(row) || [];
-    return <tr className={row._offlineQueued ? "offline-queued" : ""} key={row.id || index}>{config.columns.map(([key, , type]) => <td key={key}>{type === "status" ? <Status>{recordValue(row, key)}</Status> : formatValue(presentedValue(row, key), type, row)}</td>)}{hasActions && <td><div className="live-row-actions">{row._offlineQueued && <span className="live-offline-chip"><CloudArrowUp /> Kuyrukta</span>}{onDetail && (config.detailLabel ? <button className="live-workflow-button" onClick={() => onDetail(row)}>{config.detailLabel}</button> : <button className="live-icon-button" onClick={() => onDetail(row)} title="Detayı aç"><ClipboardText /></button>)}{actions.map((action) => <button className={`live-workflow-button ${action.tone || ""}`} key={action.key} onClick={() => onWorkflow(row, action)}>{action.label}</button>)}{onPermissions && <button className="live-icon-button" onClick={() => onPermissions(row)} title="Rol yetkileri"><Buildings /></button>}{canEdit && !row._offlineQueued && <button className="live-icon-button" onClick={() => onEdit(row)} title="Düzenle"><PencilSimple /></button>}{onDelete && canDelete?.(row) && <button className="live-icon-button danger" onClick={() => onDelete(row)} title="Sil"><X /></button>}</div></td>}</tr>;
+    return <tr className={row._offlineQueued ? "offline-queued" : ""} key={row.id || index}>{config.columns.map(([key, , type]) => <td key={key}>{type === "status" ? <Status>{statusText(config.moduleId, row, key)}</Status> : formatValue(presentedValue(row, key), type, row)}</td>)}{hasActions && <td><div className="live-row-actions">{row._offlineQueued && <span className="live-offline-chip"><CloudArrowUp /> Kuyrukta</span>}{onDetail && (config.detailLabel ? <button className="live-workflow-button" onClick={() => onDetail(row)}>{config.detailLabel}</button> : <button className="live-icon-button" onClick={() => onDetail(row)} title="Detayı aç"><ClipboardText /></button>)}{actions.map((action) => <button className={`live-workflow-button ${action.tone || ""}`} key={action.key} onClick={() => onWorkflow(row, action)}>{action.label}</button>)}{onPermissions && <button className="live-icon-button" onClick={() => onPermissions(row)} title="Rol yetkileri"><Buildings /></button>}{canEdit && !row._offlineQueued && <button className="live-icon-button" onClick={() => onEdit(row)} title="Düzenle"><PencilSimple /></button>}{onDelete && canDelete?.(row) && <button className="live-icon-button danger" onClick={() => onDelete(row)} title="Sil"><X /></button>}</div></td>}</tr>;
   })}</tbody></table></div>;
 }
 
@@ -1470,7 +1530,7 @@ function WorkflowConfirmModal({ workflow, saving, error, onClose, onConfirm }) {
   const action = workflow.action;
   const [reason, setReason] = useState("");
   const [targetStatus, setTargetStatus] = useState(action.options?.[0]?.value || "");
-  const [inputValue, setInputValue] = useState("");
+  const [inputValue, setInputValue] = useState(action.inputDefault || "");
   const [secondaryValue, setSecondaryValue] = useState("");
   const gateBlocked = error?.code === "project_gate_blocked" || error?.code === "override_reason_required";
   const blockers = Array.isArray(error?.details?.blockers) ? error.details.blockers : [];
@@ -1502,7 +1562,7 @@ function WorkflowConfirmModal({ workflow, saving, error, onClose, onConfirm }) {
     <span>{label}{required && <em> *</em>}</span>
     {resource
       ? <ReferenceField item={{ name: key, referenceResource: resource }} value={value} onChange={setValue} />
-      : <input type={type === "number" ? "number" : "text"} value={value} onChange={(event) => setValue(event.target.value)} />}
+      : <input type={type === "number" || type === "date" ? type : "text"} value={value} onChange={(event) => setValue(event.target.value)} />}
   </label>;
 
   return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}><section className="live-modal compact live-confirm-modal" role="alertdialog" aria-modal="true"><header><div><small>İŞ AKIŞI ONAYI</small><h2>{action.title}</h2></div><button className="live-icon-button" disabled={saving} onClick={onClose}><X /></button></header><div className="live-confirm-body"><p>{action.message}</p><div className="live-record-reference"><b>{workflow.row.name || workflow.row.referenceNo || workflow.row.code || workflow.row.number || workflow.row.documentNo || workflow.row.id}</b><small>{workflow.row.status || workflow.row.revisionStatus || "Kayıt"}</small></div>{action.options && <label><span>Yeni aşama</span><select value={targetStatus} onChange={(event) => setTargetStatus(event.target.value)}>{action.options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>}{action.inputKey && extraInput(action.inputKey, action.inputLabel || action.inputKey, action.inputType, action.inputResource, inputValue, setInputValue, action.inputRequired)}{action.secondaryInputKey && extraInput(action.secondaryInputKey, action.secondaryInputLabel || action.secondaryInputKey, action.secondaryInputType, action.secondaryInputResource, secondaryValue, setSecondaryValue, action.secondaryInputRequired)}{gateBlocked && <div className="live-gate-blockers"><b>Bu geçişi durduran eksikler</b>{blockers.map((item) => <span key={item.id}><WarningCircle />{item.label}</span>)}</div>}{(action.reasonRequired || action.key === "transition") && <label><span>{gateBlocked ? "Yönetici istisna gerekçesi *" : action.reasonRequired ? "Neden / açıklama *" : "Geçiş notu"}</span><textarea rows="3" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={gateBlocked ? "Neden eksikler tamamlanmadan devam edildiğini yazın (en az 10 karakter)" : action.reasonRequired ? "En az 3 karakter girin" : "İsteğe bağlı"} /></label>}{error && <div className="live-form-alert"><WarningCircle />{error.message}</div>}<footer><button className="live-button secondary" disabled={saving} onClick={onClose}>Vazgeç</button><button className={`live-button primary ${action.tone || ""}`} disabled={disabled} onClick={() => onConfirm(buildBody())}>{saving ? <><span className="live-spinner small" /> İşleniyor</> : gateBlocked ? "İstisna ile devam et" : "İşlemi onayla"}</button></footer></div></section></div>;
@@ -2852,10 +2912,17 @@ function RecordDetailModal({ module, record, session, onClose, onShare }) {
   const permittedFields = config.fields.filter((item) => !item.permission || permissionAllows(session, item.permission.action, item.permission.resource));
   const blockedFields = new Set(config.fields.filter((item) => item.permission && !permissionAllows(session, item.permission.action, item.permission.resource)).map((item) => item.name));
   const coveredReferences = new Set(permittedFields.filter((item) => item.name.endsWith("Id")).map((item) => `${item.name.slice(0, -2)}Name`));
-  const detailFields = [...permittedFields, ...config.columns
+  const data = state.data || record;
+  // Formda olmayan, yalnız iş akışının yazdığı alanlar. Değeri çözülemeyenler
+  // hiç çizilmez: boş bir "Kaydeden — " satırı kullanıcıya bir şey anlatmaz,
+  // yalnız henüz olmamış bir işlemi olmuş gibi gösterir.
+  const extraFields = (config.detailExtras || []).filter((item) => {
+    const shown = presentedValue(data, item.name);
+    return shown != null && shown !== "";
+  });
+  const detailFields = [...permittedFields, ...extraFields, ...config.columns
     .filter(([name]) => !blockedFields.has(name) && !coveredReferences.has(name) && !permittedFields.some((item) => item.name === name))
     .map(([name, label, type]) => ({ name, label, type }))];
-  const data = state.data || record;
   // Sohbette ve pencere başlığında görünecek ad. Tarih, tutar ve durum sütunları
   // kaydı tanıtmaz; ayırt edici olan kod, ad ve konu gibi metin sütunlarıdır.
   const linkLabel = (config.columns || [])
@@ -2870,7 +2937,7 @@ function RecordDetailModal({ module, record, session, onClose, onShare }) {
     const isPdf = data.contentType === "application/pdf" || String(data.fileName || "").toLowerCase().endsWith(".pdf");
     return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal live-file-detail" role="dialog" aria-modal="true"><header><div><small>DOSYA KANITI</small><h2>{data.fileName || "Dosya"}</h2><p>{data.spaceName || "Proje geneli"} · {localizedEnum(data.captureStage) || data.captureStage || "Diğer"}</p></div><div className="live-modal-actions">{linkActions}<button className="live-icon-button" onClick={onClose} aria-label="Kapat"><X /></button></div></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-file-detail-body"><div className="live-file-preview">{isImage ? <img src={contentUrl} alt={data.description || data.fileName || "Proje fotoğrafı"} /> : isPdf ? <iframe src={contentUrl} title={data.fileName || "PDF belgesi"} /> : <div><ClipboardText /><b>Bu dosya tarayıcı içinde önizlenemiyor.</b><small>Güvenli görüntüleme bağlantısını kullanabilirsiniz.</small></div>}</div><aside><small>BAĞLAM</small><h3>{data.description || "Açıklama girilmemiş"}</h3><dl><div><dt>Proje</dt><dd>{formatValue(presentedValue(data, "projectId"), undefined, data)}</dd></div>{data.workItemId && <div><dt>İş kalemi</dt><dd>{formatValue(presentedValue(data, "workItemId"), undefined, data)}</dd></div>}{data.designRevisionId && <div><dt>Tasarım revizyonu</dt><dd>{formatValue(presentedValue(data, "designRevisionId"), undefined, data)}</dd></div>}{data.qualityInspectionId && <div><dt>Kalite kontrolü</dt><dd>{formatValue(presentedValue(data, "qualityInspectionId"), undefined, data)}</dd></div>}{data.installationId && <div><dt>Montaj</dt><dd>{formatValue(presentedValue(data, "installationId"), undefined, data)}</dd></div>}<div><dt>Mahal</dt><dd>{data.spaceName || "Proje geneli"}</dd></div><div><dt>Aşama</dt><dd>{localizedEnum(data.captureStage) || data.captureStage || "—"}</dd></div><div><dt>Kategori</dt><dd>{localizedEnum(data.category) || data.category || "—"}</dd></div><div><dt>Görünürlük</dt><dd>{localizedEnum(data.visibility) || data.visibility || "—"}</dd></div><div><dt>Çekim tarihi</dt><dd>{formatValue(data.takenAt || data.createdAt, "date", data)}</dd></div></dl><a className="live-button primary" href={contentUrl} target="_blank" rel="noreferrer">Dosyayı tam boy aç</a></aside></div>}</section></div>;
   }
-  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>KAYIT DETAYI</small><h2>{module.singular}</h2><p>{linkLabel}</p></div><div className="live-modal-actions">{linkActions}<button className="live-icon-button" onClick={onClose}><X /></button></div></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-detail-grid">{detailFields.map((item) => <div className={item.wide ? "wide" : ""} key={item.name}><small>{item.label}</small>{item.type === "status" || item.name === "status" ? <Status>{recordValue(data, item.name)}</Status> : <b>{formatValue(presentedValue(data, item.name), item.type, data)}</b>}</div>)}</div>}</section></div>;
+  return <div className="live-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="live-modal" role="dialog" aria-modal="true"><header><div><small>KAYIT DETAYI</small><h2>{module.singular}</h2><p>{linkLabel}</p></div><div className="live-modal-actions">{linkActions}<button className="live-icon-button" onClick={onClose}><X /></button></div></header>{state.loading ? <LoadingState /> : state.error ? <ErrorState error={state.error} retry={load} /> : <div className="live-detail-grid">{detailFields.map((item) => <div className={item.wide ? "wide" : ""} key={item.name}><small>{item.label}</small>{item.type === "status" || item.name === "status" ? <Status>{statusText(module.id, data, item.name)}</Status> : <b>{formatValue(presentedValue(data, item.name), item.type, data)}</b>}</div>)}</div>}</section></div>;
 }
 
 function DeleteConfirmModal({ module, record, saving, error, onClose, onConfirm }) {
@@ -3142,7 +3209,9 @@ function ResourceView({ module, session, online, refreshKey, onDataChanged, onNa
   let config = configs[module.id];
   const canViewOfficial = permissionAllows(session, "read", "finance.sensitive");
   const blockedColumns = new Set(config.fields.filter((item) => item.permission && !permissionAllows(session, item.permission.action, item.permission.resource)).map((item) => item.name));
-  config = { ...config, officialScope: Boolean(config.officialScope && canViewOfficial), columns: config.columns.filter(([name]) => !blockedColumns.has(name)) };
+  // Modül kimliği aşağıdaki görünümlere de geçmeli: durum sütunu, hangi
+  // modülü çizdiğini bilmeden türetilmiş bir rozet gösteremez.
+  config = { ...config, moduleId: module.id, officialScope: Boolean(config.officialScope && canViewOfficial), columns: config.columns.filter(([name]) => !blockedColumns.has(name)) };
   const [state, setState] = useState({ loading: true, rows: [], meta: null, error: null });
   const [query, setQuery] = useState("");
   const [view, setView] = useState("list");

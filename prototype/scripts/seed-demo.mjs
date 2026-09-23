@@ -488,9 +488,16 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
       // de öyle olmalı. Önce onaylanır, sonra gerçekten tahsil edilir —
       // `collected` durumu alacak toplamından düşer ve kârlılık raporunun
       // "Tahsil edilen" sütununu doldurur.
+      //
+      // `settled_on` verilmezse sunucu bugünü yazar ve tanıtım verisindeki
+      // bütün tahsilatlar aynı güne yığılır: tarihe göre kurulan hiçbir rapor
+      // ("bu ay tahsil edilenler", tahsilat eğrisi) bir şey göstermez. Para
+      // tahakkuktan birkaç gün sonra hareket ediyor; `gecmis` tarihi geleceğe
+      // taşmayacak şekilde kırpıyor, dolayısıyla tahsilat tarihi hiçbir zaman
+      // tahakkuk tarihinden önceye düşmez.
       if (kayit) {
         await akis("financial-transactions", kayit.id, "approve", {});
-        await akis("financial-transactions", kayit.id, "collect", {});
+        await akis("financial-transactions", kayit.id, "collect", { settled_on: gecmis(tahsilat.tarih + 3, indeks) });
       }
       tahsilatKayit.push(kayit);
     }
@@ -574,10 +581,12 @@ async function projeYaz({ proje, sira, musteriKayit, tedarikciKayit, personelKay
         reference: proje.code, description: kalem.description, status: "pending",
       });
       // Teslim edilmiş projelerin tedarikçi faturaları kapanmış olur; borç
-      // kartında yalnız devam eden projelerin gideri kalsın.
+      // kartında yalnız devam eden projelerin gideri kalsın. Ödeme tarihi
+      // tedarikçi faturasının otuz günlük vadesini izliyor; verilmeseydi
+      // bütün ödemeler betiğin çalıştığı güne yığılırdı.
       if (kayit) {
         await akis("financial-transactions", kayit.id, "approve", {});
-        if (d >= 9) await akis("financial-transactions", kayit.id, "pay", {});
+        if (d >= 9) await akis("financial-transactions", kayit.id, "pay", { settled_on: gecmis(proje.baslangic + 52 + indeks * 7, indeks) });
       }
     }
 

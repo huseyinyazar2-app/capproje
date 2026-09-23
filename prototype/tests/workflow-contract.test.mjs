@@ -360,7 +360,11 @@ test("collect and pay close settled finance records and feed the collection repo
   seedFinanceRole(database);
   const insertFinance = financeInserter(database);
   insertFinance("inc-1", "F-1", "income", "approved", 400_000);
-  insertFinance("inc-2", "F-2", "income", "overdue", 60_000);
+  // Vadesi geçmiş alacak: ayrı bir durum değil, vadesi dolmuş onaylı kayıt
+  // (göç 0019). Eskiden burada `overdue` yazıyordu; o kod artık ne kayıt
+  // defterinde ne veritabanı tetikleyicisinde var.
+  database.prepare("INSERT INTO financial_transactions (id,tenant_id,transaction_number,project_id,customer_id,type,transaction_date,due_date,amount_minor,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run("inc-2", "tenant-a", "F-2", "project-a", "customer-a", "income", "2026-07-01", "2026-07-15", 60_000, "approved", timestamp, timestamp);
   insertFinance("exp-1", "F-3", "expense", "approved", 120_000);
 
   const catalog = database.prepare("SELECT code FROM permissions").all().map((row) => row.code);
@@ -377,11 +381,14 @@ test("collect and pay close settled finance records and feed the collection repo
   assert.equal(data.status, "collected");
   assert.equal(data.payment_method, "havale");
   assert.equal(data.reference, "DEK-77");
-  // Tahsilat tarihinin kendi sütunu yok; tahakkuk tarihi (`transaction_date`)
-  // üzerine yazılmıyor, tarih kayıt defterine ek bilgi olarak giriyor.
+  // Tarih kendi sütununa yazılıyor (göç 0019), tahakkuk tarihinin
+  // (`transaction_date`) üzerine yazılmıyor: o hareketin hangi döneme ait
+  // olduğunu söyler ve bütün tarih bazlı raporlar ona dayanıyor.
   assert.equal(data.transaction_date, "2026-08-01");
-  assert.equal(data.metadata_json.collected_on, "2026-08-05");
-  assert.equal(data.metadata_json.collected_by, "finance-a");
+  assert.equal(data.settled_on, "2026-08-05");
+  assert.equal(data.settled_by, "finance-a");
+  // Aynı bilgi ikinci bir yerde durmuyor; iki kopya er geç ayrışır.
+  assert.deepEqual(data.metadata_json, {});
 
   const auditRow = database.prepare("SELECT action,entity_type,entity_id,user_id,changes_json FROM audit_logs WHERE action='collect'").get();
   assert.equal(auditRow.entity_type, "financial-transactions");
@@ -393,10 +400,13 @@ test("collect and pay close settled finance records and feed the collection repo
   assert.equal(response.status, 200);
   data = (await response.json()).data;
   assert.equal(data.status, "paid");
-  assert.match(data.metadata_json.paid_on, /^\d{4}-\d{2}-\d{2}$/);
+  // Tarih verilmediğinde sunucu bugünü yazar; ödeme de tahsilatla aynı sütun
+  // çiftini kullanır, bir hareket ikisinden yalnız birine ulaşabildiği için.
+  assert.match(data.settled_on, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(data.settled_by, "finance-a");
 
-  // Vadesi geçmiş alacağın kapanabildiği tek yol bu uç; `overdue` dışarıda
-  // kalsaydı rapor hiç kapanmayan bir alacak göstermeye devam ederdi.
+  // Vadesi geçmiş alacak da bu uçtan kapanır: kayıt `approved` durumundadır,
+  // vadesinin geçmiş olması onu ayrı bir kümeye taşımaz.
   assert.equal((await worker.fetch(request("/api/v1/financial-transactions/inc-2/collect", { email: "finance@a.test" }), env)).status, 200);
 
   // Aynı kayıt iki kez tahsil edilemez: ikinci istek ne kaydı ne denetim izini

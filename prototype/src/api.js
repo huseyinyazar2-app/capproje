@@ -149,7 +149,12 @@ export const FIELD_MAPS = Object.freeze({
   purchases: { number: "request_number", projectId: "project_id", itemName: "description", preferredSupplierId: "preferred_supplier_id", requiredAt: "needed_by", estimatedAmount: "estimated_amount_minor", specification: "notes" },
   production: { code: "order_number", projectId: "project_id", workItemId: "work_item_id", workCenter: "workshop", assignee: "assigned_team", plannedStart: "planned_start", plannedEnd: "planned_end", outsourced: "production_type", tradeType: "trade_type", notes: "instructions" },
   installations: { code: "installation_number", projectId: "project_id", teamName: "team_json", scheduledAt: "planned_start", contactName: "acceptance_contact", notes: "issue_notes", siteReadiness: "metadata_json" },
-  finance: { projectId: "project_id", transactionNo: "transaction_number", transactionDate: "transaction_date", dueDate: "due_date", amount: "amount_minor" },
+  // `settledOn` / `settledBy` bir süre `metadata_json` içinde saklandı; oradan
+  // okunamıyor, süzülemiyor ve raporlanamıyordu. Artık kendi sütunları var ve
+  // eşleme burada açıkça yazılıdır: adlandırma kuralı bu ikisini kendiliğinden
+  // de çevirirdi ama sözleşmenin parçası olan bir alanın sessiz bir kurala
+  // bırakılması, kural değiştiğinde sessizce kopmak demektir.
+  finance: { projectId: "project_id", transactionNo: "transaction_number", transactionDate: "transaction_date", dueDate: "due_date", amount: "amount_minor", settledOn: "settled_on", settledBy: "settled_by" },
   accounting: { documentNo: "invoice_number", customerId: "customer_id", supplierId: "supplier_id", transactionDate: "issue_date", dueDate: "due_date", amount: "grand_total_minor", datasoftStatus: "datasoft_status", description: "notes" },
   hr: { employeeNo: "employee_number", firstName: "first_name", lastName: "last_name", jobTitle: "title", employmentType: "employment_type", startDate: "hire_date", emergencyContact: "emergency_contact", emergencyPhone: "metadata_json", salaryAmount: "salary_amount_minor" },
   customers: { contactName: "contact_name", taxOffice: "tax_office", taxNumber: "tax_number", paymentTerms: "payment_terms", creditLimit: "credit_limit_minor" },
@@ -198,7 +203,11 @@ const STATUS_VALUES = Object.freeze({
   purchaseOrders: { Taslak: "draft", "Sipariş verildi": "ordered", "Kısmi teslim": "partial", "Teslim alındı": "received", İptal: "cancelled" },
   production: { Taslak: "draft", Planlandı: "planned", "Üretime salındı": "released", "Malzeme bekliyor": "waiting_material", Üretimde: "in_progress", "Kalite kontrolde": "quality_control", Durduruldu: "paused", Tamamlandı: "completed", İptal: "cancelled" },
   installations: { "Keşif gerekli": "survey_needed", "Saha bekleniyor": "site_waiting", Planlandı: "planned", Yolda: "in_transit", Montajda: "in_progress", Eksikli: "incomplete", "Teslim edildi": "completed", İptal: "cancelled" },
-  finance: { Taslak: "draft", Planlandı: "planned", "Onay bekliyor": "pending", Onaylandı: "approved", "Tahsil edildi": "collected", Ödendi: "paid", Gecikti: "overdue", "Ters kaydedildi": "reversed", İptal: "cancelled" },
+  // Finans hareketinde `overdue` yok: vadesi geçmiş olmak saklanan bir durum
+  // değil, `dueDate`ten türeyen bir olgudur (bkz. LiveWorkspace
+  // `isOverdueFinanceRow`). Faturada ise hâlâ gerçek bir durumdur, o yüzden
+  // aşağıdaki `accounting` satırında duruyor.
+  finance: { Taslak: "draft", Planlandı: "planned", "Onay bekliyor": "pending", Onaylandı: "approved", "Tahsil edildi": "collected", Ödendi: "paid", "Ters kaydedildi": "reversed", İptal: "cancelled" },
   accounting: { Taslak: "draft", Açık: "open", Kısmi: "partial", Ödendi: "paid", "Tahsil edildi": "collected", Gecikti: "overdue", İptal: "cancelled" },
   hr: { Aktif: "active", İzinli: "on_leave", Pasif: "inactive", "İşten ayrıldı": "terminated" },
 });
