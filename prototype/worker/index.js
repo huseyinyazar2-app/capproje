@@ -9,7 +9,7 @@ function booleanValue(value) {
   return Boolean(value);
 }
 
-const JSON_COLUMNS = new Set(["settings_json", "metadata_json", "dependency_ids_json", "team_json", "payment_schedule_json", "attendees_json", "checklist_json", "definition_json"]);
+const JSON_COLUMNS = new Set(["settings_json", "metadata_json", "dependency_ids_json", "team_json", "payment_schedule_json", "attendees_json", "checklist_json", "definition_json", "view_json"]);
 
 // Rapor tanımı kişisel veri değil, iş emeğidir: ayrılan birinin raporları
 // firmada kalmalı. Bu yüzden firma sahibi/yöneticisi özel raporları görebilir
@@ -20,6 +20,16 @@ const savedReportRowScope = {
   read: (principal) => (principal.isOwner ? null : { clause: "(visibility='shared' OR owner_user_id=?)", bindings: [principal.user.id] }),
   write: (principal) => ({ clause: "owner_user_id=?", bindings: [principal.user.id] }),
   delete: (principal) => (principal.isOwner ? null : { clause: "owner_user_id=?", bindings: [principal.user.id] }),
+};
+
+// Görünüm kişiseldir ve kaydedilmiş rapordan farklı olarak firma sahibi
+// muafiyeti YOKTUR: rapor tanımı iş emeğidir, ekran tercihi değildir.
+// Başkasının hangi sütunu gizlediğini bilmenin hiçbir iş gerekçesi yok, bu
+// yüzden okuma da yazma da silme de yalnız kendi satırına iner. (Silme,
+// rowScopeFor içinde tanımlanmamışsa yazmanınkine düşer.)
+const reportViewRowScope = {
+  read: (principal) => ({ clause: "user_id=?", bindings: [principal.user.id] }),
+  write: (principal) => ({ clause: "user_id=?", bindings: [principal.user.id] }),
 };
 
 const resources = {
@@ -71,6 +81,12 @@ const resources = {
   // süzülür: paylaşılmayan bir rapor, listeleyende de dışa aktarımda da
   // yalnız sahibine görünür.
   "saved-reports": { table: "saved_reports", idPrefix: "rep_", required: ["name", "resource", "definition_json"], search: ["name", "description", "resource"], filters: ["resource", "visibility", "owner_user_id"], memberRefs: ["owner_user_id"], serverDefaults: (principal) => ({ owner_user_id: principal.user.id }), rowScope: savedReportRowScope, validateWrite: savedReportWriteProblem, fields: ["name","description","resource","definition_json","visibility"] },
+  // user_id `fields` içinde değil: istemci başkasının adına görünüm yazamasın
+  // diye sunucudan doldurulur.
+  // `reportable: false`: bu tablo iş verisi değil ekran ayarı. Rapor kurucusunda
+  // görünseydi reports.read tek başına yeni bir kaynak açmış olurdu ve kullanıcı
+  // kendi sütun tercihlerini raporlayabildiği anlamsız bir kart görürdü.
+  "report-views": { table: "report_views", idPrefix: "rvw_", required: ["builtin_id", "view_json"], filters: ["builtin_id"], serverDefaults: (principal) => ({ user_id: principal.user.id }), rowScope: reportViewRowScope, validateWrite: reportViewWriteProblem, reportable: false, fields: ["builtin_id","view_json"] },
 };
 
 const aliases = {
@@ -79,8 +95,8 @@ const aliases = {
   transactions: "financial-transactions",
 };
 
-const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","membership_roles","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements","supplier_quotations","work_centers","bom_lines","production_operations","production_issues","chat_channels","chat_messages","chat_reads","saved_reports"];
-const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql", "0015_reports.sql"];
+const backupTables = ["customers","suppliers","projects","offers","offer_items","project_tasks","work_items","purchase_requests","purchase_orders","production_orders","installations","accounts","financial_transactions","invoices","employees","attendance","leave_requests","payroll_inputs","files","audit_logs","roles","role_permissions","memberships","membership_roles","site_surveys","survey_measurements","contracts","design_revisions","progress_payments","inventory_items","stock_movements","project_meetings","meeting_actions","quality_inspections","handovers","handover_punch_items","notifications","project_communications","resource_assignments","material_requirements","supplier_quotations","work_centers","bom_lines","production_operations","production_issues","chat_channels","chat_messages","chat_reads","saved_reports","report_views"];
+const backupMigrations = ["0001_tenant_core.sql", "0002_permissions.sql", "0003_workflows.sql", "0004_production_readiness.sql", "0005_capproje_domain.sql", "0006_phone_auth.sql", "0007_password_auth.sql", "0008_operational_intelligence.sql", "0009_material_planning.sql", "0010_contextual_media.sql", "0011_membership_roles.sql", "0012_operational_completion.sql", "0013_sourcing_bom_and_costing.sql", "0014_team_chat.sql", "0015_reports.sql", "0016_report_views.sql"];
 const BACKUP_SCHEMA_VERSION = backupMigrations.length;
 const dailyBackupSeen = new Map();
 const DAILY_BACKUP_SEEN_LIMIT = 500;
@@ -276,8 +292,20 @@ function secureStaticResponse(response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+// Hata kodu yanıtın yanında ayrıca tutulur: gövdeyi okumak Response'u tüketir,
+// oysa bazı çağıranların nedene göre farklı davranıp yanıtı yine de olduğu gibi
+// döndürebilmesi gerekiyor. WeakMap kullanılıyor ki yanıt nesnesine iliştirilen
+// bir alan taşıma sırasında kaybolmasın ve yanıtlar bellekte tutulmasın.
+const problemCodes = new WeakMap();
+
 function problem(status, code, message, details) {
-  return json({ error: { code, message, ...(details ? { details } : {}) } }, status);
+  const response = json({ error: { code, message, ...(details ? { details } : {}) } }, status);
+  problemCodes.set(response, code);
+  return response;
+}
+
+function problemCode(response) {
+  return problemCodes.get(response) || null;
 }
 
 function now() { return new Date().toISOString(); }
@@ -632,10 +660,24 @@ function allowed(principal, permission) {
 // anlatmaz; ikisi de aynı işin parçasıdır.
 // Aynı gerekçeyle kaydedilmiş raporlar da kendi adıyla değil "reports.*"
 // yetkileriyle yönetilir; göç dosyası bu üç kodu dağıtıyor.
-const permissionAliases = { "chat-channels": "chat", "chat-messages": "chat", "saved-reports": "reports" };
+// Takma ad ya tek bir önek (üç eylem de o önekten türer) ya da eylem başına
+// açık bir kod olabilir. İkincisi, kendi başına bir yetki kodu hak etmeyen
+// kaynaklar için: `report-views` yalnız kişinin kendi ekran tercihini tutar,
+// okuması da yazması da raporu çalıştırma yetkisiyle aynı şeydir. Ayrı bir kod
+// açmak rol ekranına kimsenin anlamını bilmediği bir satır eklerdi ve salt
+// okunur rolün kendi görünümünü ayarlayabilmesi için o kodu ayrıca dağıtmak
+// gerekirdi. Kaynağa özel `if` yerine eşlemenin kendisi genişletildi.
+const permissionAliases = {
+  "chat-channels": "chat",
+  "chat-messages": "chat",
+  "saved-reports": "reports",
+  "report-views": { read: "reports.read", write: "reports.read", delete: "reports.read" },
+};
 
 function permissionFor(slug, action) {
-  return `${permissionAliases[slug] || slug}.${action}`;
+  const alias = permissionAliases[slug];
+  if (alias && typeof alias === "object") return alias[action] || `${slug}.${action}`;
+  return `${alias || slug}.${action}`;
 }
 
 // Hassas sütunların tek listesi. serializeRow tarihsel olarak bunun biraz
@@ -3473,7 +3515,7 @@ async function buildReportPlan(env, principal, definition, mode) {
   if (!definition || typeof definition !== "object" || Array.isArray(definition)) return { error: problem(422, "validation_error", "Rapor tanımı bir JSON nesnesi olmalıdır.") };
   const slug = aliases[definition.resource] || definition.resource;
   const config = resources[slug];
-  if (!config) return { error: problem(422, "unknown_report_resource", "Bu kaynak üzerinde rapor kurulamıyor.") };
+  if (!config || config.reportable === false) return { error: problem(422, "unknown_report_resource", "Bu kaynak üzerinde rapor kurulamıyor.") };
   // Rapor yetkisi tek başına yetmez: raporun okuduğu kaynağın kendi okuma
   // yetkisi de aranır, yoksa rapor motoru yetki sisteminin etrafından dolaşan
   // bir arka kapıya dönüşür.
@@ -3661,10 +3703,134 @@ async function savedReportWriteProblem({ env, principal, values, existing }) {
   return plan.error || null;
 }
 
+// Kişisel görünüm: hazır rapor kodda kalırken kullanıcının farkı ayrı durur ve
+// ikisi yalnız çalıştırma anında birleşir. Sonucun tamamını saklasaydık raporu
+// sonradan iyileştirdiğimizde kullanıcı o iyileştirmeyi bir daha almazdı.
+const REPORT_VIEW_KEYS = new Set(["hiddenColumns", "extraColumns", "extraAggregates"]);
+
+function reportViewProblem(detail) {
+  return problem(422, "invalid_report_view", detail);
+}
+
+// Görünümü tanıma uygulayan TEK yer. Ekleme tanıma yazılır ve motorun kendi
+// kapısından (beyaz liste, hassas alan, sayısal toplam, başlık çakışması)
+// geçer; burada ikinci bir kural kopyası tutulmaz. Gizleme ise tanıma hiç
+// dokunmaz: yalnız çıktıdan düşecek anahtar olarak döner.
+function applyReportView(definition, view) {
+  if (view === undefined || view === null) return { definition, hidden: new Set() };
+  if (typeof view !== "object" || Array.isArray(view)) return { error: reportViewProblem("Görünüm bir JSON nesnesi olmalıdır.") };
+  const unknown = Object.keys(view).filter((key) => !REPORT_VIEW_KEYS.has(key));
+  if (unknown.length) return { error: reportViewProblem(`Görünümde tanınmayan alanlar: ${unknown.join(", ")}`) };
+
+  const hiddenColumns = view.hiddenColumns ?? [];
+  if (!Array.isArray(hiddenColumns) || hiddenColumns.length > REPORT_MAX_COLUMNS || hiddenColumns.some((column) => typeof column !== "string" || !column)) {
+    return { error: reportViewProblem(`hiddenColumns en fazla ${REPORT_MAX_COLUMNS} sütun adından oluşan bir dizi olmalıdır.`) };
+  }
+  const extraColumns = view.extraColumns ?? [];
+  if (!Array.isArray(extraColumns) || extraColumns.length > REPORT_MAX_COLUMNS) return { error: reportViewProblem(`extraColumns en fazla ${REPORT_MAX_COLUMNS} öğeli bir dizi olmalıdır.`) };
+  const extraAggregates = view.extraAggregates ?? [];
+  if (!Array.isArray(extraAggregates) || extraAggregates.length > REPORT_MAX_AGGREGATES) return { error: reportViewProblem(`extraAggregates en fazla ${REPORT_MAX_AGGREGATES} öğeli bir dizi olmalıdır.`) };
+
+  // Gruplu raporda tek tek satır sütunu diye bir şey yoktur; düz listede de
+  // toplanacak bir grup yoktur. Sessizce yok saymak, kullanıcının eklediği
+  // sütunun neden gelmediğini tahmin etmesini isterdi.
+  const grouped = definition.group !== undefined && definition.group !== null;
+  if (extraColumns.length && grouped) return { error: reportViewProblem("Gruplu raporda sütun eklenemez; bunun yerine toplam ekleyin.") };
+  if (extraAggregates.length && !grouped) return { error: reportViewProblem("Düz liste raporuna toplam eklenemez; bunun yerine sütun ekleyin.") };
+  // Sütunu yazılmamış bir düz liste "görülebilen her sütun" demektir; eklenecek
+  // sütun zaten oradadır, eklemeye kalkışmak listeyi tersine daraltırdı.
+  if (extraColumns.length && !Array.isArray(definition.columns)) return { error: reportViewProblem("Bu rapor zaten bütün sütunları listeliyor; sütun eklenemez.") };
+
+  let next = definition;
+  if (extraColumns.length) next = { ...next, columns: [...definition.columns, ...extraColumns] };
+  if (extraAggregates.length) next = { ...next, group: { ...next.group, aggregates: [...(next.group.aggregates || []), ...extraAggregates] } };
+  return { definition: next, hidden: new Set(hiddenColumns) };
+}
+
+// Bağlı kaydın adı gizlenen kimlik sütunundan türetiliyor: kimliği gizleyip adı
+// bırakmak sütunu hiç gizlememek olurdu, çünkü CSV kuralı zaten kimliği düşürüp
+// adı yazıyor ve kullanıcı ikisini tek bir sütun olarak görüyor.
+function reportViewHiddenKeys(plan, hidden) {
+  const keys = new Set(hidden);
+  for (const column of plan.grouped ? plan.groupBy : plan.selectedColumns) {
+    if (hidden.has(column) && column.endsWith("_id")) keys.add(`${column.slice(0, -3)}_name`);
+  }
+  return keys;
+}
+
+// Görünümlü hazır raporun tek kapısı: çalıştırma da kaydetme doğrulaması da
+// buradan geçer. İki ayrı yol olsaydı kaydedilebilen ama açılınca hata veren
+// bir görünüm mümkün olurdu — kullanıcı hatayı günler sonra görürdü.
+//
+// `strict` yalnız kaydederken açılır. Kaydedilirken yanlış yazılmış bir sütun
+// adı sessizce hiçbir şey gizlememeli; çalıştırırken ise hoşgörü şart, çünkü
+// raporu sonradan değiştirdiğimizde artık var olmayan bir sütunun adı
+// kullanıcının kayıtlı görünümünde kalabilir ve bu raporu kırmamalı.
+async function planBuiltinReportView(env, principal, report, view, mode, strict = false) {
+  const applied = applyReportView(report.definition, view);
+  if (applied.error) return { error: applied.error };
+  const plan = await buildReportPlan(env, principal, applied.definition, mode);
+  if (plan.error) return { error: plan.error };
+  if (strict) {
+    const known = new Set(plan.columns.map((column) => column.key));
+    const missing = [...applied.hidden].filter((key) => !known.has(key));
+    if (missing.length) return { error: problem(422, "unknown_report_column", `Bu raporda bulunmayan sütun gizlenemez: ${missing.join(", ")}`) };
+  }
+  const hiddenKeys = reportViewHiddenKeys(plan, applied.hidden);
+  if (!plan.columns.some((column) => !hiddenKeys.has(column.key))) {
+    return { error: reportViewProblem("Görünüm uygulandığında geriye hiç sütun kalmıyor; en az bir sütun görünür olmalıdır.") };
+  }
+  return { plan, hiddenKeys };
+}
+
+// Gizleme sorguyu değil yalnız çıktıyı süzer: satır sayısı ve toplamlar
+// gizlemeden önceki ile birebir aynı kalır. Gruplama sütunu gizlense bile
+// GROUP BY yerinde durduğu için satırlar birleşmez.
+function stripHiddenReportColumns(result, hiddenKeys) {
+  if (!hiddenKeys.size) return result;
+  const columns = result.columns.filter((column) => !hiddenKeys.has(column.key));
+  const rows = result.rows.map((row) => {
+    const copy = { ...row };
+    for (const key of hiddenKeys) delete copy[key];
+    return copy;
+  });
+  return { columns, rows };
+}
+
+// Görünümler tek sorguda okunur; liste ucu her kart için ayrı sorgu atmasın.
+// Satır kapsamı burada da kancadan geçer ki "yalnız kendi görünümün" kuralı
+// tek yerde tanımlı kalsın.
+async function reportViewsFor(env, principal) {
+  const config = resources["report-views"];
+  const scope = rowScopeFor(config, principal, "read");
+  const rows = await all(env.DB.prepare(`SELECT builtin_id,view_json FROM ${config.table} WHERE tenant_id=?${scope.clause ? ` AND ${scope.clause}` : ""}`).bind(principal.tenantId, ...scope.bindings));
+  const views = new Map();
+  for (const row of rows) {
+    // Okunamayan bir kayıt, raporu açılmaz yapmaktansa görünümsüz sayılır.
+    try { views.set(row.builtin_id, typeof row.view_json === "string" ? JSON.parse(row.view_json) : row.view_json); } catch { /* bozuk kayıt yok sayılır */ }
+  }
+  return views;
+}
+
+// Kaydedilen görünüm açılınca çalışmak zorunda: doğrulama raporu çalıştıran
+// yolun ta kendisinden geçer, ayrı bir kural kopyası tutulmaz.
+async function reportViewWriteProblem({ env, principal, values, existing }) {
+  const builtinId = values.builtin_id ?? existing?.builtin_id;
+  const report = builtinReports.find((item) => item.id === builtinId);
+  if (!report) return problem(422, "unknown_builtin_report", "Görünüm kaydedilecek hazır rapor bulunamadı.");
+  const raw = values.view_json ?? existing?.view_json;
+  let view;
+  try { view = typeof raw === "string" ? JSON.parse(raw) : raw; }
+  catch { return reportViewProblem("Görünüm okunamadı."); }
+  const planned = await planBuiltinReportView(env, principal, report, view, "run", true);
+  return planned.error || null;
+}
+
 async function reportFields(env, principal) {
   if (!allowed(principal, "reports.read")) return problem(403, "forbidden", "Rapor görüntüleme yetkiniz yok.");
   const data = [];
   for (const [slug, config] of Object.entries(resources)) {
+    if (config.reportable === false) continue;
     if (!allowed(principal, permissionFor(slug, "read"))) continue;
     // Durum kodunu elle yazdırmak en kötü hata türünü üretiyor: yanlış yazılan
     // kod sessizce boş rapor döndürüyor. İzin verilen değerler uydurulmaz,
@@ -3716,11 +3882,19 @@ async function runReport(request, env, principal) {
   if (exporting && !allowed(principal, "export")) return problem(403, "forbidden", "Dışa aktarma yetkiniz yok.");
   const savedReportId = body?.savedReportId ?? null;
   const builtinReportId = body?.builtinReportId ?? null;
+  // "view gönderilmedi" ile "view: null gönderildi" ayrı anlamlar taşır:
+  // birincisi kayıtlı görünümü uygular, ikincisi varsayılana döner. Bu yüzden
+  // alanın varlığına bakılır, değerine değil.
+  const viewProvided = Boolean(body) && typeof body === "object" && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, "view");
   // Birden fazlası geldiğinde hangisinin çalıştığı tahmine kalırdı; sessizce
   // birini seçmek, kullanıcının bakmadığı tanımı çalıştırmak demektir.
   const sourceCount = [body?.definition ?? null, savedReportId, builtinReportId].filter((value) => value !== null).length;
   if (sourceCount > 1) return problem(422, "ambiguous_report_source", "definition, savedReportId ve builtinReportId alanlarından yalnız biri gönderilmelidir.");
   if (sourceCount === 0) return problem(422, "ambiguous_report_source", "Çalıştırılacak rapor belirtilmedi: definition, savedReportId veya builtinReportId gönderilmelidir.");
+  // Kişisel görünüm yalnız hazır rapora aittir: kendi raporunda ve gövdeden
+  // gelen tanımda sütunlar zaten kurucudan değiştiriliyor, ikinci bir yol
+  // açmak aynı ayarın iki yerde tutulması demek olurdu.
+  if (viewProvided && builtinReportId === null) return problem(422, "unsupported_report_view", "Görünüm yalnız hazır raporlarla birlikte kullanılabilir.");
   let definition = body?.definition;
   // Denetim kaydında hangi raporun döküldüğü okunabilsin: gövdeden gelen tanımın
   // kimliği yoktur, hazır rapor kendi türüyle yazılır.
@@ -3732,24 +3906,53 @@ async function runReport(request, env, principal) {
     definition = saved.definition;
     auditId = savedReportId;
   }
+  // Döküm önizleme olamaz: 20 satırlık bir dosya kimsenin işine yaramaz.
+  const mode = exporting ? "export" : body?.preview === true ? "preview" : "run";
+  const preview = mode === "preview";
+  let plan;
+  let hiddenKeys = new Set();
+  let viewIgnored = null;
   if (builtinReportId !== null) {
     if (typeof builtinReportId !== "string") return problem(422, "validation_error", "builtinReportId metin olmalıdır.");
     const builtin = builtinReports.find((report) => report.id === builtinReportId);
     if (!builtin) return problem(404, "not_found", "Hazır rapor bulunamadı.");
-    definition = builtin.definition;
     auditType = "builtin-reports";
     auditId = builtin.id;
+    // Gönderilen görünüm kaydetmeden önceki canlı önizleme içindir; hiç
+    // gönderilmemişse kişinin kayıtlı görünümü kendiliğinden uygulanır.
+    const stored = viewProvided ? null : (await reportViewsFor(env, principal)).get(builtin.id) ?? null;
+    let planned = await planBuiltinReportView(env, principal, builtin, viewProvided ? body.view : stored, mode);
+    // Görünüm kaydedildikten sonra bir sütunu görme yetkisi geri alınmış
+    // olabilir. Rapor bu yüzden büsbütün açılmaz olmamalı: görünüm yalnız bu
+    // çalıştırmada yok sayılır, kayıt silinmez (yetki geri verilirse tercih
+    // kendiliğinden yeniden işler) ve varsayılana neden düşüldüğü `meta` ile
+    // söylenir. Açıkça gönderilen görünüm bu yoldan geçmez: açık bir isteği
+    // sessizce yutmak, kullanıcıyı nedenini anlayamayacağı bir sonuçla baş başa
+    // bırakır. Geri çekilme yalnız yetki hatasında yapılır; temeldeki rapor da
+    // düşüyorsa asıl hata olduğu gibi döner.
+    if (planned.error && stored !== null && problemCode(planned.error) === "sensitive_field_forbidden") {
+      const fallback = await planBuiltinReportView(env, principal, builtin, null, mode);
+      if (!fallback.error) {
+        viewIgnored = "sensitive_field_forbidden";
+        planned = fallback;
+      }
+    }
+    if (planned.error) return planned.error;
+    plan = planned.plan;
+    hiddenKeys = planned.hiddenKeys;
+  } else {
+    plan = await buildReportPlan(env, principal, definition, mode);
+    if (plan.error) return plan.error;
   }
-  // Döküm önizleme olamaz: 20 satırlık bir dosya kimsenin işine yaramaz.
-  const mode = exporting ? "export" : body?.preview === true ? "preview" : "run";
-  const preview = mode === "preview";
-  const plan = await buildReportPlan(env, principal, definition, mode);
-  if (plan.error) return plan.error;
   let result;
   try { result = await runReportPlan(env, principal, plan); }
   catch (error) { return problem(422, "report_query_failed", "Rapor çalıştırılamadı; tanımı kontrol edin.", env.EXPOSE_ERRORS === "true" ? String(error) : undefined); }
+  // Satır sayısı ve kesilme bilgisi gizlemeden önceki sonuçtan okunur: gizleme
+  // sorguya dokunmadığı için rakamlar da değişmemelidir.
+  const meta = { rowCount: result.rows.length, truncated: result.rows.length >= plan.limit, preview, ...(viewIgnored ? { viewIgnored } : {}) };
+  const visible = stripHiddenReportColumns(result, hiddenKeys);
   if (exporting) await auditReportExport(env, principal, request, auditType, auditId, plan, result.rows.length);
-  return json({ data: { columns: result.columns, rows: result.rows }, meta: { rowCount: result.rows.length, truncated: result.rows.length >= plan.limit, preview } });
+  return json({ data: { columns: visible.columns, rows: visible.rows }, meta });
 }
 
 // Hazır raporlar herkese aynı listeyle sunulmaz: kaynağını okuyamayan ya da
@@ -3759,11 +3962,16 @@ async function runReport(request, env, principal) {
 // sıra, kategorilerin arayüzde okunma sırası olduğu için korunur.
 async function builtinReportList(env, principal) {
   if (!allowed(principal, "reports.read")) return problem(403, "forbidden", "Rapor görüntüleme yetkiniz yok.");
+  // Kartın yanında kişinin kendi görünümü de gelir; arayüz raporu açarken
+  // ayrıca sormak zorunda kalmasın. Yetki süzmesi raporun kendi tanımına
+  // bakar: görünüm kaydedildiği anda motordan geçmişti ve bir sütun eklemek
+  // raporu listeden düşürmemeli.
+  const views = await reportViewsFor(env, principal);
   const data = [];
   for (const report of builtinReports) {
     const plan = await buildReportPlan(env, principal, report.definition, "run");
     if (plan.error) continue;
-    data.push({ id: report.id, category: report.category, name: report.name, description: report.description, definition: report.definition });
+    data.push({ id: report.id, category: report.category, name: report.name, description: report.description, definition: report.definition, view: views.get(report.id) ?? null });
   }
   return json({ data });
 }

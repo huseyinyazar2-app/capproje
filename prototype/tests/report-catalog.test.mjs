@@ -165,7 +165,9 @@ test("hazır rapor listesi kullanıcının çalıştırabildikleriyle sınırlı
   assert.deepEqual(listed.map((report) => report.id), expected.map((report) => report.id), "liste, kullanıcının görebildiği kaynak ve sütunlarla birebir örtüşmeli");
   assert.ok(listed.length > 0, "kaynağı okuyabilen kullanıcı en az bir rapor görmeli");
   assert.ok(listed.every((report) => report.definition.resource === resource), "okuyamadığı kaynağın raporu listelenmemeli");
-  assert.deepEqual(Object.keys(listed[0]).sort(), ["category", "definition", "description", "id", "name"]);
+  // `view` her kayıtta bulunur; görünüm kaydedilmemişse null gelir.
+  assert.deepEqual(Object.keys(listed[0]).sort(), ["category", "definition", "description", "id", "name", "view"]);
+  assert.ok(listed.every((report) => report.view === null), "görünüm kaydedilmeden view null olmalı");
 
   // Listede olmayan rapor, kimliği bilinse de çalışmaz.
   const hidden = builtinReports.find((report) => report.definition.resource !== resource);
