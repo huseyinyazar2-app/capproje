@@ -317,6 +317,99 @@ const LONG_TEXT_FIELDS = new Set(["description", "notes", "instructions", "summa
 const LONG_TEXT_FIELD_LIMIT = 20000;
 const JSON_FIELD_LIMIT = 100000;
 
+// ——— Tarih sütunları ——————————————————————————————————————————————————————
+// Sınıf sütunun ADINDAN DEĞİL, sütunun gerçekte ne tuttuğundan türetilmiştir.
+// Gerekçesi dört sütun: `projects.actual_end_date` adında "gün" derken proje
+// kapanış iş akışının yazdığı ISO anı tutuyor (`2026-09-23T11:53:29.355Z`),
+// `production_orders.actual_start` / `actual_end` adında hiçbir ipucu taşımadan
+// aynısını yapıyor, `notifications.due_at` ise `_at` ile bitip düz gün tutuyor
+// (projenin `planned_end_date` değeri kopyalanıyor). İsimden türeyen bir kural
+// bu dördünde yanlış karar verir; bu yüzden liste açıktır ve tahminden önce
+// gelir. Sınıflar, tanıtım verisi yüklü bir veritabanındaki gerçek değerler,
+// sütuna yazan sunucu kodu ve arayüzün o alana koyduğu girdi kutusu
+// karşılaştırılarak çıkarıldı.
+//
+// Liste tek kaynaktır: yazarken doğrulama (`normalizeInput`) da rapor motoru
+// (`reportColumnType`) da buradan okur. İkiye ayrılsaydı biri güncellenip öteki
+// unutulur, aynı sütun yazarken gün sayılıp raporda metin sayılırdı — nitekim
+// `actual_start` / `actual_end` bir süre tam olarak böyleydi.
+//
+// Anahtar tablo değil sütun adıdır: aynı ad birden çok tabloda geçiyor
+// (`due_date` dörtte, `planned_start` beşte) ve hepsinde aynı şeyi tutuyor.
+// Rapor motoru da tipi zaten sütun adından soruyor.
+//
+// `both` = hem gün hem an meşru. Yalnız sunucu iş akışının ISO an yazdığı, ama
+// istemcinin de gün yazabildiği "gerçekleşen başlangıç/bitiş" sütunlarında
+// kullanılıyor; birini yasaklamak bugün çalışan bir yolu kırardı. Karışık biçim
+// okumayı bozmuyor: metin sıralamasında `2026-09-18`, aynı günün
+// `2026-09-18T...` değerlerinin tamamından önce gelir, yani gün sınırı ikisini
+// de doğru tarafa koyar.
+//
+// Bilerek DIŞARIDA: `period` (bordro dönemi, `YYYY-AA`), `check_in` / `check_out`
+// (yalnız saat) ve `lead_time_days` (gün sayısı). Hiçbiri takvim günü değil;
+// gün kuralı onlarda anlamsız olurdu.
+const DATE_COLUMN_KINDS = new Map([
+  // Gün: arayüzün tarih kutusundan ya da sunucudan `YYYY-AA-GG` olarak yazılır.
+  ...["planned_start_date", "planned_end_date", "planned_start", "planned_end", "offer_date", "valid_until", "order_date", "expected_date", "needed_by", "transaction_date", "due_date", "settled_on", "issue_date", "acceptance_date", "survey_date", "effective_date", "period_start", "period_end", "movement_date", "meeting_date", "inspection_date", "corrective_due_date", "handover_date", "quotation_date", "work_date", "start_date", "end_date", "birth_date", "hire_date", "termination_date"].map((column) => [column, "date"]),
+  // Adı `_at` ile bitmediği hâlde düz gün tutan tek sütun. `notifications` bugün
+  // istemcinin yazabildiği bir kaynak değil, ama sonek kuralı onu `datetime`
+  // sayıyordu; kaynak listesine girdiği gün sessizce yanlış sınıflanmasın diye
+  // doğrusu şimdiden burada yazılı.
+  ["due_at", "date"],
+  // An: sunucu iş akışı `now()` ile UTC ISO yazıyor; `occurred_at` ve
+  // `next_follow_up_at` ile `taken_at` ise arayüzün `datetime-local` kutusundan
+  // saat dilimsiz (`2026-05-24T11:53`) geliyor. İkisi de gün değil: gün sınırına
+  // indirgenirse İstanbul'da gece yarısından sonra kaydedilen iş bir önceki güne
+  // düşer.
+  ...["approved_at", "completed_at", "resolved_at", "accepted_at", "occurred_at", "next_follow_up_at", "taken_at"].map((column) => [column, "datetime"]),
+  // Adı yalan söyleyen dörtlü. Üretim emri iş akışı `actual_start` / `actual_end`
+  // değerini, proje kapanışı ise `actual_end_date` değerini ISO an olarak
+  // yazıyor. Aynı sütunlara istemci API'den gün de yazabiliyor ve montaj
+  // (`installations`) tarafında bu sütunlara yazan hiçbir sunucu yolu yok —
+  // oradaki eşleri `planned_start` / `planned_end` düz gün. `actual_start_date`
+  // ikizinden ayrılmıyor: bir çiftin iki ucunun farklı biçim istemesi,
+  // doğrulamanın kendisinden daha çok hata üretir.
+  ...["actual_start", "actual_end", "actual_start_date", "actual_end_date"].map((column) => [column, "both"]),
+]);
+
+const dateColumnKind = (column) => DATE_COLUMN_KINDS.get(column) || null;
+
+// Kalıp eşleşmesi tek başına yetmez: `2026-02-30` ve `2026-13-01` kalıba uyar
+// ama takvimde yoktur. Date nesnesi taşan günü sessizce ileri kaydırdığı için
+// (30 Şubat → 2 Mart) geri okunan gün, yazılanla karşılaştırılır.
+function isCalendarDay(text) {
+  const [year, month, day] = text.split("-").map(Number);
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  return probe.getUTCFullYear() === year && probe.getUTCMonth() + 1 === month && probe.getUTCDate() === day;
+}
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+// Kabul edilen an biçimleri: sunucunun `toISOString` çıktısı (`...Z`), arayüzün
+// `datetime-local` kutusunun ürettiği saat dilimsiz `YYYY-AA-GGTSS:DD` ve
+// aradaki saniyeli / ofsetli varyantlar. Gevşek bir `Date.parse` yerine kalıp
+// kullanılıyor, yoksa "5 Mart 2020" gibi bir metin de sütuna girer ve o sütunda
+// tarih karşılaştırması metin sıralamasına döner.
+const DATETIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?$/;
+
+const isDateText = (value) => typeof value === "string" && DATE_ONLY_PATTERN.test(value) && isCalendarDay(value);
+// Ayrıştırılabilirlik kalıptan sonra ayrıca ölçülür: kalıp `2026-02-30T10:00Z`
+// ve `2026-09-23T25:61` gibi değerleri geçirir, takvim ve saat geçirmez.
+const isDateTimeText = (value) => typeof value === "string" && DATETIME_PATTERN.test(value) && isCalendarDay(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
+
+function dateValueMatches(kind, value) {
+  if (kind === "date") return isDateText(value);
+  if (kind === "datetime") return isDateTimeText(value);
+  return isDateText(value) || isDateTimeText(value);
+}
+
+// Hata alanı adıyla söyler ve ne yazılacağını gösterir; "geçersiz tarih" diyen
+// bir mesaj, uzun bir formda hangi kutunun suçlu olduğunu söylemiyor.
+function dateValueError(column, kind) {
+  if (kind === "datetime") return `${column} geçerli bir zaman damgası olmalıdır; YYYY-AA-GGTSS:DD biçiminde yazın (örn. 2026-09-23T14:30). Alanı temizlemek için boş bırakın.`;
+  if (kind === "both") return `${column} geçerli bir takvim günü (YYYY-AA-GG) veya zaman damgası (YYYY-AA-GGTSS:DD) olmalıdır. Alanı temizlemek için boş bırakın.`;
+  return `${column} geçerli bir takvim günü olmalıdır; YYYY-AA-GG biçiminde yazın (örn. 2026-09-23). Alanı temizlemek için boş bırakın.`;
+}
+
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -850,6 +943,15 @@ function normalizeInput(slug, config, body, creating) {
       if (serialized.length > JSON_FIELD_LIMIT) return { error: `${key} en fazla ${JSON_FIELD_LIMIT} karakter olabilir.` };
       values[key] = serialized;
     } else if (BOOLEAN_COLUMNS.includes(key)) values[key] = booleanValue(value) ? 1 : 0;
+    else if (dateColumnKind(key)) {
+      const kind = dateColumnKind(key);
+      // Boş değer temizlemektir, hata değil: arayüz bir tarih kutusu silindiğinde
+      // boş metin ya da null gönderiyor. Reddedilseydi kullanıcı bir kez girdiği
+      // tarihi bir daha silemezdi.
+      if (value === null || value === "") values[key] = null;
+      else if (!dateValueMatches(kind, value)) return { error: dateValueError(key, kind) };
+      else values[key] = value;
+    }
     else {
       if (key === "status" && allowedStatuses && value !== undefined && value !== null && value !== "" && !allowedStatuses.includes(value)) {
         return { error: `status yalnız şu değerlerden biri olabilir: ${allowedStatuses.join(", ")}` };
@@ -2862,7 +2964,9 @@ async function settleFinancialTransaction(request, env, principal, record, actio
   // önce hareket eder. `transaction_date` üzerine yazılmaz: o tahakkuk
   // tarihidir ve bütün tarih bazlı raporlar ona dayanıyor.
   const settledOn = body.settled_on === undefined || body.settled_on === null || body.settled_on === "" ? timestamp.slice(0, 10) : body.settled_on;
-  if (typeof settledOn !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(settledOn)) return problem(422, "validation_error", "settled_on YYYY-AA-GG biçiminde bir tarih olmalıdır.");
+  // Denetim, CRUD ucundakiyle aynı kaynaktan: kalıp burada tekrar yazılsaydı
+  // aynı sütun iş akışından `2026-02-30` kabul edip CRUD'dan etmezdi.
+  if (!isDateText(settledOn)) return problem(422, "validation_error", dateValueError("settled_on", "date"));
   // Tarih ve kaydeden kişi kendi sütunlarına yazılıyor (göç 0019). Daha önce
   // `metadata_json` içine giriyorlardı ve oradan raporlanamıyor,
   // sıralanamıyorlardı: rapor motoru sütunları `PRAGMA table_info` ile beyaz
@@ -3209,7 +3313,11 @@ async function resolveFileContext(env, principal, form, entityType, entityId) {
   const captureStage = String(form.get("capture_stage") || "other");
   if (!["discovery","design","procurement","production","quality","installation","handover","other"].includes(captureStage)) return { error: problem(422, "validation_error", "Geçersiz çekim aşaması.") };
   const takenAt = String(form.get("taken_at") || "").trim();
-  if (takenAt && Number.isNaN(Date.parse(takenAt))) return { error: problem(422, "validation_error", "Çekim tarihi geçerli değil.") };
+  // Yükleme ucu ile CRUD ucu aynı sütuna yazıyor; kuralı da aynı yerden
+  // okuyorlar. Gevşek `Date.parse` "5 Mart 2020" gibi bir metni de geçiriyordu
+  // ve o değer sütunda tarih sıralamasını bozardı. Arayüzün `datetime-local`
+  // kutusundan gelen saat dilimsiz `2026-09-23T14:30` biçimi kabul edilir.
+  if (takenAt && !isDateTimeText(takenAt)) return { error: problem(422, "validation_error", dateValueError("taken_at", "datetime")) };
   const spaceName = String(form.get("space_name") || "").trim().slice(0, 120) || null;
   return { context: { ...context, project_id: projectId, space_name: spaceName, capture_stage: captureStage, taken_at: takenAt || null, visibility, photo_consent_snapshot: project?.photo_consent || null } };
 }
@@ -3550,26 +3658,11 @@ async function reportColumnsFor(env, config) {
 // Sınıflanmayan sütunda göreli tarih reddedilir, sum/avg "sayısal değil" der
 // ve metin sıralaması 10'u 9'dan önce koyar.
 //
-// Tarih: planned_start/planned_end (görev, üretim emri, operasyon, kaynak
-// ataması, montaj), needed_by, period_start/period_end, valid_until istemcinin
-// tarih seçicisinden ya da sunucudan `YYYY-MM-DD` olarak yazılır. `date`
-// sınırı (`YYYY-MM-DD`) hem bunlarda hem Z'siz yerel saatli değerde doğru keser.
-// `period` (bordro, `YYYY-AA`) ve yalnız saat tutan `check_in`/`check_out`
-// bilinçli olarak dışarıda: gün sınırı onlarda anlamsız.
-// `settled_on` (göç 0019, tahsilat/ödeme tarihi) da buraya yazılı: adı ne
-// `_date` ile bitiyor ne `date_` ile başlıyor, sınıflanmasaydı `text` sayılır
-// ve sütunun varlık nedeni olan sorular kapalı kalırdı — göreli tarih süzgeci
-// ("bu ay") reddedilir, arayüz takvim yerine metin kutusu çizerdi. Sunucu ve
-// iş akışı ucu onu her zaman `YYYY-MM-DD` yazıyor, yani `date` sınırı doğru
-// keser.
-const REPORT_DATE_COLUMNS = new Set(["planned_start", "planned_end", "needed_by", "period_start", "period_end", "settled_on", "valid_until"]);
-// Zaman damgası: actual_start/actual_end'i üretim emri iş akışı (başlatma ve
-// tamamlama geçişi) sunucu `now()` ile UTC ISO an olarak yazar (`...Z`). `date`
-// sınırıyla kesilseydi İstanbul'da 00:00-03:00 arasında biten iş UTC'deki bir
-// önceki güne düşerdi. `datetime` sınırı (İstanbul gece yarısının UTC anı)
-// salt `YYYY-MM-DD` yazılmış değeri de doğru güne koyar; montajdaki aynı adlı
-// sütunlara sunucu bir şey yazmıyor, elle girilirse o biçimde gelir.
-const REPORT_DATETIME_COLUMNS = new Set(["actual_start", "actual_end"]);
+// Tarih sütunları burada ayrıca sayılmaz: sınıflandırma `DATE_COLUMN_KINDS`
+// içinde, yazarken doğrulamayla ortak tek kaynakta duruyor. Rapor motorunun
+// kendi tarih listesini tutması, aynı sütunun yazarken gün sayılıp raporda
+// başka bir şey sayılması demekti.
+//
 // Yüzde: bu oranlar 0-100 arası saklanır (18 = %18), kesir değil. Kanıt:
 // scrap_rate sunucuda `/100` ile çarpana çevrilir ve CHECK'i `< 100`; tax_rate
 // varsayılanı 20 (KDV %20); istemci formu dördünü de "(%)" etiketi ve 0-100
@@ -3580,12 +3673,20 @@ const REPORT_PERCENT_COLUMNS = new Set(["advance_rate", "discount_rate", "retent
 // kazanç sayısal süzme ve doğru sıralama.
 const REPORT_NUMBER_COLUMNS = new Set(["exchange_rate", "rating", "satisfaction_score", "warranty_months", "size_bytes", "width", "height", "depth", "length", "quantity_per_unit", "sequence", "sort_order"]);
 
-// Tip, sütun adından çıkarılır; arayüz tarih alanını takvimle, para alanını
-// kuruş çevirisiyle göstersin diye.
+// Tip, önce açık sınıflandırmadan, o susarsa sütun adından çıkarılır; arayüz
+// tarih alanını takvimle, para alanını kuruş çevirisiyle göstersin diye.
 function reportColumnType(column) {
   if (column.endsWith("_minor")) return "money";
-  if (column.endsWith("_at") || REPORT_DATETIME_COLUMNS.has(column)) return "datetime";
-  if (column.endsWith("_date") || column.startsWith("date_") || REPORT_DATE_COLUMNS.has(column)) return "date";
+  // Açık liste her zaman tahminden önce gelir; ad kalıpları yalnız
+  // sınıflandırılmamış sütunlar için yedektir. `both` rapor tarafında
+  // `datetime` sayılır: o sınır (İstanbul gece yarısının UTC anı) düz
+  // `YYYY-AA-GG` değerini de doğru güne koyar, tersi doğru değildir — `date`
+  // sınırı ISO anı UTC gününe göre keser ve İstanbul'da 00:00-03:00 arasında
+  // biten iş bir önceki güne düşerdi.
+  const dateKind = dateColumnKind(column);
+  if (dateKind) return dateKind === "date" ? "date" : "datetime";
+  if (column.endsWith("_at")) return "datetime";
+  if (column.endsWith("_date") || column.startsWith("date_")) return "date";
   if (column === "status" || column.endsWith("_status") || column === "result" || column.endsWith("_result")) return "status";
   if (column.endsWith("_percent") || REPORT_PERCENT_COLUMNS.has(column)) return "percent";
   if (column.endsWith("_count") || column.endsWith("_minutes") || column.endsWith("_days") || column === "quantity" || column.endsWith("_quantity") || REPORT_NUMBER_COLUMNS.has(column)) return "number";
@@ -4569,5 +4670,5 @@ async function scheduledHandler(_controller, env, context) {
   else await task;
 }
 
-export const __testing = { authenticate, handleApi, writeBackup, resources, normalizeTurkishMobile, passwordRecord };
+export const __testing = { authenticate, handleApi, writeBackup, resources, normalizeTurkishMobile, passwordRecord, dateColumnKinds: DATE_COLUMN_KINDS, reportColumnType };
 export default { fetch: fetchHandler, scheduled: scheduledHandler };
